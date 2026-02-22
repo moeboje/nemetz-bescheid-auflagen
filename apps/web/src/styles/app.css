@@ -414,6 +414,14 @@
   background: var(--color-surface);
 }
 
+.sidebarSectionTitle {
+  padding: var(--space-2) var(--space-4);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 @media (max-width: 900px) {
   .filterRow,
   .filterRowFour {
