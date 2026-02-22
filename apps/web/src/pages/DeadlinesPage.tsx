@@ -73,7 +73,7 @@ export default function DeadlinesPage() {
   const projectOptions = useMemo(
     () =>
       projects
-        .filter((project) => !project.isArchived)
+        .filter((project) => !project.archivedAt && !project.isArchived)
         .map((project) => ({ value: project.id, label: project.title })),
     [projects]
   );

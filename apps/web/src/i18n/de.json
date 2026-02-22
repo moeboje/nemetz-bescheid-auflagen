@@ -246,6 +246,7 @@
   "pagination.page": "Seite",
   "common.notAvailable": "Nicht verfuegbar",
   "common.notAssigned": "Nicht zugewiesen",
+  "common.unauthorized": "Keine Berechtigung.",
   "common.selectFile": "Datei auswaehlen",
   "common.remove": "Entfernen",
   "projects.action.edit": "Bearbeiten",

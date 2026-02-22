@@ -17,10 +17,13 @@ import { useAuthorities } from "../state/AuthoritiesStore";
 import { useUsers } from "../state/UsersStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useTasks } from "../state/TasksStore";
+import { useAuthorization } from "../state/AuthorizationStore";
+import { ProjectPolicy } from "../policies/ProjectPolicy";
 import ProjectModal from "../components/ProjectModal";
 
 export default function ProjectsPage() {
   const navigate = useNavigate();
+  const { actor } = useAuthorization();
   const { projects } = useProjects();
   const { companies, sites, facilities, getScopeLabel } = useScopes();
   const { getAuthorityName, authorities } = useAuthorities();
@@ -94,7 +97,10 @@ export default function ProjectsPage() {
 
   const filteredProjects = useMemo(() => {
     return projects.filter((project) => {
-      if (project.isArchived) {
+      if (project.archivedAt || project.isArchived) {
+        return false;
+      }
+      if (!ProjectPolicy.view(actor, project)) {
         return false;
       }
       const matchesSearch = filters.search
@@ -110,7 +116,7 @@ export default function ProjectsPage() {
         : true;
       return matchesSearch && matchesCompany && matchesSite && matchesFacility && matchesAuthority;
     });
-  }, [filters, projects]);
+  }, [actor, filters, projects]);
 
   const columns = [
     {
@@ -176,7 +182,9 @@ export default function ProjectsPage() {
           />
           <h1 className="pageTitle">{t("projects.title")}</h1>
         </div>
-        <Button onClick={() => setModalOpen(true)}>{t("projects.action.new")}</Button>
+        <Button disabled={!ProjectPolicy.create(actor)} onClick={() => setModalOpen(true)}>
+          {t("projects.action.new")}
+        </Button>
       </div>
 
       <Card>
@@ -240,7 +248,7 @@ export default function ProjectsPage() {
           <div className="tableActions">
             <IconButton
               ariaLabel={t("projects.action.view")}
-              onClick={() => navigate(`/projects/${project.id}`)}
+              onClick={() => navigate(project.id)}
             >
               <EyeIcon />
             </IconButton>

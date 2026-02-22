@@ -61,6 +61,7 @@ export default function ExternalParticipantModal({
       email: form.email || undefined,
       phone: form.phone || undefined,
       notes: form.notes || undefined,
+      archivedAt: participant?.archivedAt,
       isArchived: participant?.isArchived ?? false
     });
     onClose();

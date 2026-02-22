@@ -5,7 +5,9 @@ import { useScopes } from "../state/ScopesStore";
 import { useAuthorities } from "../state/AuthoritiesStore";
 import { useUsers } from "../state/UsersStore";
 import { useProjects } from "../state/ProjectsStore";
+import { useAuthorization } from "../state/AuthorizationStore";
 import FileUploadStub, { UploadItem } from "./FileUploadStub";
+import { ProjectPolicy } from "../policies/ProjectPolicy";
 import type { Project } from "../data/projects";
 
 const emptyForm = {
@@ -36,6 +38,13 @@ function createAttachment(file: File): UploadItem {
   };
 }
 
+function getParticipantUserIds(project: Project) {
+  if (project.internalParticipants?.length) {
+    return project.internalParticipants.map((participant) => participant.userId);
+  }
+  return project.participantUserIds ?? [];
+}
+
 type ProjectModalProps = {
   open: boolean;
   onClose: () => void;
@@ -43,6 +52,7 @@ type ProjectModalProps = {
 };
 
 export default function ProjectModal({ open, onClose, project }: ProjectModalProps) {
+  const { actor } = useAuthorization();
   const { companies, sites, facilities } = useScopes();
   const { authorities, getContactsForAuthority } = useAuthorities();
   const { users } = useUsers();
@@ -65,7 +75,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
         authorityRef: project.authorityRef ?? "",
         ownerUserId: project.ownerUserId ?? "",
         deputyUserId: project.deputyUserId ?? "",
-        participantUserIds: project.participantUserIds ?? [],
+        participantUserIds: getParticipantUserIds(project),
         attachments: project.attachments ?? []
       });
       return;
@@ -137,11 +147,21 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     [users]
   );
 
-  const isSaveDisabled = !form.title || !form.companyId;
+  const canSave = project
+    ? ProjectPolicy.update(actor, project)
+    : ProjectPolicy.create(actor);
+  const isSaveDisabled = !canSave || !form.title.trim() || !form.companyId;
 
   const handleSave = () => {
+    if (isSaveDisabled) {
+      return;
+    }
+
+    const internalParticipants = form.participantUserIds.map((userId) => ({ userId }));
+    let saveSucceeded = false;
+
     if (project) {
-      updateProject(project.id, {
+      saveSucceeded = updateProject(project.id, {
         title: form.title,
         shortDescription: form.shortDescription,
         companyId: form.companyId,
@@ -152,11 +172,12 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
         authorityRef: form.authorityRef,
         ownerUserId: form.ownerUserId || undefined,
         deputyUserId: form.deputyUserId || undefined,
-        participantUserIds: form.participantUserIds,
+        internalParticipants,
+        participantUserIds: internalParticipants.map((participant) => participant.userId),
         attachments: form.attachments
       });
     } else {
-      addProject({
+      saveSucceeded = addProject({
         title: form.title,
         shortDescription: form.shortDescription,
         companyId: form.companyId,
@@ -167,11 +188,15 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
         authorityRef: form.authorityRef,
         ownerUserId: form.ownerUserId || undefined,
         deputyUserId: form.deputyUserId || undefined,
-        participantUserIds: form.participantUserIds,
+        internalParticipants,
+        participantUserIds: internalParticipants.map((participant) => participant.userId),
         attachments: form.attachments
       });
     }
-    onClose();
+
+    if (saveSucceeded) {
+      onClose();
+    }
   };
 
   return (
@@ -322,6 +347,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
           label={t("projects.form.attachments")}
           selectLabel={t("common.selectFile")}
           removeLabel={t("common.remove")}
+          disabled={!canSave}
           items={form.attachments}
           onAddFiles={(files) =>
             setForm((prev) => ({

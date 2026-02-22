@@ -1,0 +1,14 @@
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-height: 48px;
+}
+
+.left,
+.right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}

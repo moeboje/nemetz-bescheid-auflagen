@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  Badge,
   Breadcrumbs,
   Button,
   Card,
@@ -16,13 +15,13 @@ import { useScopes } from "../state/ScopesStore";
 import { useAuthorities } from "../state/AuthoritiesStore";
 import { useUsers } from "../state/UsersStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
-import { useDeadlines } from "../state/DeadlinesStore";
+import { useAuthorization } from "../state/AuthorizationStore";
 import FileUploadStub, { UploadItem } from "../components/FileUploadStub";
 import LegalDocModal from "../components/LegalDocModal";
 import ProjectModal from "../components/ProjectModal";
-import DeadlineModal from "../components/DeadlineModal";
 import ExternalParticipantModal from "../components/ExternalParticipantModal";
 import type { ExternalParticipant } from "../data/projects";
+import { ProjectPolicy } from "../policies/ProjectPolicy";
 
 function createAttachment(file: File): UploadItem {
   return {
@@ -32,12 +31,6 @@ function createAttachment(file: File): UploadItem {
     addedAt: new Date().toISOString().slice(0, 10)
   };
 }
-
-const statusVariant = {
-  OPEN: "warning",
-  DONE: "success",
-  OVERDUE: "danger"
-} as const;
 
 function getExternalTypeLabel(type: ExternalParticipant["type"]) {
   if (type === "LAWYER") {
@@ -52,12 +45,24 @@ function getExternalTypeLabel(type: ExternalParticipant["type"]) {
   return t("projects.external.type.other");
 }
 
+function getParticipantUserIds(project?: {
+  internalParticipants?: { userId: string }[];
+  participantUserIds?: string[];
+}) {
+  if (project?.internalParticipants?.length) {
+    return project.internalParticipants.map((participant) => participant.userId);
+  }
+  return project?.participantUserIds ?? [];
+}
+
 export default function ProjectDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { actor } = useAuthorization();
   const {
     projects,
     updateProject,
+    archiveProject,
     addProjectAttachment,
     removeProjectAttachment,
     addExternalParticipant,
@@ -68,15 +73,14 @@ export default function ProjectDetailPage() {
   const { getAuthorityName, getContactsForAuthority } = useAuthorities();
   const { users, getUserLabel } = useUsers();
   const { legalDocs } = useLegalDocs();
-  const { deadlines, getDeadlineStatus } = useDeadlines();
   const [tab, setTab] = useState("overview");
   const [legalDocModalOpen, setLegalDocModalOpen] = useState(false);
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
-  const [deadlineModalOpen, setDeadlineModalOpen] = useState(false);
-  const [editingDeadlineId, setEditingDeadlineId] = useState<string | null>(null);
   const [externalModalOpen, setExternalModalOpen] = useState(false);
-  const [editingExternalParticipantId, setEditingExternalParticipantId] = useState<string | null>(null);
+  const [editingExternalParticipantId, setEditingExternalParticipantId] = useState<string | null>(
+    null
+  );
   const [showArchivedExternal, setShowArchivedExternal] = useState(false);
 
   const project = useMemo(() => projects.find((item) => item.id === id), [id, projects]);
@@ -88,19 +92,6 @@ export default function ProjectDetailPage() {
   const contacts = getContactsForAuthority(project?.authorityId);
   const contactName = contacts.find((contact) => contact.id === project?.authorityContactId)?.name;
   const projectDocs = legalDocs.filter((doc) => doc.projectId === project?.id);
-  const projectDeadlines = deadlines.filter((deadline) => {
-    if (!project) {
-      return false;
-    }
-    if (deadline.projectId === project.id) {
-      return true;
-    }
-    if (!deadline.legalDocId) {
-      return false;
-    }
-    const linkedDoc = legalDocs.find((doc) => doc.id === deadline.legalDocId);
-    return linkedDoc?.projectId === project.id;
-  });
 
   const userOptions = useMemo(
     () => users.map((user) => ({ value: user.id, label: user.displayName })),
@@ -135,47 +126,6 @@ export default function ProjectDetailPage() {
     }
   ];
 
-  const deadlineColumns = [
-    {
-      key: "title",
-      header: t("deadlines.table.title"),
-      render: (row: (typeof projectDeadlines)[number]) => row.title
-    },
-    {
-      key: "dueDate",
-      header: t("deadlines.table.dueDate"),
-      render: (row: (typeof projectDeadlines)[number]) => row.dueDate
-    },
-    {
-      key: "legalDoc",
-      header: t("deadlines.table.legalDoc"),
-      render: (row: (typeof projectDeadlines)[number]) =>
-        legalDocs.find((doc) => doc.id === row.legalDocId)?.title ?? t("common.notAvailable")
-    },
-    {
-      key: "owner",
-      header: t("deadlines.table.owner"),
-      render: (row: (typeof projectDeadlines)[number]) =>
-        getUserLabel(row.ownerUserId) || t("common.notAssigned")
-    },
-    {
-      key: "status",
-      header: t("legalDoc.deadlines.status"),
-      render: (row: (typeof projectDeadlines)[number]) => {
-        const status = getDeadlineStatus(row);
-        return (
-          <Badge variant={statusVariant[status]}>
-            {status === "OPEN"
-              ? t("tasks.status.open")
-              : status === "DONE"
-              ? t("tasks.status.done")
-              : t("tasks.status.overdue")}
-          </Badge>
-        );
-      }
-    }
-  ];
-
   if (!project) {
     return (
       <div className="page">
@@ -186,10 +136,25 @@ export default function ProjectDetailPage() {
     );
   }
 
+  const canView = ProjectPolicy.view(actor, project);
+  const canUpdate = ProjectPolicy.update(actor, project);
+  const canArchive = ProjectPolicy.archive(actor, project);
+  const canRemoveAttachment = ProjectPolicy.removeAttachment(actor, project);
+
+  if (!canView) {
+    return (
+      <div className="page">
+        <Card>
+          <p className="placeholderText">{t("common.unauthorized")}</p>
+        </Card>
+      </div>
+    );
+  }
+
   const externalParticipants = project.externalParticipants ?? [];
   const visibleExternalParticipants = showArchivedExternal
     ? externalParticipants
-    : externalParticipants.filter((participant) => !participant.isArchived);
+    : externalParticipants.filter((participant) => !participant.archivedAt && !participant.isArchived);
   const editingExternalParticipant = externalParticipants.find(
     (participant) => participant.id === editingExternalParticipantId
   );
@@ -243,9 +208,22 @@ export default function ProjectDetailPage() {
           </div>
         </div>
         <div className="inlineMeta">
-          <Button variant="secondary" onClick={() => setEditProjectOpen(true)}>
+          <Button variant="secondary" disabled={!canUpdate} onClick={() => setEditProjectOpen(true)}>
             {t("projects.action.edit")}
           </Button>
+          {canArchive ? (
+            <Button
+              variant="secondary"
+              onClick={() => {
+                const archived = archiveProject(project.id);
+                if (archived) {
+                  navigate("..", { relative: "path" });
+                }
+              }}
+            >
+              {t("common.archive")}
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -263,13 +241,6 @@ export default function ProjectDetailPage() {
           onClick={() => setTab("legalDocs")}
         >
           {t("projects.tabs.legalDocs")}
-        </button>
-        <button
-          type="button"
-          className={`tabButton ${tab === "deadlines" ? "tabButtonActive" : ""}`}
-          onClick={() => setTab("deadlines")}
-        >
-          {t("projects.tabs.deadlines")}
         </button>
         <button
           type="button"
@@ -322,7 +293,9 @@ export default function ProjectDetailPage() {
         <div className="tableSection">
           <div className="sectionHeader">
             <h2 className="sectionTitle">{t("projects.detail.legalDocs.title")}</h2>
-            <Button onClick={() => setLegalDocModalOpen(true)}>{t("legalDocs.action.new")}</Button>
+            <Button disabled={!canUpdate} onClick={() => setLegalDocModalOpen(true)}>
+              {t("legalDocs.action.new")}
+            </Button>
           </div>
           <DataTable
             columns={docColumns}
@@ -335,42 +308,10 @@ export default function ProjectDetailPage() {
                 </IconButton>
                 <IconButton
                   ariaLabel={t("legalDocs.action.edit")}
+                  disabled={!canUpdate}
                   onClick={() => {
                     setEditingDocId(doc.id);
                     setLegalDocModalOpen(true);
-                  }}
-                >
-                  <EditIcon />
-                </IconButton>
-              </div>
-            )}
-          />
-        </div>
-      ) : null}
-
-      {tab === "deadlines" ? (
-        <div className="tableSection">
-          <div className="sectionHeader">
-            <h2 className="sectionTitle">{t("projects.tabs.deadlines")}</h2>
-            <Button onClick={() => setDeadlineModalOpen(true)}>{t("deadlines.new")}</Button>
-          </div>
-          <DataTable
-            columns={deadlineColumns}
-            data={projectDeadlines}
-            getRowKey={(row) => row.id}
-            rowActions={(row) => (
-              <div className="tableActions">
-                <IconButton
-                  ariaLabel={t("common.view")}
-                  onClick={() => navigate(`/deadlines/${row.id}`)}
-                >
-                  <EyeIcon />
-                </IconButton>
-                <IconButton
-                  ariaLabel={t("common.edit")}
-                  onClick={() => {
-                    setEditingDeadlineId(row.id);
-                    setDeadlineModalOpen(true);
                   }}
                 >
                   <EditIcon />
@@ -387,11 +328,19 @@ export default function ProjectDetailPage() {
             label={t("projects.detail.attachments")}
             selectLabel={t("common.selectFile")}
             removeLabel={t("common.remove")}
+            disabled={!canUpdate}
             items={project.attachments}
             onAddFiles={(files) =>
-              files.forEach((file) => addProjectAttachment(project.id, createAttachment(file)))
+              files.forEach((file) => {
+                addProjectAttachment(project.id, createAttachment(file));
+              })
             }
-            onRemove={(attachmentId) => removeProjectAttachment(project.id, attachmentId)}
+            onRemove={(attachmentId) => {
+              if (!canRemoveAttachment) {
+                return;
+              }
+              removeProjectAttachment(project.id, attachmentId);
+            }}
           />
         </Card>
       ) : null}
@@ -406,6 +355,7 @@ export default function ProjectDetailPage() {
                 <Select
                   options={[{ value: "", label: t("projects.detail.owner") }, ...userOptions]}
                   value={project.ownerUserId ?? ""}
+                  disabled={!canUpdate}
                   onChange={(event) =>
                     updateProject(project.id, { ownerUserId: event.target.value || undefined })
                   }
@@ -416,6 +366,7 @@ export default function ProjectDetailPage() {
                 <Select
                   options={[{ value: "", label: t("projects.detail.deputy") }, ...userOptions]}
                   value={project.deputyUserId ?? ""}
+                  disabled={!canUpdate}
                   onChange={(event) =>
                     updateProject(project.id, { deputyUserId: event.target.value || undefined })
                   }
@@ -426,12 +377,17 @@ export default function ProjectDetailPage() {
                 <Select
                   multiple
                   options={userOptions}
-                  value={project.participantUserIds}
+                  value={getParticipantUserIds(project)}
+                  disabled={!canUpdate}
                   onChange={(event) => {
                     const values = Array.from(event.currentTarget.selectedOptions).map(
                       (option) => option.value
                     );
-                    updateProject(project.id, { participantUserIds: values });
+                    const internalParticipants = values.map((userId) => ({ userId }));
+                    updateProject(project.id, {
+                      internalParticipants,
+                      participantUserIds: values
+                    });
                   }}
                 />
               </div>
@@ -451,6 +407,7 @@ export default function ProjectDetailPage() {
                   <span>{t("projects.external.showArchived")}</span>
                 </label>
                 <Button
+                  disabled={!canUpdate}
                   onClick={() => {
                     setEditingExternalParticipantId(null);
                     setExternalModalOpen(true);
@@ -468,6 +425,7 @@ export default function ProjectDetailPage() {
                 <div className="tableActions">
                   <IconButton
                     ariaLabel={t("common.edit")}
+                    disabled={!canUpdate}
                     onClick={() => {
                       setEditingExternalParticipantId(participant.id);
                       setExternalModalOpen(true);
@@ -475,10 +433,11 @@ export default function ProjectDetailPage() {
                   >
                     <EditIcon />
                   </IconButton>
-                  {!participant.isArchived ? (
+                  {!participant.archivedAt && !participant.isArchived ? (
                     <Button
                       size="sm"
                       variant="secondary"
+                      disabled={!canUpdate}
                       onClick={() => archiveExternalParticipant(project.id, participant.id)}
                     >
                       {t("common.archive")}
@@ -504,17 +463,6 @@ export default function ProjectDetailPage() {
 
       <ProjectModal open={editProjectOpen} onClose={() => setEditProjectOpen(false)} project={project} />
 
-      <DeadlineModal
-        open={deadlineModalOpen}
-        onClose={() => {
-          setDeadlineModalOpen(false);
-          setEditingDeadlineId(null);
-        }}
-        deadline={projectDeadlines.find((deadline) => deadline.id === editingDeadlineId)}
-        initialProjectId={project.id}
-        lockProject
-      />
-
       <ExternalParticipantModal
         open={externalModalOpen}
         onClose={() => {
@@ -523,6 +471,9 @@ export default function ProjectDetailPage() {
         }}
         participant={editingExternalParticipant}
         onSave={(input) => {
+          if (!canUpdate) {
+            return;
+          }
           if (editingExternalParticipant) {
             updateExternalParticipant(project.id, editingExternalParticipant.id, input);
             return;

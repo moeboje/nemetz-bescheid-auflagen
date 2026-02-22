@@ -5,6 +5,11 @@ export type ProjectAttachment = {
   addedAt: string;
 };
 
+export type ProjectInternalParticipant = {
+  userId: string;
+  role?: string;
+};
+
 export type ExternalParticipantType =
   | "LAWYER"
   | "ENGINEERING_OFFICE"
@@ -19,6 +24,7 @@ export type ExternalParticipant = {
   email?: string;
   phone?: string;
   notes?: string;
+  archivedAt?: string;
   isArchived?: boolean;
 };
 
@@ -34,10 +40,12 @@ export type Project = {
   authorityContactId?: string;
   ownerUserId?: string;
   deputyUserId?: string;
-  participantUserIds: string[];
+  internalParticipants: ProjectInternalParticipant[];
+  participantUserIds?: string[];
   externalParticipants: ExternalParticipant[];
   attachments: ProjectAttachment[];
   updatedAt: string;
+  archivedAt?: string;
   isArchived?: boolean;
 };
 
@@ -54,7 +62,7 @@ export const projects: Project[] = [
     authorityContactId: "contact-001",
     ownerUserId: "u-001",
     deputyUserId: "u-006",
-    participantUserIds: ["u-002", "u-007"],
+    internalParticipants: [{ userId: "u-002" }, { userId: "u-007" }],
     externalParticipants: [
       {
         id: "ep-001",
@@ -87,7 +95,7 @@ export const projects: Project[] = [
     authorityContactId: "contact-004",
     ownerUserId: "u-003",
     deputyUserId: "u-008",
-    participantUserIds: ["u-004"],
+    internalParticipants: [{ userId: "u-004" }],
     externalParticipants: [
       {
         id: "ep-002",
@@ -113,7 +121,7 @@ export const projects: Project[] = [
     authorityContactId: "contact-002",
     ownerUserId: "u-005",
     deputyUserId: "u-009",
-    participantUserIds: ["u-010", "u-011"],
+    internalParticipants: [{ userId: "u-010" }, { userId: "u-011" }],
     externalParticipants: [],
     attachments: [
       {

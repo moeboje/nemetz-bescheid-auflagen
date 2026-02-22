@@ -1,0 +1,40 @@
+.wrapper {
+  position: relative;
+  padding: 0;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.select {
+  width: 100%;
+  padding: 8px 36px 8px 14px;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: var(--color-text);
+  appearance: none;
+  outline: none;
+}
+
+.wrapper::after {
+  content: "";
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--color-text-muted);
+  border-bottom: 2px solid var(--color-text-muted);
+  transform: translateY(-50%) rotate(45deg);
+  pointer-events: none;
+}
+
+.wrapper:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-focus-ring);
+}
+
+.disabled {
+  opacity: 0.6;
+}
