@@ -6,22 +6,28 @@ import {
   Card,
   DataTable,
   IconButton,
+  Modal,
   Select
 } from "@nemetz/ui";
 import { t } from "../i18n";
+import AuditTimeline from "../components/AuditTimeline";
+import DeadlineModal from "../components/DeadlineModal";
 import { EyeIcon, EditIcon } from "../components/Icons";
-import { useProjects } from "../state/ProjectsStore";
-import { useScopes } from "../state/ScopesStore";
-import { useAuthorities } from "../state/AuthoritiesStore";
-import { useUsers } from "../state/UsersStore";
-import { useLegalDocs } from "../state/LegalDocsStore";
-import { useAuthorization } from "../state/AuthorizationStore";
 import FileUploadStub, { UploadItem } from "../components/FileUploadStub";
+import ExternalParticipantModal from "../components/ExternalParticipantModal";
 import LegalDocModal from "../components/LegalDocModal";
 import ProjectModal from "../components/ProjectModal";
-import ExternalParticipantModal from "../components/ExternalParticipantModal";
 import type { ExternalParticipant } from "../data/projects";
 import { ProjectPolicy } from "../policies/ProjectPolicy";
+import { useAuditLog } from "../state/AuditLogStore";
+import { useAuthorization } from "../state/AuthorizationStore";
+import { useAuthorities } from "../state/AuthoritiesStore";
+import { useDeadlines } from "../state/DeadlinesStore";
+import { useLegalDocs } from "../state/LegalDocsStore";
+import { useObligations } from "../state/ObligationsStore";
+import { useProjects } from "../state/ProjectsStore";
+import { useScopes } from "../state/ScopesStore";
+import { useUsers } from "../state/UsersStore";
 
 function createAttachment(file: File): UploadItem {
   return {
@@ -55,28 +61,47 @@ function getParticipantUserIds(project?: {
   return project?.participantUserIds ?? [];
 }
 
+function getTaskStatusLabel(status: "OPEN" | "DONE" | "OVERDUE") {
+  if (status === "DONE") {
+    return t("tasks.status.done");
+  }
+  if (status === "OVERDUE") {
+    return t("tasks.status.overdue");
+  }
+  return t("tasks.status.open");
+}
+
 export default function ProjectDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { actor } = useAuthorization();
+  const { entries } = useAuditLog();
   const {
     projects,
     updateProject,
     archiveProject,
+    restoreProject,
     addProjectAttachment,
     removeProjectAttachment,
     addExternalParticipant,
     updateExternalParticipant,
-    archiveExternalParticipant
+    archiveExternalParticipant,
+    restoreExternalParticipant
   } = useProjects();
+  const { obligations, archiveObligation } = useObligations();
   const { getScopeLabel } = useScopes();
-  const { getAuthorityName, getContactsForAuthority } = useAuthorities();
+  const { contacts, getAuthorityName, getContactsForAuthority } = useAuthorities();
   const { users, getUserLabel } = useUsers();
-  const { legalDocs } = useLegalDocs();
+  const { legalDocs, archiveLegalDoc } = useLegalDocs();
+  const { deadlines, archiveDeadline, getDeadlineStatus } = useDeadlines();
+
   const [tab, setTab] = useState("overview");
+  const [archiveModalOpen, setArchiveModalOpen] = useState(false);
   const [legalDocModalOpen, setLegalDocModalOpen] = useState(false);
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
+  const [deadlineModalOpen, setDeadlineModalOpen] = useState(false);
+  const [editingDeadlineId, setEditingDeadlineId] = useState<string | null>(null);
   const [externalModalOpen, setExternalModalOpen] = useState(false);
   const [editingExternalParticipantId, setEditingExternalParticipantId] = useState<string | null>(
     null
@@ -84,47 +109,81 @@ export default function ProjectDetailPage() {
   const [showArchivedExternal, setShowArchivedExternal] = useState(false);
 
   const project = useMemo(() => projects.find((item) => item.id === id), [id, projects]);
-
   const scopeLabel = project
     ? getScopeLabel(project.companyId, project.siteId, project.facilityId)
     : "";
   const authorityName = getAuthorityName(project?.authorityId);
-  const contacts = getContactsForAuthority(project?.authorityId);
-  const contactName = contacts.find((contact) => contact.id === project?.authorityContactId)?.name;
-  const projectDocs = legalDocs.filter((doc) => doc.projectId === project?.id);
+  const authorityContacts = getContactsForAuthority(project?.authorityId);
+  const contactName =
+    contacts.find((contact) => contact.id === project?.authorityContactId)?.name ??
+    authorityContacts.find((contact) => contact.id === project?.authorityContactId)?.name;
+
+  const projectDocs = useMemo(
+    () =>
+      legalDocs.filter(
+        (doc) => doc.projectId === project?.id && !doc.isArchived && !doc.archivedAt
+      ),
+    [legalDocs, project?.id]
+  );
+  const projectDocIds = useMemo(() => new Set(projectDocs.map((doc) => doc.id)), [projectDocs]);
+
+  const projectDeadlines = useMemo(
+    () =>
+      deadlines.filter((deadline) => {
+        if (deadline.isArchived || deadline.archivedAt) {
+          return false;
+        }
+        if (deadline.projectId === project?.id) {
+          return true;
+        }
+        if (deadline.legalDocId && projectDocIds.has(deadline.legalDocId)) {
+          return true;
+        }
+        return false;
+      }),
+    [deadlines, project?.id, projectDocIds]
+  );
+
+  const projectObligations = useMemo(
+    () =>
+      obligations.filter(
+        (obligation) =>
+          !obligation.isArchived &&
+          !obligation.archivedAt &&
+          projectDocIds.has(obligation.legalDocId)
+      ),
+    [obligations, projectDocIds]
+  );
+
+  const historyEntries = useMemo(() => {
+    if (!project) {
+      return [];
+    }
+    const legalDocIdSet = new Set(projectDocs.map((doc) => doc.id));
+    const obligationIdSet = new Set(projectObligations.map((obligation) => obligation.id));
+    const deadlineIdSet = new Set(projectDeadlines.map((deadline) => deadline.id));
+
+    return entries.filter((entry) => {
+      if (entry.entityType === "PROJECT" && entry.entityId === project.id) {
+        return true;
+      }
+      if (entry.entityType === "LEGAL_DOC" && legalDocIdSet.has(entry.entityId)) {
+        return true;
+      }
+      if (entry.entityType === "OBLIGATION" && obligationIdSet.has(entry.entityId)) {
+        return true;
+      }
+      if (entry.entityType === "DEADLINE" && deadlineIdSet.has(entry.entityId)) {
+        return true;
+      }
+      return false;
+    });
+  }, [entries, project, projectDeadlines, projectDocs, projectObligations]);
 
   const userOptions = useMemo(
     () => users.map((user) => ({ value: user.id, label: user.displayName })),
     [users]
   );
-
-  const docColumns = [
-    {
-      key: "title",
-      header: t("projects.detail.legalDocs.title"),
-      render: (doc: (typeof legalDocs)[number]) => doc.title
-    },
-    {
-      key: "type",
-      header: t("projects.detail.legalDocs.type"),
-      render: (doc: (typeof legalDocs)[number]) =>
-        doc.type === "PERMIT"
-          ? t("legalDocs.types.permit")
-          : doc.type === "DIRECTIVE"
-          ? t("legalDocs.types.directive")
-          : t("legalDocs.types.decision")
-    },
-    {
-      key: "reference",
-      header: t("projects.detail.legalDocs.reference"),
-      render: (doc: (typeof legalDocs)[number]) => doc.reference ?? t("common.notAvailable")
-    },
-    {
-      key: "updated",
-      header: t("projects.detail.legalDocs.updated"),
-      render: (doc: (typeof legalDocs)[number]) => doc.updatedAt
-    }
-  ];
 
   if (!project) {
     return (
@@ -159,6 +218,63 @@ export default function ProjectDetailPage() {
     (participant) => participant.id === editingExternalParticipantId
   );
 
+  const childCountSummary = {
+    legalDocs: projectDocs.length,
+    obligations: projectObligations.length,
+    deadlines: projectDeadlines.length
+  };
+  const hasChildrenForArchive =
+    childCountSummary.legalDocs + childCountSummary.obligations + childCountSummary.deadlines > 0;
+
+  const docColumns = [
+    {
+      key: "title",
+      header: t("projects.detail.legalDocs.title"),
+      render: (doc: (typeof legalDocs)[number]) => doc.title
+    },
+    {
+      key: "type",
+      header: t("projects.detail.legalDocs.type"),
+      render: (doc: (typeof legalDocs)[number]) =>
+        doc.type === "PERMIT"
+          ? t("legalDocs.types.permit")
+          : doc.type === "DIRECTIVE"
+          ? t("legalDocs.types.directive")
+          : doc.type === "OTHER"
+          ? t("legalDocs.types.other")
+          : t("legalDocs.types.decision")
+    },
+    {
+      key: "reference",
+      header: t("projects.detail.legalDocs.reference"),
+      render: (doc: (typeof legalDocs)[number]) => doc.reference ?? t("common.notAvailable")
+    },
+    {
+      key: "updated",
+      header: t("projects.detail.legalDocs.updated"),
+      render: (doc: (typeof legalDocs)[number]) => doc.updatedAt.slice(0, 10)
+    }
+  ];
+
+  const deadlinesColumns = [
+    {
+      key: "title",
+      header: t("deadlines.table.title"),
+      render: (deadline: (typeof deadlines)[number]) => deadline.title
+    },
+    {
+      key: "dueDate",
+      header: t("deadlines.table.dueDate"),
+      render: (deadline: (typeof deadlines)[number]) => deadline.dueDate
+    },
+    {
+      key: "status",
+      header: t("tasks.table.status"),
+      render: (deadline: (typeof deadlines)[number]) =>
+        getTaskStatusLabel(getDeadlineStatus(deadline))
+    }
+  ];
+
   const externalColumns = [
     {
       key: "type",
@@ -188,6 +304,18 @@ export default function ProjectDetailPage() {
     }
   ];
 
+  const handleArchive = (cascadeChildren: boolean) => {
+    if (cascadeChildren) {
+      projectDocs.forEach((doc) => archiveLegalDoc(doc.id));
+      projectObligations.forEach((obligation) => archiveObligation(obligation.id));
+      projectDeadlines.forEach((deadline) => archiveDeadline(deadline.id));
+    }
+    const archived = archiveProject(project.id);
+    if (archived) {
+      navigate("..", { relative: "path" });
+    }
+  };
+
   return (
     <div className="page">
       <div className="pageHeader">
@@ -211,19 +339,15 @@ export default function ProjectDetailPage() {
           <Button variant="secondary" disabled={!canUpdate} onClick={() => setEditProjectOpen(true)}>
             {t("projects.action.edit")}
           </Button>
-          {canArchive ? (
-            <Button
-              variant="secondary"
-              onClick={() => {
-                const archived = archiveProject(project.id);
-                if (archived) {
-                  navigate("..", { relative: "path" });
-                }
-              }}
-            >
+          {!project.isArchived ? (
+            <Button variant="secondary" disabled={!canArchive} onClick={() => setArchiveModalOpen(true)}>
               {t("common.archive")}
             </Button>
-          ) : null}
+          ) : (
+            <Button variant="secondary" disabled={!canArchive} onClick={() => restoreProject(project.id)}>
+              {t("common.restore")}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -233,28 +357,42 @@ export default function ProjectDetailPage() {
           className={`tabButton ${tab === "overview" ? "tabButtonActive" : ""}`}
           onClick={() => setTab("overview")}
         >
-          {t("projects.tabs.overview")}
+          {t("projects.detail.tabs.overview")}
         </button>
         <button
           type="button"
           className={`tabButton ${tab === "legalDocs" ? "tabButtonActive" : ""}`}
           onClick={() => setTab("legalDocs")}
         >
-          {t("projects.tabs.legalDocs")}
+          {t("projects.detail.tabs.legalDocs")}
+        </button>
+        <button
+          type="button"
+          className={`tabButton ${tab === "deadlines" ? "tabButtonActive" : ""}`}
+          onClick={() => setTab("deadlines")}
+        >
+          {t("projects.detail.tabs.deadlines")}
         </button>
         <button
           type="button"
           className={`tabButton ${tab === "attachments" ? "tabButtonActive" : ""}`}
           onClick={() => setTab("attachments")}
         >
-          {t("projects.tabs.attachments")}
+          {t("projects.detail.tabs.attachments")}
         </button>
         <button
           type="button"
           className={`tabButton ${tab === "participants" ? "tabButtonActive" : ""}`}
           onClick={() => setTab("participants")}
         >
-          {t("projects.tabs.participants")}
+          {t("projects.detail.tabs.participants")}
+        </button>
+        <button
+          type="button"
+          className={`tabButton ${tab === "history" ? "tabButtonActive" : ""}`}
+          onClick={() => setTab("history")}
+        >
+          {t("projects.detail.tabs.history")}
         </button>
       </div>
 
@@ -312,6 +450,42 @@ export default function ProjectDetailPage() {
                   onClick={() => {
                     setEditingDocId(doc.id);
                     setLegalDocModalOpen(true);
+                  }}
+                >
+                  <EditIcon />
+                </IconButton>
+              </div>
+            )}
+          />
+        </div>
+      ) : null}
+
+      {tab === "deadlines" ? (
+        <div className="tableSection">
+          <div className="sectionHeader">
+            <h2 className="sectionTitle">{t("projects.detail.tabs.deadlines")}</h2>
+            <Button disabled={!canUpdate} onClick={() => setDeadlineModalOpen(true)}>
+              {t("deadlines.new")}
+            </Button>
+          </div>
+          <DataTable
+            columns={deadlinesColumns}
+            data={projectDeadlines}
+            getRowKey={(deadline) => deadline.id}
+            rowActions={(deadline) => (
+              <div className="tableActions">
+                <IconButton
+                  ariaLabel={t("common.view")}
+                  onClick={() => navigate(`/deadlines/${deadline.id}`)}
+                >
+                  <EyeIcon />
+                </IconButton>
+                <IconButton
+                  ariaLabel={t("common.edit")}
+                  disabled={!canUpdate}
+                  onClick={() => {
+                    setEditingDeadlineId(deadline.id);
+                    setDeadlineModalOpen(true);
                   }}
                 >
                   <EditIcon />
@@ -442,12 +616,28 @@ export default function ProjectDetailPage() {
                     >
                       {t("common.archive")}
                     </Button>
-                  ) : null}
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={!canUpdate}
+                      onClick={() => restoreExternalParticipant(project.id, participant.id)}
+                    >
+                      {t("common.restore")}
+                    </Button>
+                  )}
                 </div>
               )}
             />
           </div>
         </div>
+      ) : null}
+
+      {tab === "history" ? (
+        <Card>
+          <h2 className="sectionTitle">{t("projects.detail.tabs.history")}</h2>
+          <AuditTimeline entries={historyEntries} />
+        </Card>
       ) : null}
 
       <LegalDocModal
@@ -459,6 +649,16 @@ export default function ProjectDetailPage() {
         legalDoc={legalDocs.find((doc) => doc.id === editingDocId)}
         initialProjectId={project.id}
         lockProject
+      />
+
+      <DeadlineModal
+        open={deadlineModalOpen}
+        onClose={() => {
+          setDeadlineModalOpen(false);
+          setEditingDeadlineId(null);
+        }}
+        deadline={projectDeadlines.find((deadline) => deadline.id === editingDeadlineId)}
+        initialProjectId={project.id}
       />
 
       <ProjectModal open={editProjectOpen} onClose={() => setEditProjectOpen(false)} project={project} />
@@ -481,6 +681,56 @@ export default function ProjectDetailPage() {
           addExternalParticipant(project.id, input);
         }}
       />
+
+      <Modal
+        open={archiveModalOpen}
+        onClose={() => setArchiveModalOpen(false)}
+        closeAriaLabel={t("modal.close")}
+        header={t("projects.archive.confirmTitle")}
+        footer={
+          <div className="modalFooter">
+            <Button variant="secondary" onClick={() => setArchiveModalOpen(false)}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setArchiveModalOpen(false);
+                handleArchive(false);
+              }}
+            >
+              {t("projects.archive.parentOnly")}
+            </Button>
+            <Button
+              onClick={() => {
+                setArchiveModalOpen(false);
+                handleArchive(true);
+              }}
+              disabled={!hasChildrenForArchive}
+            >
+              {t("projects.archive.withChildren")}
+            </Button>
+          </div>
+        }
+      >
+        <div className="modalForm">
+          <p className="placeholderText">{t("projects.archive.warning")}</p>
+          <div className="detailGrid">
+            <div>
+              <div className="metaLabel">{t("projects.archive.children.legalDocs")}</div>
+              <div className="metaValue">{childCountSummary.legalDocs}</div>
+            </div>
+            <div>
+              <div className="metaLabel">{t("projects.archive.children.obligations")}</div>
+              <div className="metaValue">{childCountSummary.obligations}</div>
+            </div>
+            <div>
+              <div className="metaLabel">{t("projects.archive.children.deadlines")}</div>
+              <div className="metaValue">{childCountSummary.deadlines}</div>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

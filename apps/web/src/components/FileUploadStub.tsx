@@ -1,12 +1,8 @@
 import React, { useRef } from "react";
 import { Button } from "@nemetz/ui";
+import type { Attachment } from "../types/models";
 
-export type UploadItem = {
-  id: string;
-  filename: string;
-  sizeKb: number;
-  addedAt: string;
-};
+export type UploadItem = Attachment;
 
 type FileUploadStubProps = {
   label: string;

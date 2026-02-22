@@ -1,16 +1,17 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useMemo } from "react";
 import { useDeadlines } from "./DeadlinesStore";
 import { useLegalDocs } from "./LegalDocsStore";
 import { useObligations } from "./ObligationsStore";
 import { useProjects } from "./ProjectsStore";
 import { useScopes } from "./ScopesStore";
+import { buildObligationTaskInstanceId, useTaskState } from "./TaskStateStore";
 import { useUsers } from "./UsersStore";
-import { loadFromStorage, saveToStorage } from "./storage";
 import type { Deadline } from "./DeadlinesStore";
 import type { Obligation } from "./ObligationsStore";
 
 export type TaskType = "OBLIGATION" | "DEADLINE";
 export type TaskStatus = "OPEN" | "IN_PROGRESS" | "DONE" | "OVERDUE";
+export type TaskStatusInput = Exclude<TaskStatus, "OVERDUE">;
 
 export type Task = {
   id: string;
@@ -26,18 +27,18 @@ export type Task = {
   scopeLabel: string;
   projectId?: string;
   legalDocId?: string;
-};
-
-export type TaskState = {
-  status: TaskStatus;
   completedAt?: string;
 };
 
-export type TaskStateMap = Record<string, TaskState>;
+type TaskSeed = Omit<
+  Task,
+  "status" | "scopeLabel" | "assignedTo" | "deputyId" | "completedAt"
+> & {
+  assignedToUserId?: string;
+  deputyUserId?: string;
+};
 
-type TaskSeed = Omit<Task, "status" | "scopeLabel">;
-
-const STORAGE_KEY = "nemetz.taskState";
+const TASK_HORIZON_DAYS = 365;
 
 function todayStamp() {
   return new Date().toISOString().slice(0, 10);
@@ -57,138 +58,145 @@ function addInterval(date: Date, unit: "MONTH" | "YEAR", value: number) {
   return next;
 }
 
-export function generateTasksFromObligations(obligations: Obligation[], horizonDays = 365): TaskSeed[] {
+function buildDeadlineTaskId(deadlineId: string) {
+  return `deadline:${deadlineId}`;
+}
+
+function parseDeadlineTaskId(taskId: string) {
+  return taskId.startsWith("deadline:") ? taskId.slice(9) : "";
+}
+
+export function generateTasksFromObligations(
+  obligations: Obligation[],
+  horizonDays = TASK_HORIZON_DAYS
+): TaskSeed[] {
   const tasks: TaskSeed[] = [];
-  const horizonEnd = new Date();
+  const today = new Date(`${todayStamp()}T00:00:00`);
+  const horizonEnd = new Date(today);
   horizonEnd.setDate(horizonEnd.getDate() + horizonDays);
 
-  obligations.forEach((obligation) => {
-    if (obligation.scheduleType === "ONCE") {
-      if (!obligation.firstDueDate) {
+  obligations
+    .filter((obligation) => !obligation.isArchived)
+    .forEach((obligation) => {
+      const createSeed = (dueDateISO: string) => {
+        tasks.push({
+          id: buildObligationTaskInstanceId(obligation.id, dueDateISO),
+          type: "OBLIGATION",
+          obligationId: obligation.id,
+          title: obligation.title,
+          dueDate: dueDateISO,
+          assignedToUserId: obligation.ownerUserId,
+          deputyUserId: obligation.deputyUserId,
+          obligationLevel: obligation.level,
+          legalDocId: obligation.legalDocId
+        });
+      };
+
+      if (obligation.scheduleType === "ONCE") {
+        if (obligation.firstDueDate) {
+          createSeed(obligation.firstDueDate);
+        }
         return;
       }
-      tasks.push({
-        id: `ob-${obligation.id}-${obligation.firstDueDate}`,
-        type: "OBLIGATION",
-        obligationId: obligation.id,
-        title: obligation.title,
-        dueDate: obligation.firstDueDate,
-        assignedTo: obligation.ownerUserId,
-        deputyId: obligation.deputyUserId,
-        obligationLevel: obligation.level,
-        legalDocId: obligation.legalDocId
-      });
-      return;
-    }
 
-    const unit = obligation.intervalUnit;
-    const value = obligation.intervalValue ?? 0;
-    if (!unit || value <= 0) {
-      return;
-    }
-
-    const startDate = obligation.firstDueDate ? toDate(obligation.firstDueDate) : new Date();
-    let cursor = new Date(startDate);
-
-    if (obligation.scheduleType === "ONCE_THEN_RECURRING") {
-      if (!obligation.firstDueDate) {
+      const unit = obligation.intervalUnit;
+      const value = obligation.intervalValue ?? 0;
+      if (!unit || value <= 0) {
         return;
       }
-      tasks.push({
-        id: `ob-${obligation.id}-${obligation.firstDueDate}`,
-        type: "OBLIGATION",
-        obligationId: obligation.id,
-        title: obligation.title,
-        dueDate: obligation.firstDueDate,
-        assignedTo: obligation.ownerUserId,
-        deputyId: obligation.deputyUserId,
-        obligationLevel: obligation.level,
-        legalDocId: obligation.legalDocId
-      });
-      cursor = addInterval(startDate, unit, value);
-    }
 
-    while (cursor <= horizonEnd) {
-      const dueDate = cursor.toISOString().slice(0, 10);
-      tasks.push({
-        id: `ob-${obligation.id}-${dueDate}`,
-        type: "OBLIGATION",
-        obligationId: obligation.id,
-        title: obligation.title,
-        dueDate,
-        assignedTo: obligation.ownerUserId,
-        deputyId: obligation.deputyUserId,
-        obligationLevel: obligation.level,
-        legalDocId: obligation.legalDocId
-      });
-      cursor = addInterval(cursor, unit, value);
-    }
-  });
+      const startDate = obligation.firstDueDate ? toDate(obligation.firstDueDate) : today;
+      if (Number.isNaN(startDate.getTime())) {
+        return;
+      }
+
+      let cursor = new Date(startDate);
+
+      if (obligation.scheduleType === "ONCE_THEN_RECURRING") {
+        if (!obligation.firstDueDate) {
+          return;
+        }
+        createSeed(obligation.firstDueDate);
+        cursor = addInterval(startDate, unit, value);
+      }
+
+      while (cursor <= horizonEnd) {
+        const dueDate = cursor.toISOString().slice(0, 10);
+        createSeed(dueDate);
+        cursor = addInterval(cursor, unit, value);
+      }
+    });
 
   return tasks;
 }
 
 export function generateTasksFromDeadlines(deadlines: Deadline[]): TaskSeed[] {
-  return deadlines.map((deadline) => ({
-    id: `dl-${deadline.id}`,
-    type: "DEADLINE",
-    deadlineId: deadline.id,
-    title: deadline.title,
-    dueDate: deadline.dueDate,
-    assignedTo: deadline.ownerUserId,
-    deputyId: deadline.deputyUserId,
-    projectId: deadline.projectId,
-    legalDocId: deadline.legalDocId
-  }));
+  return deadlines
+    .filter((deadline) => !deadline.isArchived)
+    .map((deadline) => ({
+      id: buildDeadlineTaskId(deadline.id),
+      type: "DEADLINE",
+      deadlineId: deadline.id,
+      title: deadline.title,
+      dueDate: deadline.dueDate,
+      assignedToUserId: deadline.ownerUserId,
+      deputyUserId: deadline.deputyUserId,
+      projectId: deadline.projectId,
+      legalDocId: deadline.legalDocId
+    }));
 }
 
 export type TasksContextValue = {
   tasks: Task[];
-  taskState: TaskStateMap;
-  setTaskStatus: (taskId: string, status: TaskStatus) => void;
+  setTaskStatus: (taskId: string, status: TaskStatusInput) => void;
+  markTaskDone: (taskId: string) => void;
+  reopenTask: (taskId: string) => void;
 };
 
 const TasksContext = createContext<TasksContextValue | undefined>(undefined);
 
 export function TasksProvider({ children }: { children: React.ReactNode }) {
   const { obligations } = useObligations();
-  const { deadlines, getDeadlineStatus, setDeadlineStatus } = useDeadlines();
+  const {
+    deadlines,
+    getDeadlineStatus,
+    markDeadlineDone,
+    reopenDeadline
+  } = useDeadlines();
   const { legalDocs, getEffectiveScopeForLegalDoc } = useLegalDocs();
   const { projects } = useProjects();
   const { getScopeLabel } = useScopes();
   const { getUserLabel } = useUsers();
+  const { taskState, setTaskStatus: setObligationTaskStatus } = useTaskState();
 
-  const [taskState, setTaskState] = useState<TaskStateMap>(() =>
-    Object.fromEntries(
-      Object.entries(loadFromStorage<TaskStateMap>(STORAGE_KEY, {})).filter(
-        ([taskId]) => !taskId.startsWith("dl-")
-      )
-    )
+  const setTaskStatus = useCallback(
+    (taskId: string, status: TaskStatusInput) => {
+      const deadlineId = parseDeadlineTaskId(taskId);
+      if (deadlineId) {
+        if (status === "DONE") {
+          markDeadlineDone(deadlineId);
+          return;
+        }
+        reopenDeadline(deadlineId);
+        return;
+      }
+      setObligationTaskStatus(taskId, status);
+    },
+    [markDeadlineDone, reopenDeadline, setObligationTaskStatus]
   );
 
-  const setTaskStatus = useCallback((taskId: string, status: TaskStatus) => {
-    if (taskId.startsWith("dl-")) {
-      const deadlineId = taskId.slice(3);
-      if (deadlineId) {
-        setDeadlineStatus(deadlineId, status === "DONE" ? "DONE" : "OPEN");
-      }
-      return;
-    }
-    setTaskState((prev) => ({
-      ...prev,
-      [taskId]: {
-        status,
-        completedAt: status === "DONE" ? todayStamp() : undefined
-      }
-    }));
-  }, [setDeadlineStatus]);
+  const markTaskDone = useCallback(
+    (taskId: string) => setTaskStatus(taskId, "DONE"),
+    [setTaskStatus]
+  );
 
-  React.useEffect(() => {
-    saveToStorage(STORAGE_KEY, taskState);
-  }, [taskState]);
+  const reopenTask = useCallback(
+    (taskId: string) => setTaskStatus(taskId, "OPEN"),
+    [setTaskStatus]
+  );
 
   const tasks = useMemo<Task[]>(() => {
-    const obligationSeeds = generateTasksFromObligations(obligations);
+    const obligationSeeds = generateTasksFromObligations(obligations, TASK_HORIZON_DAYS);
     const deadlineSeeds = generateTasksFromDeadlines(deadlines);
     const seeds = [...obligationSeeds, ...deadlineSeeds];
     const today = todayStamp();
@@ -198,6 +206,8 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
         let projectId = seed.projectId;
         let legalDocId = seed.legalDocId;
         let scopeLabel = "";
+        let status: TaskStatus = "OPEN";
+        let completedAt: string | undefined;
 
         if (seed.type === "OBLIGATION") {
           const doc = legalDocs.find((item) => item.id === seed.legalDocId);
@@ -209,15 +219,25 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
               scopeLabel = getScopeLabel(scope.companyId, scope.siteId, scope.facilityId);
             }
           }
-        }
+          const stored = taskState[seed.id];
+          status = stored?.status ?? "OPEN";
+          completedAt = stored?.completedAt;
+          if (status !== "DONE" && seed.dueDate < today) {
+            status = "OVERDUE";
+          }
+        } else {
+          const deadline = deadlines.find((item) => item.id === seed.deadlineId);
+          status = deadline ? getDeadlineStatus(deadline) : "OPEN";
+          completedAt = deadline?.status === "DONE" ? deadline.updatedAt : undefined;
 
-        if (seed.type === "DEADLINE" && legalDocId) {
-          const doc = legalDocs.find((item) => item.id === legalDocId);
-          if (doc) {
-            projectId = projectId ?? doc.projectId;
-            const scope = getEffectiveScopeForLegalDoc(doc);
-            if (scope) {
-              scopeLabel = getScopeLabel(scope.companyId, scope.siteId, scope.facilityId);
+          if (legalDocId) {
+            const doc = legalDocs.find((item) => item.id === legalDocId);
+            if (doc) {
+              projectId = projectId ?? doc.projectId;
+              const scope = getEffectiveScopeForLegalDoc(doc);
+              if (scope) {
+                scopeLabel = getScopeLabel(scope.companyId, scope.siteId, scope.facilityId);
+              }
             }
           }
         }
@@ -229,23 +249,12 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        let status: TaskStatus = "OPEN";
-        if (seed.type === "DEADLINE") {
-          const deadline = deadlines.find((item) => item.id === seed.deadlineId);
-          status = deadline ? getDeadlineStatus(deadline) : "OPEN";
-        } else {
-          const stored = taskState[seed.id];
-          status = stored?.status ?? "OPEN";
-          if (status !== "DONE" && seed.dueDate < today) {
-            status = "OVERDUE";
-          }
-        }
-
         return {
           ...seed,
           status,
-          assignedTo: seed.assignedTo ? getUserLabel(seed.assignedTo) : "",
-          deputyId: seed.deputyId ? getUserLabel(seed.deputyId) : "",
+          completedAt,
+          assignedTo: seed.assignedToUserId ? getUserLabel(seed.assignedToUserId) : "",
+          deputyId: seed.deputyUserId ? getUserLabel(seed.deputyUserId) : "",
           scopeLabel,
           projectId,
           legalDocId
@@ -267,10 +276,11 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo(
     () => ({
       tasks,
-      taskState,
-      setTaskStatus
+      setTaskStatus,
+      markTaskDone,
+      reopenTask
     }),
-    [setTaskStatus, taskState, tasks]
+    [markTaskDone, reopenTask, setTaskStatus, tasks]
   );
 
   return <TasksContext.Provider value={value}>{children}</TasksContext.Provider>;

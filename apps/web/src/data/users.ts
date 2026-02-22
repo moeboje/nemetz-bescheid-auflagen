@@ -9,85 +9,73 @@ export type UserStub = {
 export const users: UserStub[] = [
   {
     id: "u-001",
-    displayName: "Mario Prammer",
-    email: "m.prammer@nemetz.at",
+    displayName: "Betriebsleitung 1",
     isExternal: false,
-    roleLabel: "Projektleitung"
+    roleLabel: "Betriebsleitung"
   },
   {
     id: "u-002",
-    displayName: "Lena Hofer",
-    email: "l.hofer@nemetz.at",
+    displayName: "Umweltmanagement 1",
     isExternal: false,
     roleLabel: "Umweltmanagement"
   },
   {
     id: "u-003",
-    displayName: "Fatma Yilmaz",
-    email: "f.yilmaz@nemetz.at",
+    displayName: "Compliance 1",
     isExternal: false,
     roleLabel: "Compliance"
   },
   {
     id: "u-004",
-    displayName: "Markus Leitner",
-    email: "m.leitner@nemetz.at",
+    displayName: "Betriebsleitung 2",
     isExternal: false,
     roleLabel: "Betriebsleitung"
   },
   {
     id: "u-005",
-    displayName: "Sabrina Wolf",
-    email: "s.wolf@nemetz.at",
+    displayName: "Umweltmanagement 2",
     isExternal: false,
-    roleLabel: "QS"
+    roleLabel: "Umweltmanagement"
   },
   {
     id: "u-006",
-    displayName: "Tobias Lang",
-    email: "t.lang@nemetz.at",
+    displayName: "Instandhaltung 1",
     isExternal: false,
-    roleLabel: "Technik"
+    roleLabel: "Instandhaltung"
   },
   {
     id: "u-007",
-    displayName: "Katharina Stein",
-    email: "k.stein@nemetz.at",
+    displayName: "Projektkoordination 1",
     isExternal: false,
-    roleLabel: "Projektassistenz"
+    roleLabel: "Projektkoordination"
   },
   {
     id: "u-008",
-    displayName: "Julia Kern",
-    email: "j.kern@nemetz.at",
+    displayName: "EHS 1",
     isExternal: false,
     roleLabel: "EHS"
   },
   {
     id: "u-009",
-    displayName: "Simon Kurz",
-    email: "s.kurz@nemetz.at",
+    displayName: "Instandhaltung 2",
     isExternal: false,
     roleLabel: "Instandhaltung"
   },
   {
     id: "u-010",
-    displayName: "Andrea Seidl",
-    email: "andrea.seidl@partner.at",
+    displayName: "Externe Beratung 1",
     isExternal: true,
     roleLabel: "Beratung"
   },
   {
     id: "u-011",
-    displayName: "Rainer Novak",
-    email: "rainer.novak@partner.at",
+    displayName: "Fachgutachten 1",
     isExternal: true,
     roleLabel: "Fachgutachten"
   },
   {
     id: "u-012",
-    displayName: "Elena Moser",
-    email: "elena.moser@partner.at",
+    displayName: "Audits 1",
     isExternal: true,
     roleLabel: "Auditorin"
   }

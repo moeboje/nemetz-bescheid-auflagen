@@ -1,17 +1,19 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Badge, Breadcrumbs, Card, DataTable, Button, IconButton } from "@nemetz/ui";
+import { Badge, Breadcrumbs, Card, DataTable, Button, IconButton, Modal } from "@nemetz/ui";
 import { t } from "../i18n";
-import { useLegalDocs } from "../state/LegalDocsStore";
-import { useProjects } from "../state/ProjectsStore";
-import { useObligations } from "../state/ObligationsStore";
-import { useDeadlines } from "../state/DeadlinesStore";
-import { useUsers } from "../state/UsersStore";
-import { generateTasksFromObligations } from "../state/TasksStore";
-import FileUploadStub, { UploadItem } from "../components/FileUploadStub";
-import ObligationModal from "../components/ObligationModal";
+import AuditTimeline from "../components/AuditTimeline";
 import DeadlineModal from "../components/DeadlineModal";
 import { EyeIcon, EditIcon } from "../components/Icons";
+import FileUploadStub, { UploadItem } from "../components/FileUploadStub";
+import ObligationModal from "../components/ObligationModal";
+import { useAuditLog } from "../state/AuditLogStore";
+import { useDeadlines } from "../state/DeadlinesStore";
+import { useLegalDocs } from "../state/LegalDocsStore";
+import { useObligations } from "../state/ObligationsStore";
+import { useProjects } from "../state/ProjectsStore";
+import { useUsers } from "../state/UsersStore";
+import { generateTasksFromObligations } from "../state/TasksStore";
 
 const levelVariant = {
   MANDATORY: "danger",
@@ -53,21 +55,56 @@ export default function LegalDocPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [tab, setTab] = useState("overview");
+  const [archiveModalOpen, setArchiveModalOpen] = useState(false);
   const [obligationModalOpen, setObligationModalOpen] = useState(false);
   const [editingObligationId, setEditingObligationId] = useState<string | null>(null);
   const [deadlineModalOpen, setDeadlineModalOpen] = useState(false);
   const [editingDeadlineId, setEditingDeadlineId] = useState<string | null>(null);
-  const { legalDocs, addLegalDocAttachment, removeLegalDocAttachment, getEffectiveScopeLabel } =
-    useLegalDocs();
+  const {
+    legalDocs,
+    addLegalDocAttachment,
+    removeLegalDocAttachment,
+    getEffectiveScopeLabel,
+    archiveLegalDoc,
+    restoreLegalDoc
+  } = useLegalDocs();
+  const { entries } = useAuditLog();
   const { projects } = useProjects();
-  const { obligations } = useObligations();
-  const { deadlines, getDeadlineStatus } = useDeadlines();
+  const { obligations, archiveObligation } = useObligations();
+  const { deadlines, getDeadlineStatus, archiveDeadline } = useDeadlines();
   const { getUserLabel } = useUsers();
 
   const legalDoc = useMemo(() => legalDocs.find((doc) => doc.id === id), [id, legalDocs]);
   const docProject = projects.find((project) => project.id === legalDoc?.projectId);
-  const docObligations = obligations.filter((obligation) => obligation.legalDocId === legalDoc?.id);
-  const docDeadlines = deadlines.filter((deadline) => deadline.legalDocId === legalDoc?.id);
+  const docObligations = obligations.filter(
+    (obligation) =>
+      obligation.legalDocId === legalDoc?.id && !obligation.isArchived && !obligation.archivedAt
+  );
+  const docDeadlines = deadlines.filter(
+    (deadline) =>
+      deadline.legalDocId === legalDoc?.id && !deadline.isArchived && !deadline.archivedAt
+  );
+
+  const historyEntries = useMemo(() => {
+    if (!legalDoc) {
+      return [];
+    }
+    const obligationIds = new Set(docObligations.map((obligation) => obligation.id));
+    const deadlineIds = new Set(docDeadlines.map((deadline) => deadline.id));
+
+    return entries.filter((entry) => {
+      if (entry.entityType === "LEGAL_DOC" && entry.entityId === legalDoc.id) {
+        return true;
+      }
+      if (entry.entityType === "OBLIGATION" && obligationIds.has(entry.entityId)) {
+        return true;
+      }
+      if (entry.entityType === "DEADLINE" && deadlineIds.has(entry.entityId)) {
+        return true;
+      }
+      return false;
+    });
+  }, [docDeadlines, docObligations, entries, legalDoc]);
 
   const getNextDue = (obligationId: string) => {
     const obligation = obligations.find((item) => item.id === obligationId);
@@ -84,7 +121,11 @@ export default function LegalDocPage() {
   };
 
   const obligationColumns = [
-    { key: "title", header: t("legalDoc.obligations.title"), render: (row: (typeof obligations)[number]) => row.title },
+    {
+      key: "title",
+      header: t("legalDoc.obligations.title"),
+      render: (row: (typeof obligations)[number]) => row.title
+    },
     {
       key: "level",
       header: t("legalDoc.obligations.level"),
@@ -180,6 +221,15 @@ export default function LegalDocPage() {
     );
   }
 
+  const handleArchive = (cascadeChildren: boolean) => {
+    if (cascadeChildren) {
+      docObligations.forEach((obligation) => archiveObligation(obligation.id));
+      docDeadlines.forEach((deadline) => archiveDeadline(deadline.id));
+    }
+    archiveLegalDoc(legalDoc.id);
+    navigate("..", { relative: "path" });
+  };
+
   return (
     <div className="page">
       <div className="pageHeader">
@@ -195,6 +245,17 @@ export default function LegalDocPage() {
           <h1 className="pageTitle">{legalDoc.title}</h1>
           <div className="inlineMeta">{legalDoc.shortDescription}</div>
         </div>
+        <div className="inlineMeta">
+          {!legalDoc.isArchived ? (
+            <Button variant="secondary" onClick={() => setArchiveModalOpen(true)}>
+              {t("common.archive")}
+            </Button>
+          ) : (
+            <Button variant="secondary" onClick={() => restoreLegalDoc(legalDoc.id)}>
+              {t("common.restore")}
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="tabs">
@@ -203,28 +264,35 @@ export default function LegalDocPage() {
           className={`tabButton ${tab === "overview" ? "tabButtonActive" : ""}`}
           onClick={() => setTab("overview")}
         >
-          {t("legalDoc.tabs.overview")}
+          {t("legalDocs.detail.tabs.overview")}
         </button>
         <button
           type="button"
           className={`tabButton ${tab === "obligations" ? "tabButtonActive" : ""}`}
           onClick={() => setTab("obligations")}
         >
-          {t("legalDoc.tabs.obligations")}
+          {t("legalDocs.detail.tabs.obligations")}
         </button>
         <button
           type="button"
           className={`tabButton ${tab === "deadlines" ? "tabButtonActive" : ""}`}
           onClick={() => setTab("deadlines")}
         >
-          {t("legalDoc.tabs.deadlines")}
+          {t("legalDocs.detail.tabs.deadlines")}
+        </button>
+        <button
+          type="button"
+          className={`tabButton ${tab === "attachments" ? "tabButtonActive" : ""}`}
+          onClick={() => setTab("attachments")}
+        >
+          {t("legalDocs.detail.tabs.attachments")}
         </button>
         <button
           type="button"
           className={`tabButton ${tab === "history" ? "tabButtonActive" : ""}`}
           onClick={() => setTab("history")}
         >
-          {t("legalDoc.tabs.history")}
+          {t("legalDocs.detail.tabs.history")}
         </button>
       </div>
 
@@ -248,17 +316,6 @@ export default function LegalDocPage() {
               <div className="metaValue">{legalDoc.issuedAt ?? t("common.notAvailable")}</div>
             </div>
           </div>
-          <div className="sectionSpacer" />
-          <FileUploadStub
-            label={t("legalDoc.section.attachments")}
-            selectLabel={t("common.selectFile")}
-            removeLabel={t("common.remove")}
-            items={legalDoc.attachments}
-            onAddFiles={(files) =>
-              files.forEach((file) => addLegalDocAttachment(legalDoc.id, createAttachment(file)))
-            }
-            onRemove={(attachmentId) => removeLegalDocAttachment(legalDoc.id, attachmentId)}
-          />
         </Card>
       ) : null}
 
@@ -300,7 +357,7 @@ export default function LegalDocPage() {
       {tab === "deadlines" ? (
         <div className="tableSection">
           <div className="sectionHeader">
-            <h2 className="sectionTitle">{t("legalDoc.tabs.deadlines")}</h2>
+            <h2 className="sectionTitle">{t("legalDocs.detail.tabs.deadlines")}</h2>
             <Button onClick={() => setDeadlineModalOpen(true)}>{t("deadlines.new")}</Button>
           </div>
           <DataTable
@@ -330,21 +387,25 @@ export default function LegalDocPage() {
         </div>
       ) : null}
 
+      {tab === "attachments" ? (
+        <Card>
+          <FileUploadStub
+            label={t("legalDoc.section.attachments")}
+            selectLabel={t("common.selectFile")}
+            removeLabel={t("common.remove")}
+            items={legalDoc.attachments}
+            onAddFiles={(files) =>
+              files.forEach((file) => addLegalDocAttachment(legalDoc.id, createAttachment(file)))
+            }
+            onRemove={(attachmentId) => removeLegalDocAttachment(legalDoc.id, attachmentId)}
+          />
+        </Card>
+      ) : null}
+
       {tab === "history" ? (
         <Card>
-          <h2 className="sectionTitle">{t("legalDoc.history.title")}</h2>
-          <div className="timeline">
-            {[
-              { id: "h-01", date: "2026-02-20", text: t("legalDoc.history.imported") },
-              { id: "h-02", date: "2026-02-22", text: t("legalDoc.history.obligationAdded") },
-              { id: "h-03", date: "2026-02-23", text: t("legalDoc.history.deadlineUpdated") }
-            ].map((entry) => (
-              <div key={entry.id} className="timelineItem">
-                <div className="metaLabel">{entry.date}</div>
-                <div className="metaValue">{entry.text}</div>
-              </div>
-            ))}
-          </div>
+          <h2 className="sectionTitle">{t("legalDocs.detail.tabs.history")}</h2>
+          <AuditTimeline entries={historyEntries} />
         </Card>
       ) : null}
 
@@ -370,6 +431,52 @@ export default function LegalDocPage() {
         lockProject
         lockLegalDoc
       />
+
+      <Modal
+        open={archiveModalOpen}
+        onClose={() => setArchiveModalOpen(false)}
+        closeAriaLabel={t("modal.close")}
+        header={t("legalDocs.archive.confirmTitle")}
+        footer={
+          <div className="modalFooter">
+            <Button variant="secondary" onClick={() => setArchiveModalOpen(false)}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setArchiveModalOpen(false);
+                handleArchive(false);
+              }}
+            >
+              {t("legalDocs.archive.parentOnly")}
+            </Button>
+            <Button
+              onClick={() => {
+                setArchiveModalOpen(false);
+                handleArchive(true);
+              }}
+              disabled={docObligations.length + docDeadlines.length === 0}
+            >
+              {t("legalDocs.archive.withChildren")}
+            </Button>
+          </div>
+        }
+      >
+        <div className="modalForm">
+          <p className="placeholderText">{t("legalDocs.archive.warning")}</p>
+          <div className="detailGrid">
+            <div>
+              <div className="metaLabel">{t("legalDocs.archive.children.obligations")}</div>
+              <div className="metaValue">{docObligations.length}</div>
+            </div>
+            <div>
+              <div className="metaLabel">{t("legalDocs.archive.children.deadlines")}</div>
+              <div className="metaValue">{docDeadlines.length}</div>
+            </div>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

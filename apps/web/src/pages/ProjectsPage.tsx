@@ -36,7 +36,8 @@ export default function ProjectsPage() {
     companyId: "",
     siteId: "",
     facilityId: "",
-    authorityId: ""
+    authorityId: "",
+    showArchived: false
   });
 
   const activeCompanies = useMemo(
@@ -97,7 +98,7 @@ export default function ProjectsPage() {
 
   const filteredProjects = useMemo(() => {
     return projects.filter((project) => {
-      if (project.archivedAt || project.isArchived) {
+      if ((project.archivedAt || project.isArchived) && !filters.showArchived) {
         return false;
       }
       if (!ProjectPolicy.view(actor, project)) {
@@ -237,6 +238,17 @@ export default function ProjectsPage() {
             }
           />
         </div>
+        <div className="sectionSpacer" />
+        <label className="checkboxRow">
+          <input
+            type="checkbox"
+            checked={filters.showArchived}
+            onChange={(event) =>
+              setFilters((prev) => ({ ...prev, showArchived: event.target.checked }))
+            }
+          />
+          <span>{t("common.showArchived")}</span>
+        </label>
       </Card>
 
       <DataTable

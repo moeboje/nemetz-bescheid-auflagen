@@ -14,6 +14,7 @@ import { t } from "../i18n";
 import { useObligations } from "../state/ObligationsStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useProjects } from "../state/ProjectsStore";
+import { useScopes } from "../state/ScopesStore";
 import { useUsers } from "../state/UsersStore";
 import { generateTasksFromObligations } from "../state/TasksStore";
 import { EyeIcon, EditIcon } from "../components/Icons";
@@ -45,6 +46,7 @@ export default function ObligationsPage() {
   const { obligations } = useObligations();
   const { legalDocs, getEffectiveScopeLabel } = useLegalDocs();
   const { projects } = useProjects();
+  const { companies, sites, facilities, getScopeLabel } = useScopes();
   const { users, getUserLabel } = useUsers();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingObligationId, setEditingObligationId] = useState<string | null>(null);
@@ -54,7 +56,8 @@ export default function ObligationsPage() {
     projectId: "",
     legalDocId: "",
     ownerUserId: "",
-    scopeLabel: ""
+    scopeLabel: "",
+    showArchived: false
   });
 
   const projectOptions = useMemo(
@@ -73,9 +76,28 @@ export default function ObligationsPage() {
   );
 
   const scopeOptions = useMemo(() => {
-    const labels = legalDocs.map((doc) => getEffectiveScopeLabel(doc)).filter(Boolean);
+    const activeCompanies = companies.filter((company) => !company.isArchived);
+    const activeSites = sites.filter(
+      (site) =>
+        !site.isArchived && activeCompanies.some((company) => company.id === site.companyId)
+    );
+    const activeFacilities = facilities.filter(
+      (facility) =>
+        !facility.isArchived &&
+        activeCompanies.some((company) => company.id === facility.companyId) &&
+        activeSites.some((site) => site.id === facility.siteId)
+    );
+
+    const labels = [
+      ...activeCompanies.map((company) => getScopeLabel(company.id)),
+      ...activeSites.map((site) => getScopeLabel(site.companyId, site.id)),
+      ...activeFacilities.map((facility) =>
+        getScopeLabel(facility.companyId, facility.siteId, facility.id)
+      )
+    ].filter(Boolean);
+
     return Array.from(new Set(labels)).map((label) => ({ value: label, label }));
-  }, [getEffectiveScopeLabel, legalDocs]);
+  }, [companies, facilities, getScopeLabel, sites]);
 
   const getNextDue = (obligationId: string) => {
     const obligation = obligations.find((item) => item.id === obligationId);
@@ -93,6 +115,9 @@ export default function ObligationsPage() {
 
   const filteredObligations = useMemo(() => {
     return obligations.filter((obligation) => {
+      if ((obligation.isArchived || obligation.archivedAt) && !filters.showArchived) {
+        return false;
+      }
       const doc = legalDocs.find((item) => item.id === obligation.legalDocId);
       const projectId = doc?.projectId;
       const matchesSearch = filters.search
@@ -231,6 +256,17 @@ export default function ObligationsPage() {
             }
           />
         </div>
+        <div className="sectionSpacer" />
+        <label className="checkboxRow">
+          <input
+            type="checkbox"
+            checked={filters.showArchived}
+            onChange={(event) =>
+              setFilters((prev) => ({ ...prev, showArchived: event.target.checked }))
+            }
+          />
+          <span>{t("common.showArchived")}</span>
+        </label>
       </Card>
 
       <DataTable

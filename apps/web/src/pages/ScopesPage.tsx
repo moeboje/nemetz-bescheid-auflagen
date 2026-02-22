@@ -10,7 +10,10 @@ import {
 } from "@nemetz/ui";
 import { t } from "../i18n";
 import { ArchiveIcon, EditIcon } from "../components/Icons";
+import { useLegalDocs } from "../state/LegalDocsStore";
+import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
+import { useTasks } from "../state/TasksStore";
 
 type ScopeLevel = "company" | "site" | "facility";
 
@@ -51,6 +54,16 @@ const emptyFacilityForm = {
   type: ""
 };
 
+function createEmptySummary(): ScopeSummary {
+  return {
+    label: t("scopes.empty"),
+    projects: 0,
+    documents: 0,
+    openTasks: 0,
+    overdue: 0
+  };
+}
+
 export default function ScopesPage() {
   const {
     companies,
@@ -59,14 +72,20 @@ export default function ScopesPage() {
     addCompany,
     updateCompany,
     archiveCompany,
+    restoreCompany,
     addSite,
     updateSite,
     archiveSite,
+    restoreSite,
     addFacility,
     updateFacility,
     archiveFacility,
+    restoreFacility,
     getScopeLabel
   } = useScopes();
+  const { projects } = useProjects();
+  const { legalDocs } = useLegalDocs();
+  const { tasks } = useTasks();
 
   const [showArchived, setShowArchived] = useState(false);
   const [activeScope, setActiveScope] = useState<ActiveScope | null>(null);
@@ -83,6 +102,11 @@ export default function ScopesPage() {
   const [companyForm, setCompanyForm] = useState(emptyCompanyForm);
   const [siteForm, setSiteForm] = useState(emptySiteForm);
   const [facilityForm, setFacilityForm] = useState(emptyFacilityForm);
+
+  const activeProjects = useMemo(
+    () => projects.filter((project) => !project.archivedAt && !project.isArchived),
+    [projects]
+  );
 
   const visibleCompanies = useMemo(
     () => companies.filter((company) => (showArchived ? true : !company.isArchived)),
@@ -154,82 +178,73 @@ export default function ScopesPage() {
 
   const activeSummary = useMemo<ScopeSummary>(() => {
     if (!activeScope) {
-      return {
-        label: t("scopes.empty"),
-        projects: 0,
-        documents: 0,
-        openTasks: 0,
-        overdue: 0
-      };
+      return createEmptySummary();
     }
+
+    let label = "";
+    let projectIds: string[] = [];
 
     if (activeScope.level === "company") {
       const company = companies.find((item) => item.id === activeScope.id);
       if (!company) {
-        return {
-          label: t("scopes.empty"),
-          projects: 0,
-          documents: 0,
-          openTasks: 0,
-          overdue: 0
-        };
+        return createEmptySummary();
       }
-
-      const companySites = sites.filter((site) => site.companyId === company.id);
-      return {
-        label: getScopeLabel(company.id),
-        projects: companySites.reduce((sum, site) => sum + site.projects, 0),
-        documents: companySites.reduce((sum, site) => sum + site.documents, 0),
-        openTasks: companySites.reduce((sum, site) => sum + site.openTasks, 0),
-        overdue: companySites.reduce((sum, site) => sum + site.overdue, 0)
-      };
+      label = getScopeLabel({ companyId: company.id });
+      projectIds = activeProjects
+        .filter((project) => project.companyId === company.id)
+        .map((project) => project.id);
     }
 
     if (activeScope.level === "site") {
       const site = sites.find((item) => item.id === activeScope.id);
       if (!site) {
-        return {
-          label: t("scopes.empty"),
-          projects: 0,
-          documents: 0,
-          openTasks: 0,
-          overdue: 0
-        };
+        return createEmptySummary();
       }
-
-      return {
-        label: getScopeLabel(site.companyId, site.id),
-        projects: site.projects,
-        documents: site.documents,
-        openTasks: site.openTasks,
-        overdue: site.overdue
-      };
+      label = getScopeLabel({ companyId: site.companyId, siteId: site.id });
+      projectIds = activeProjects
+        .filter((project) => project.siteId === site.id)
+        .map((project) => project.id);
     }
 
-    const facility = facilities.find((item) => item.id === activeScope.id);
-    if (!facility) {
-      return {
-        label: t("scopes.empty"),
-        projects: 0,
-        documents: 0,
-        openTasks: 0,
-        overdue: 0
-      };
+    if (activeScope.level === "facility") {
+      const facility = facilities.find((item) => item.id === activeScope.id);
+      if (!facility) {
+        return createEmptySummary();
+      }
+      label = getScopeLabel({
+        companyId: facility.companyId,
+        siteId: facility.siteId,
+        facilityId: facility.id
+      });
+      projectIds = activeProjects
+        .filter((project) => project.facilityId === facility.id)
+        .map((project) => project.id);
     }
+
+    const uniqueProjectIds = new Set(projectIds);
+    const documents = legalDocs.filter((doc) => uniqueProjectIds.has(doc.projectId)).length;
+    const relatedTasks = tasks.filter(
+      (task) => task.projectId && uniqueProjectIds.has(task.projectId)
+    );
 
     return {
-      label: getScopeLabel(facility.companyId, facility.siteId, facility.id),
-      projects: facility.projects,
-      documents: facility.documents,
-      openTasks: facility.openTasks,
-      overdue: facility.overdue
+      label,
+      projects: uniqueProjectIds.size,
+      documents,
+      openTasks: relatedTasks.filter((task) => task.status !== "DONE").length,
+      overdue: relatedTasks.filter((task) => task.status === "OVERDUE").length
     };
-  }, [activeScope, companies, facilities, getScopeLabel, sites]);
+  }, [activeProjects, activeScope, companies, facilities, getScopeLabel, legalDocs, sites, tasks]);
 
   const companyOptions = useMemo(
     () =>
       companies
-        .filter((company) => !company.isArchived || company.id === siteForm.companyId || company.id === facilityForm.companyId)
+        .filter(
+          (company) =>
+            !company.isArchived ||
+            company.id === siteForm.companyId ||
+            company.id === facilityForm.companyId
+        )
         .map((company) => ({ value: company.id, label: company.name })),
     [companies, facilityForm.companyId, siteForm.companyId]
   );
@@ -275,7 +290,7 @@ export default function ScopesPage() {
   };
 
   const openNewSiteModal = () => {
-    const defaultCompanyId = visibleCompanies.find((company) => !company.isArchived)?.id ?? "";
+    const defaultCompanyId = companies.find((company) => !company.isArchived)?.id ?? "";
     setEditingSiteId(null);
     setSiteForm({
       ...emptySiteForm,
@@ -298,7 +313,7 @@ export default function ScopesPage() {
   };
 
   const openNewFacilityModal = () => {
-    const defaultCompanyId = visibleCompanies.find((company) => !company.isArchived)?.id ?? "";
+    const defaultCompanyId = companies.find((company) => !company.isArchived)?.id ?? "";
     const defaultSiteId =
       sites.find((site) => site.companyId === defaultCompanyId && !site.isArchived)?.id ?? "";
 
@@ -423,6 +438,21 @@ export default function ScopesPage() {
     }
 
     setArchiveTarget(null);
+  };
+
+  const handleRestoreCompany = (id: string) => {
+    restoreCompany(id);
+    setActiveScope({ level: "company", id });
+  };
+
+  const handleRestoreSite = (id: string) => {
+    restoreSite(id);
+    setActiveScope({ level: "site", id });
+  };
+
+  const handleRestoreFacility = (id: string) => {
+    restoreFacility(id);
+    setActiveScope({ level: "facility", id });
   };
 
   const handleSaveCompany = () => {
@@ -565,12 +595,18 @@ export default function ScopesPage() {
                         >
                           <EditIcon />
                         </IconButton>
-                        <IconButton
-                          ariaLabel={t("common.archive")}
-                          onClick={() => askArchiveCompany(company.id)}
-                        >
-                          <ArchiveIcon />
-                        </IconButton>
+                        {company.isArchived ? (
+                          <Button size="sm" variant="ghost" onClick={() => handleRestoreCompany(company.id)}>
+                            {t("common.restore")}
+                          </Button>
+                        ) : (
+                          <IconButton
+                            ariaLabel={t("common.archive")}
+                            onClick={() => askArchiveCompany(company.id)}
+                          >
+                            <ArchiveIcon />
+                          </IconButton>
+                        )}
                       </div>
                     </div>
 
@@ -601,12 +637,18 @@ export default function ScopesPage() {
                                 >
                                   <EditIcon />
                                 </IconButton>
-                                <IconButton
-                                  ariaLabel={t("common.archive")}
-                                  onClick={() => askArchiveSite(site.id)}
-                                >
-                                  <ArchiveIcon />
-                                </IconButton>
+                                {site.isArchived ? (
+                                  <Button size="sm" variant="ghost" onClick={() => handleRestoreSite(site.id)}>
+                                    {t("common.restore")}
+                                  </Button>
+                                ) : (
+                                  <IconButton
+                                    ariaLabel={t("common.archive")}
+                                    onClick={() => askArchiveSite(site.id)}
+                                  >
+                                    <ArchiveIcon />
+                                  </IconButton>
+                                )}
                               </div>
                             </div>
                             <div className="scopeTreeFacilities">
@@ -638,12 +680,18 @@ export default function ScopesPage() {
                                     >
                                       <EditIcon />
                                     </IconButton>
-                                    <IconButton
-                                      ariaLabel={t("common.archive")}
-                                      onClick={() => askArchiveFacility(facility.id)}
-                                    >
-                                      <ArchiveIcon />
-                                    </IconButton>
+                                    {facility.isArchived ? (
+                                      <Button size="sm" variant="ghost" onClick={() => handleRestoreFacility(facility.id)}>
+                                        {t("common.restore")}
+                                      </Button>
+                                    ) : (
+                                      <IconButton
+                                        ariaLabel={t("common.archive")}
+                                        onClick={() => askArchiveFacility(facility.id)}
+                                      >
+                                        <ArchiveIcon />
+                                      </IconButton>
+                                    )}
                                   </div>
                                 </div>
                               ))}
@@ -765,6 +813,9 @@ export default function ScopesPage() {
                 setSiteForm((prev) => ({ ...prev, companyId: event.target.value }))
               }
             />
+            {!siteForm.companyId ? (
+              <span className="validationText">{t("scopes.validation.companyRequired")}</span>
+            ) : null}
           </div>
           <div className="formField">
             <span className="fieldLabel">{t("scopes.form.siteName")}</span>
@@ -818,6 +869,9 @@ export default function ScopesPage() {
                 setFacilityForm((prev) => ({ ...prev, companyId: event.target.value, siteId: "" }))
               }
             />
+            {!facilityForm.companyId ? (
+              <span className="validationText">{t("scopes.validation.companyRequired")}</span>
+            ) : null}
           </div>
           <div className="formField">
             <span className="fieldLabel">{t("scopes.form.site")}</span>
@@ -828,6 +882,9 @@ export default function ScopesPage() {
                 setFacilityForm((prev) => ({ ...prev, siteId: event.target.value }))
               }
             />
+            {!facilityForm.siteId ? (
+              <span className="validationText">{t("scopes.validation.siteRequired")}</span>
+            ) : null}
           </div>
           <div className="formField">
             <span className="fieldLabel">{t("scopes.form.facilityName")}</span>

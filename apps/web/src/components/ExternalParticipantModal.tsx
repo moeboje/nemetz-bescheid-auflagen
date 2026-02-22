@@ -16,7 +16,7 @@ type ExternalParticipantModalProps = {
   open: boolean;
   onClose: () => void;
   participant?: ExternalParticipant;
-  onSave: (input: Omit<ExternalParticipant, "id">) => void;
+  onSave: (input: Omit<ExternalParticipant, "id" | "createdAt" | "updatedAt">) => void;
 };
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

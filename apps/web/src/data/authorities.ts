@@ -3,6 +3,8 @@ export type Authority = {
   name: string;
   shortName?: string;
   isArchived: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type AuthorityContact = {
@@ -13,20 +15,36 @@ export type AuthorityContact = {
   phone?: string;
   roleTitle?: string;
   isArchived: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 };
+
+const seedTimestamp = "2026-02-01T09:00:00.000Z";
 
 export const authorities: Authority[] = [
   {
     id: "auth-001",
-    name: "Landesregierung Steiermark",
-    shortName: "LR-STMK",
-    isArchived: false
+    name: "Bezirkshauptmannschaft",
+    shortName: "BH",
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
   },
   {
     id: "auth-002",
-    name: "Bezirkshauptmannschaft Linz-Land",
-    shortName: "BHL-LZ",
-    isArchived: false
+    name: "Magistrat",
+    shortName: "MAG",
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
+  },
+  {
+    id: "auth-003",
+    name: "Landesregierung (Umwelt)",
+    shortName: "LRU",
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
   }
 ];
 
@@ -34,37 +52,46 @@ export const contacts: AuthorityContact[] = [
   {
     id: "contact-001",
     authorityId: "auth-001",
-    name: "Anna Berger",
-    email: "anna.berger@stmk.gv.at",
-    phone: "+43 316 123456",
+    name: "Sachbearbeitung Umwelt 1",
     roleTitle: "Sachbearbeitung Umwelt",
-    isArchived: false
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
   },
   {
     id: "contact-002",
     authorityId: "auth-001",
-    name: "Martin Hofer",
-    email: "martin.hofer@stmk.gv.at",
-    phone: "+43 316 123789",
-    roleTitle: "Teamleitung Anlagen",
-    isArchived: false
+    name: "Sachbearbeitung Umwelt 2",
+    roleTitle: "Team Anlagen",
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
   },
   {
     id: "contact-003",
     authorityId: "auth-002",
-    name: "Lena Winter",
-    email: "lena.winter@ooe.gv.at",
-    phone: "+43 732 778899",
+    name: "Sachbearbeitung Verwaltung 1",
     roleTitle: "Sachbearbeitung Abfall",
-    isArchived: false
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
   },
   {
     id: "contact-004",
     authorityId: "auth-002",
-    name: "Peter Lang",
-    email: "peter.lang@ooe.gv.at",
-    phone: "+43 732 445566",
-    roleTitle: "Leitung Umweltverfahren",
-    isArchived: false
+    name: "Sachbearbeitung Verwaltung 2",
+    roleTitle: "Team Umweltverfahren",
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
+  },
+  {
+    id: "contact-005",
+    authorityId: "auth-003",
+    name: "Sachbearbeitung Umwelt 3",
+    roleTitle: "Koordination Bewilligungen",
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
   }
 ];

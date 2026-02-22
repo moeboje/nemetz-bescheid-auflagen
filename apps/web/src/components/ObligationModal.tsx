@@ -111,7 +111,7 @@ export default function ObligationModal({
       emailReminderEnabled: form.emailReminderEnabled,
       emailReminderDaysBefore:
         form.emailReminderEnabled && Number.isFinite(reminderDays) ? reminderDays : undefined
-    } as Omit<Obligation, "id">;
+    };
 
     if (obligation) {
       updateObligation(obligation.id, payload);

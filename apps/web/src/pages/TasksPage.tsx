@@ -16,6 +16,7 @@ import { EyeIcon } from "../components/Icons";
 import { useTasks } from "../state/TasksStore";
 import { useProjects } from "../state/ProjectsStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
+import { useScopes } from "../state/ScopesStore";
 import { useUsers } from "../state/UsersStore";
 
 const statusVariant = {
@@ -32,9 +33,10 @@ const levelVariant = {
 
 export default function TasksPage() {
   const navigate = useNavigate();
-  const { tasks, setTaskStatus } = useTasks();
+  const { tasks, markTaskDone, reopenTask } = useTasks();
   const { projects } = useProjects();
-  const { legalDocs, getEffectiveScopeLabel } = useLegalDocs();
+  const { legalDocs } = useLegalDocs();
+  const { companies, sites, facilities, getScopeLabel } = useScopes();
   const { users } = useUsers();
 
   const [filters, setFilters] = useState({
@@ -64,9 +66,28 @@ export default function TasksPage() {
   );
 
   const scopeOptions = useMemo(() => {
-    const labels = legalDocs.map((doc) => getEffectiveScopeLabel(doc)).filter(Boolean);
+    const activeCompanies = companies.filter((company) => !company.isArchived);
+    const activeSites = sites.filter(
+      (site) =>
+        !site.isArchived && activeCompanies.some((company) => company.id === site.companyId)
+    );
+    const activeFacilities = facilities.filter(
+      (facility) =>
+        !facility.isArchived &&
+        activeCompanies.some((company) => company.id === facility.companyId) &&
+        activeSites.some((site) => site.id === facility.siteId)
+    );
+
+    const labels = [
+      ...activeCompanies.map((company) => getScopeLabel(company.id)),
+      ...activeSites.map((site) => getScopeLabel(site.companyId, site.id)),
+      ...activeFacilities.map((facility) =>
+        getScopeLabel(facility.companyId, facility.siteId, facility.id)
+      )
+    ].filter(Boolean);
+
     return Array.from(new Set(labels)).map((label) => ({ value: label, label }));
-  }, [getEffectiveScopeLabel, legalDocs]);
+  }, [companies, facilities, getScopeLabel, sites]);
 
   const filteredTasks = useMemo(() => {
     return tasks.filter((task) => {
@@ -265,14 +286,14 @@ export default function TasksPage() {
               <EyeIcon />
             </IconButton>
             {task.status !== "DONE" ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => setTaskStatus(task.id, "DONE")}
-              >
+              <Button size="sm" variant="secondary" onClick={() => markTaskDone(task.id)}>
                 {t("tasks.action.done")}
               </Button>
-            ) : null}
+            ) : (
+              <Button size="sm" variant="ghost" onClick={() => reopenTask(task.id)}>
+                {t("tasks.action.reopen")}
+              </Button>
+            )}
           </div>
         )}
       />

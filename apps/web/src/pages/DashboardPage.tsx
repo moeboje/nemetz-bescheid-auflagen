@@ -18,16 +18,42 @@ export default function DashboardPage() {
   );
 
   const stats = useMemo(() => {
+    const today = new Date();
+    const todayStamp = today.toISOString().slice(0, 10);
+    const twelveMonthsAgo = new Date(today);
+    twelveMonthsAgo.setDate(twelveMonthsAgo.getDate() - 365);
+    const twelveMonthsAgoStamp = twelveMonthsAgo.toISOString().slice(0, 10);
+    const inThirtyDays = new Date(today);
+    inThirtyDays.setDate(inThirtyDays.getDate() + 30);
+    const inThirtyDaysStamp = inThirtyDays.toISOString().slice(0, 10);
     const openTasks = tasks.filter((task) => task.status === "OPEN" || task.status === "IN_PROGRESS")
       .length;
     const overdue = tasks.filter((task) => task.status === "OVERDUE").length;
-    const dueSoon = tasks.filter((task) => task.status !== "DONE").slice(0, 30).length;
+    const dueSoon = tasks.filter(
+      (task) =>
+        task.status !== "DONE" &&
+        task.dueDate >= todayStamp &&
+        task.dueDate <= inThirtyDaysStamp
+    ).length;
     const deadlinesOpen = deadlines.filter((deadline) => getDeadlineStatus(deadline) !== "DONE").length;
+    const tasksInPastYear = tasks.filter(
+      (task) => task.dueDate >= twelveMonthsAgoStamp && task.dueDate <= todayStamp
+    );
+    const doneInPastYear = tasksInPastYear.filter((task) => task.status === "DONE").length;
+    const completionRate =
+      tasksInPastYear.length > 0
+        ? `${Math.round((doneInPastYear / tasksInPastYear.length) * 100)}%`
+        : "0%";
     return [
       { key: "openTasks", label: t("dashboard.stats.openTasks"), value: String(openTasks) },
       { key: "overdue", label: t("dashboard.stats.overdue"), value: String(overdue) },
       { key: "dueSoon", label: t("dashboard.stats.dueSoon"), value: String(dueSoon) },
-      { key: "deadlines", label: t("dashboard.stats.deadlines"), value: String(deadlinesOpen) }
+      { key: "deadlines", label: t("dashboard.stats.deadlines"), value: String(deadlinesOpen) },
+      {
+        key: "completionRate",
+        label: t("dashboard.stats.completionRate"),
+        value: completionRate
+      }
     ];
   }, [deadlines, getDeadlineStatus, tasks]);
 

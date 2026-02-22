@@ -29,7 +29,8 @@ export default function LegalDocsPage() {
     search: "",
     type: "",
     projectId: "",
-    scopeLabel: ""
+    scopeLabel: "",
+    showArchived: false
   });
 
   const projectOptions = useMemo(
@@ -64,6 +65,9 @@ export default function LegalDocsPage() {
 
   const filteredDocs = useMemo(() => {
     return legalDocs.filter((doc) => {
+      if ((doc.isArchived || doc.archivedAt) && !filters.showArchived) {
+        return false;
+      }
       const project = projects.find((item) => item.id === doc.projectId);
       const matchesSearch = filters.search
         ? doc.title.toLowerCase().includes(filters.search.toLowerCase())
@@ -90,6 +94,8 @@ export default function LegalDocsPage() {
           ? t("legalDocs.types.permit")
           : doc.type === "DIRECTIVE"
           ? t("legalDocs.types.directive")
+          : doc.type === "OTHER"
+          ? t("legalDocs.types.other")
           : t("legalDocs.types.decision")
     },
     {
@@ -153,6 +159,7 @@ export default function LegalDocsPage() {
               { value: "", label: t("legalDocs.filters.type") },
               { value: "PERMIT", label: t("legalDocs.types.permit") },
               { value: "DIRECTIVE", label: t("legalDocs.types.directive") },
+              { value: "OTHER", label: t("legalDocs.types.other") },
               { value: "DECISION", label: t("legalDocs.types.decision") }
             ]}
             value={filters.type}
@@ -175,6 +182,17 @@ export default function LegalDocsPage() {
             }
           />
         </div>
+        <div className="sectionSpacer" />
+        <label className="checkboxRow">
+          <input
+            type="checkbox"
+            checked={filters.showArchived}
+            onChange={(event) =>
+              setFilters((prev) => ({ ...prev, showArchived: event.target.checked }))
+            }
+          />
+          <span>{t("common.showArchived")}</span>
+        </label>
       </Card>
 
       <DataTable

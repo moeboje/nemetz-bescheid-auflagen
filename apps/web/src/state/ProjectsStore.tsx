@@ -8,10 +8,20 @@ import {
 } from "../data/projects";
 import { ProjectPolicy } from "../policies/ProjectPolicy";
 import { useAuthorization } from "./AuthorizationStore";
+import { useAuditLog } from "./AuditLogStore";
+import { loadJSON, saveJSON, STORAGE_KEYS } from "./persistence";
 
 type ProjectCreateInput = Omit<
   Project,
-  "id" | "updatedAt" | "attachments" | "externalParticipants" | "internalParticipants"
+  | "id"
+  | "createdAt"
+  | "updatedAt"
+  | "attachments"
+  | "externalParticipants"
+  | "participantUserIds"
+  | "internalParticipants"
+  | "isArchived"
+  | "archivedAt"
 > & {
   attachments?: ProjectAttachment[];
   externalParticipants?: ExternalParticipant[];
@@ -24,11 +34,15 @@ export type ProjectsContextValue = {
   addProject: (input: ProjectCreateInput) => boolean;
   updateProject: (id: string, input: Partial<Project>) => boolean;
   archiveProject: (id: string) => boolean;
+  restoreProject: (id: string) => boolean;
+  setOwner: (projectId: string, ownerUserId?: string) => boolean;
+  setDeputy: (projectId: string, deputyUserId?: string) => boolean;
+  setParticipants: (projectId: string, participantUserIds: string[]) => boolean;
   addProjectAttachment: (projectId: string, attachment: ProjectAttachment) => boolean;
   removeProjectAttachment: (projectId: string, attachmentId: string) => boolean;
   addExternalParticipant: (
     projectId: string,
-    participant: Omit<ExternalParticipant, "id">
+    participant: Omit<ExternalParticipant, "id" | "createdAt" | "updatedAt">
   ) => boolean;
   updateExternalParticipant: (
     projectId: string,
@@ -36,61 +50,237 @@ export type ProjectsContextValue = {
     input: Partial<ExternalParticipant>
   ) => boolean;
   archiveExternalParticipant: (projectId: string, participantId: string) => boolean;
+  restoreExternalParticipant: (projectId: string, participantId: string) => boolean;
+  replaceProjects: (projects: Project[]) => void;
+  resetProjects: () => void;
 };
 
 const ProjectsContext = createContext<ProjectsContextValue | undefined>(undefined);
 
-function createId(prefix: "p" | "pa") {
+function createId(prefix: "p" | "pa" | "ep") {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-function createExternalParticipantId() {
-  return `ep-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+function nowStamp() {
+  return new Date().toISOString();
 }
 
-function todayStamp() {
-  return new Date().toISOString().slice(0, 10);
+function toBoolean(value: unknown) {
+  return Boolean(value);
+}
+
+function normalizeAttachment(
+  attachment: Partial<ProjectAttachment>,
+  fallbackId: string
+): ProjectAttachment {
+  return {
+    id: typeof attachment.id === "string" && attachment.id.trim() ? attachment.id : fallbackId,
+    filename: attachment.filename ?? "",
+    sizeKb: Number.isFinite(attachment.sizeKb) ? Number(attachment.sizeKb) : 0,
+    mime: attachment.mime ?? undefined,
+    addedAt: attachment.addedAt ?? nowStamp().slice(0, 10),
+    addedByLabel: attachment.addedByLabel ?? undefined
+  };
+}
+
+function normalizeExternalParticipant(
+  participant: Partial<ExternalParticipant>,
+  fallbackId: string
+): ExternalParticipant | null {
+  if (typeof participant.name !== "string" || !participant.name.trim()) {
+    return null;
+  }
+
+  const createdAt =
+    typeof participant.createdAt === "string" && participant.createdAt.trim()
+      ? participant.createdAt
+      : nowStamp();
+  const updatedAt =
+    typeof participant.updatedAt === "string" && participant.updatedAt.trim()
+      ? participant.updatedAt
+      : createdAt;
+
+  return {
+    id: typeof participant.id === "string" && participant.id.trim() ? participant.id : fallbackId,
+    type: participant.type ?? "OTHER",
+    organization: participant.organization ?? "",
+    name: participant.name,
+    email: participant.email ?? "",
+    phone: participant.phone ?? "",
+    notes: participant.notes ?? "",
+    archivedAt: participant.archivedAt ?? undefined,
+    isArchived: toBoolean(participant.isArchived || participant.archivedAt),
+    createdAt,
+    updatedAt
+  };
+}
+
+function normalizeParticipantUserIds(input: {
+  internalParticipants?: ProjectInternalParticipant[];
+  participantUserIds?: string[];
+}) {
+  if (input.internalParticipants?.length) {
+    return input.internalParticipants
+      .map((participant) => participant.userId)
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  }
+
+  return (input.participantUserIds ?? []).filter(
+    (value): value is string => typeof value === "string" && value.trim().length > 0
+  );
+}
+
+function normalizeProject(value: Partial<Project>, index: number): Project | null {
+  if (
+    typeof value.id !== "string" ||
+    !value.id.trim() ||
+    typeof value.title !== "string" ||
+    !value.title.trim() ||
+    typeof value.companyId !== "string" ||
+    !value.companyId.trim()
+  ) {
+    return null;
+  }
+
+  const createdAt =
+    typeof value.createdAt === "string" && value.createdAt.trim() ? value.createdAt : nowStamp();
+  const updatedAt =
+    typeof value.updatedAt === "string" && value.updatedAt.trim()
+      ? value.updatedAt
+      : createdAt;
+
+  const participantUserIds = normalizeParticipantUserIds(value);
+  const internalParticipants =
+    value.internalParticipants && value.internalParticipants.length
+      ? value.internalParticipants
+          .filter(
+            (participant): participant is ProjectInternalParticipant =>
+              Boolean(participant?.userId)
+          )
+          .map((participant) => ({
+            userId: participant.userId,
+            role: participant.role ?? ""
+          }))
+      : participantUserIds.map((userId) => ({ userId }));
+
+  const attachments = Array.isArray(value.attachments)
+    ? value.attachments.map((attachment, attachmentIndex) =>
+        normalizeAttachment(
+          attachment,
+          `pa-seed-${value.id}-${index}-${attachmentIndex}`
+        )
+      )
+    : [];
+
+  const externalParticipants = Array.isArray(value.externalParticipants)
+    ? value.externalParticipants
+        .map((participant, participantIndex) =>
+          normalizeExternalParticipant(
+            participant,
+            `ep-seed-${value.id}-${index}-${participantIndex}`
+          )
+        )
+        .filter((participant): participant is ExternalParticipant => Boolean(participant))
+    : [];
+
+  return {
+    id: value.id,
+    title: value.title,
+    shortDescription: value.shortDescription ?? "",
+    authorityRef: value.authorityRef ?? "",
+    companyId: value.companyId,
+    siteId: value.siteId ?? undefined,
+    facilityId: value.facilityId ?? undefined,
+    authorityId: value.authorityId ?? undefined,
+    authorityContactId: value.authorityContactId ?? undefined,
+    ownerUserId: value.ownerUserId ?? undefined,
+    deputyUserId: value.deputyUserId ?? undefined,
+    internalParticipants,
+    participantUserIds,
+    externalParticipants,
+    attachments,
+    archivedAt: value.archivedAt ?? undefined,
+    isArchived: toBoolean(value.isArchived || value.archivedAt),
+    createdAt,
+    updatedAt
+  };
+}
+
+function normalizeProjects(value: unknown): Project[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((project, index) => normalizeProject(project as Partial<Project>, index))
+    .filter((project): project is Project => Boolean(project));
 }
 
 function isProjectArchived(project: Project) {
   return Boolean(project.archivedAt || project.isArchived);
 }
 
-function normalizeInternalParticipants(
-  input: Pick<Project, "internalParticipants" | "participantUserIds"> | ProjectCreateInput
-) {
-  const explicitParticipants = input.internalParticipants ?? [];
-  if (explicitParticipants.length) {
-    return explicitParticipants;
-  }
-  return (input.participantUserIds ?? []).map((userId) => ({ userId }));
-}
-
 export function ProjectsProvider({ children }: { children: React.ReactNode }) {
   const { actor } = useAuthorization();
-  const [projects, setProjects] = useState<Project[]>(initialProjects);
+  const { logEvent } = useAuditLog();
+  const [projects, setProjects] = useState<Project[]>(() =>
+    loadJSON<Project[]>(STORAGE_KEYS.projects, {
+      fallback: initialProjects,
+      migrate: (value) => {
+        const normalized = normalizeProjects(value);
+        return normalized.length ? normalized : initialProjects;
+      }
+    }) ?? initialProjects
+  );
+
+  React.useEffect(() => {
+    saveJSON(STORAGE_KEYS.projects, projects);
+  }, [projects]);
 
   const addProject = useCallback(
     (input: ProjectCreateInput) => {
       if (!ProjectPolicy.create(actor)) {
         return false;
       }
-      const internalParticipants = normalizeInternalParticipants(input);
+      const timestamp = nowStamp();
+      const participantUserIds = normalizeParticipantUserIds(input);
+      const internalParticipants =
+        input.internalParticipants && input.internalParticipants.length
+          ? input.internalParticipants
+          : participantUserIds.map((userId) => ({ userId }));
+
       const newProject: Project = {
         ...input,
         id: createId("p"),
-        attachments: input.attachments ?? [],
-        externalParticipants: input.externalParticipants ?? [],
+        attachments: (input.attachments ?? []).map((attachment, index) =>
+          normalizeAttachment(attachment, `pa-${timestamp}-${index}`)
+        ),
+        externalParticipants: (input.externalParticipants ?? [])
+          .map((participant, index) =>
+            normalizeExternalParticipant(participant, `ep-${timestamp}-${index}`)
+          )
+          .filter((participant): participant is ExternalParticipant => Boolean(participant)),
         internalParticipants,
-        participantUserIds: internalParticipants.map((participant) => participant.userId),
-        updatedAt: todayStamp(),
+        participantUserIds:
+          participantUserIds.length > 0
+            ? participantUserIds
+            : internalParticipants.map((participant) => participant.userId),
         archivedAt: undefined,
-        isArchived: false
+        isArchived: false,
+        createdAt: timestamp,
+        updatedAt: timestamp
       };
+
       setProjects((prev) => [newProject, ...prev]);
+      logEvent({
+        actorLabel: "Demo User",
+        entityType: "PROJECT",
+        entityId: newProject.id,
+        action: "CREATED",
+        summary: newProject.title
+      });
       return true;
     },
-    [actor]
+    [actor, logEvent]
   );
 
   const updateProject = useCallback(
@@ -103,12 +293,11 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
 
-      const internalParticipants = input.internalParticipants
-        ? normalizeInternalParticipants({
-            internalParticipants: input.internalParticipants,
-            participantUserIds: input.participantUserIds
-          })
-        : undefined;
+      const timestamp = nowStamp();
+      const participantUserIds = normalizeParticipantUserIds({
+        internalParticipants: input.internalParticipants,
+        participantUserIds: input.participantUserIds
+      });
 
       setProjects((prev) =>
         prev.map((project) =>
@@ -116,18 +305,45 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
             ? {
                 ...project,
                 ...input,
-                internalParticipants: internalParticipants ?? project.internalParticipants,
-                participantUserIds: (
-                  internalParticipants ?? project.internalParticipants
-                ).map((participant) => participant.userId),
-                updatedAt: todayStamp()
+                internalParticipants:
+                  input.internalParticipants && input.internalParticipants.length
+                    ? input.internalParticipants
+                    : project.internalParticipants,
+                participantUserIds:
+                  participantUserIds.length > 0 ? participantUserIds : project.participantUserIds,
+                attachments: Array.isArray(input.attachments)
+                  ? input.attachments.map((attachment, index) =>
+                      normalizeAttachment(attachment, `pa-${id}-${index}`)
+                    )
+                  : project.attachments,
+                externalParticipants: Array.isArray(input.externalParticipants)
+                  ? input.externalParticipants
+                      .map((participant, index) =>
+                        normalizeExternalParticipant(
+                          participant,
+                          `ep-${id}-${index}`
+                        )
+                      )
+                      .filter(
+                        (participant): participant is ExternalParticipant => Boolean(participant)
+                      )
+                  : project.externalParticipants,
+                updatedAt: timestamp
               }
             : project
         )
       );
+
+      logEvent({
+        actorLabel: "Demo User",
+        entityType: "PROJECT",
+        entityId: id,
+        action: "UPDATED",
+        summary: currentProject.title
+      });
       return true;
     },
-    [actor, projects]
+    [actor, logEvent, projects]
   );
 
   const archiveProject = useCallback(
@@ -139,22 +355,84 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       if (!ProjectPolicy.archive(actor, currentProject)) {
         return false;
       }
-
+      const timestamp = nowStamp();
       setProjects((prev) =>
         prev.map((project) =>
           project.id === id
             ? {
                 ...project,
-                archivedAt: todayStamp(),
+                archivedAt: timestamp,
                 isArchived: true,
-                updatedAt: todayStamp()
+                updatedAt: timestamp
               }
             : project
         )
       );
+      logEvent({
+        actorLabel: "Demo User",
+        entityType: "PROJECT",
+        entityId: id,
+        action: "ARCHIVED",
+        summary: currentProject.title
+      });
       return true;
     },
-    [actor, projects]
+    [actor, logEvent, projects]
+  );
+
+  const restoreProject = useCallback(
+    (id: string) => {
+      const currentProject = projects.find((project) => project.id === id);
+      if (!currentProject) {
+        return false;
+      }
+      if (!ProjectPolicy.archive(actor, currentProject)) {
+        return false;
+      }
+      const timestamp = nowStamp();
+      setProjects((prev) =>
+        prev.map((project) =>
+          project.id === id
+            ? {
+                ...project,
+                archivedAt: undefined,
+                isArchived: false,
+                updatedAt: timestamp
+              }
+            : project
+        )
+      );
+      logEvent({
+        actorLabel: "Demo User",
+        entityType: "PROJECT",
+        entityId: id,
+        action: "RESTORED",
+        summary: currentProject.title
+      });
+      return true;
+    },
+    [actor, logEvent, projects]
+  );
+
+  const setOwner = useCallback(
+    (projectId: string, ownerUserId?: string) =>
+      updateProject(projectId, { ownerUserId }),
+    [updateProject]
+  );
+
+  const setDeputy = useCallback(
+    (projectId: string, deputyUserId?: string) =>
+      updateProject(projectId, { deputyUserId }),
+    [updateProject]
+  );
+
+  const setParticipants = useCallback(
+    (projectId: string, participantUserIds: string[]) =>
+      updateProject(projectId, {
+        participantUserIds,
+        internalParticipants: participantUserIds.map((userId) => ({ userId }))
+      }),
+    [updateProject]
   );
 
   const addProjectAttachment = useCallback(
@@ -167,6 +445,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
 
+      const timestamp = nowStamp();
       setProjects((prev) =>
         prev.map((project) =>
           project.id === projectId
@@ -174,19 +453,23 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
                 ...project,
                 attachments: [
                   ...project.attachments,
-                  {
-                    ...attachment,
-                    id: attachment.id || createId("pa")
-                  }
+                  normalizeAttachment(attachment, createId("pa"))
                 ],
-                updatedAt: todayStamp()
+                updatedAt: timestamp
               }
             : project
         )
       );
+      logEvent({
+        actorLabel: "Demo User",
+        entityType: "PROJECT",
+        entityId: projectId,
+        action: "UPDATED",
+        summary: currentProject.title
+      });
       return true;
     },
-    [actor, projects]
+    [actor, logEvent, projects]
   );
 
   const removeProjectAttachment = useCallback(
@@ -198,25 +481,35 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       if (!ProjectPolicy.removeAttachment(actor, currentProject)) {
         return false;
       }
-
+      const timestamp = nowStamp();
       setProjects((prev) =>
         prev.map((project) =>
           project.id === projectId
             ? {
                 ...project,
                 attachments: project.attachments.filter((item) => item.id !== attachmentId),
-                updatedAt: todayStamp()
+                updatedAt: timestamp
               }
             : project
         )
       );
+      logEvent({
+        actorLabel: "Demo User",
+        entityType: "PROJECT",
+        entityId: projectId,
+        action: "UPDATED",
+        summary: currentProject.title
+      });
       return true;
     },
-    [actor, projects]
+    [actor, logEvent, projects]
   );
 
   const addExternalParticipant = useCallback(
-    (projectId: string, participant: Omit<ExternalParticipant, "id">) => {
+    (
+      projectId: string,
+      participant: Omit<ExternalParticipant, "id" | "createdAt" | "updatedAt">
+    ) => {
       const currentProject = projects.find((project) => project.id === projectId);
       if (!currentProject || isProjectArchived(currentProject)) {
         return false;
@@ -224,27 +517,43 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       if (!ProjectPolicy.update(actor, currentProject)) {
         return false;
       }
-
+      const timestamp = nowStamp();
       setProjects((prev) =>
         prev.map((project) =>
           project.id === projectId
             ? {
                 ...project,
                 externalParticipants: [
-                  ...(project.externalParticipants ?? []),
+                  ...project.externalParticipants,
                   {
-                    ...participant,
-                    id: createExternalParticipantId()
+                    id: createId("ep"),
+                    type: participant.type,
+                    organization: participant.organization ?? "",
+                    name: participant.name,
+                    email: participant.email ?? "",
+                    phone: participant.phone ?? "",
+                    notes: participant.notes ?? "",
+                    archivedAt: participant.archivedAt,
+                    isArchived: Boolean(participant.isArchived),
+                    createdAt: timestamp,
+                    updatedAt: timestamp
                   }
                 ],
-                updatedAt: todayStamp()
+                updatedAt: timestamp
               }
             : project
         )
       );
+      logEvent({
+        actorLabel: "Demo User",
+        entityType: "PROJECT",
+        entityId: projectId,
+        action: "UPDATED",
+        summary: currentProject.title
+      });
       return true;
     },
-    [actor, projects]
+    [actor, logEvent, projects]
   );
 
   const updateExternalParticipant = useCallback(
@@ -256,23 +565,36 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       if (!ProjectPolicy.update(actor, currentProject)) {
         return false;
       }
-
+      const timestamp = nowStamp();
       setProjects((prev) =>
         prev.map((project) =>
           project.id === projectId
             ? {
                 ...project,
-                externalParticipants: (project.externalParticipants ?? []).map((participant) =>
-                  participant.id === participantId ? { ...participant, ...input } : participant
+                externalParticipants: project.externalParticipants.map((participant) =>
+                  participant.id === participantId
+                    ? {
+                        ...participant,
+                        ...input,
+                        updatedAt: timestamp
+                      }
+                    : participant
                 ),
-                updatedAt: todayStamp()
+                updatedAt: timestamp
               }
             : project
         )
       );
+      logEvent({
+        actorLabel: "Demo User",
+        entityType: "PROJECT",
+        entityId: projectId,
+        action: "UPDATED",
+        summary: currentProject.title
+      });
       return true;
     },
-    [actor, projects]
+    [actor, logEvent, projects]
   );
 
   const archiveExternalParticipant = useCallback(
@@ -284,26 +606,89 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       if (!ProjectPolicy.update(actor, currentProject)) {
         return false;
       }
-
+      const timestamp = nowStamp();
       setProjects((prev) =>
         prev.map((project) =>
           project.id === projectId
             ? {
                 ...project,
-                externalParticipants: (project.externalParticipants ?? []).map((participant) =>
+                externalParticipants: project.externalParticipants.map((participant) =>
                   participant.id === participantId
-                    ? { ...participant, archivedAt: todayStamp(), isArchived: true }
+                    ? {
+                        ...participant,
+                        archivedAt: timestamp,
+                        isArchived: true,
+                        updatedAt: timestamp
+                      }
                     : participant
                 ),
-                updatedAt: todayStamp()
+                updatedAt: timestamp
               }
             : project
         )
       );
+      logEvent({
+        actorLabel: "Demo User",
+        entityType: "PROJECT",
+        entityId: projectId,
+        action: "UPDATED",
+        summary: currentProject.title
+      });
       return true;
     },
-    [actor, projects]
+    [actor, logEvent, projects]
   );
+
+  const restoreExternalParticipant = useCallback(
+    (projectId: string, participantId: string) => {
+      const currentProject = projects.find((project) => project.id === projectId);
+      if (!currentProject || isProjectArchived(currentProject)) {
+        return false;
+      }
+      if (!ProjectPolicy.update(actor, currentProject)) {
+        return false;
+      }
+      const timestamp = nowStamp();
+      setProjects((prev) =>
+        prev.map((project) =>
+          project.id === projectId
+            ? {
+                ...project,
+                externalParticipants: project.externalParticipants.map((participant) =>
+                  participant.id === participantId
+                    ? {
+                        ...participant,
+                        archivedAt: undefined,
+                        isArchived: false,
+                        updatedAt: timestamp
+                      }
+                    : participant
+                ),
+                updatedAt: timestamp
+              }
+            : project
+        )
+      );
+      logEvent({
+        actorLabel: "Demo User",
+        entityType: "PROJECT",
+        entityId: projectId,
+        action: "UPDATED",
+        summary: currentProject.title
+      });
+      return true;
+    },
+    [actor, logEvent, projects]
+  );
+
+  const replaceProjects = useCallback((value: Project[]) => {
+    const normalized = normalizeProjects(value);
+    setProjects(normalized.length ? normalized : initialProjects);
+  }, []);
+
+  const resetProjects = useCallback(() => {
+    setProjects(initialProjects);
+  }, []);
 
   const value = useMemo(
     () => ({
@@ -311,11 +696,18 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       addProject,
       updateProject,
       archiveProject,
+      restoreProject,
+      setOwner,
+      setDeputy,
+      setParticipants,
       addProjectAttachment,
       removeProjectAttachment,
       addExternalParticipant,
       updateExternalParticipant,
-      archiveExternalParticipant
+      archiveExternalParticipant,
+      restoreExternalParticipant,
+      replaceProjects,
+      resetProjects
     }),
     [
       addExternalParticipant,
@@ -325,6 +717,13 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       archiveProject,
       projects,
       removeProjectAttachment,
+      replaceProjects,
+      resetProjects,
+      restoreExternalParticipant,
+      restoreProject,
+      setDeputy,
+      setOwner,
+      setParticipants,
       updateExternalParticipant,
       updateProject
     ]

@@ -54,10 +54,10 @@ function getPeriodDate(period: string) {
 
 export default function DeadlinesPage() {
   const navigate = useNavigate();
-  const { deadlines, getDeadlineStatus } = useDeadlines();
+  const { deadlines, getDeadlineStatus, markDeadlineDone, reopenDeadline } = useDeadlines();
   const { projects } = useProjects();
   const { legalDocs, getEffectiveScopeForLegalDoc } = useLegalDocs();
-  const { getScopeLabel } = useScopes();
+  const { companies, sites, facilities, getScopeLabel } = useScopes();
   const { getUserLabel } = useUsers();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingDeadlineId, setEditingDeadlineId] = useState<string | null>(null);
@@ -67,7 +67,8 @@ export default function DeadlinesPage() {
     projectId: "",
     legalDocId: "",
     scopeLabel: "",
-    period: ""
+    period: "",
+    showArchived: false
   });
 
   const projectOptions = useMemo(
@@ -86,24 +87,28 @@ export default function DeadlinesPage() {
   }, [filters.projectId, legalDocs]);
 
   const scopeOptions = useMemo(() => {
-    const labels = deadlines
-      .map((deadline) => {
-        const legalDoc = legalDocs.find((doc) => doc.id === deadline.legalDocId);
-        if (legalDoc) {
-          const scope = getEffectiveScopeForLegalDoc(legalDoc);
-          if (scope) {
-            return getScopeLabel(scope.companyId, scope.siteId, scope.facilityId);
-          }
-        }
-        const project = projects.find((item) => item.id === deadline.projectId);
-        if (project) {
-          return getScopeLabel(project.companyId, project.siteId, project.facilityId);
-        }
-        return "";
-      })
-      .filter(Boolean);
+    const activeCompanies = companies.filter((company) => !company.isArchived);
+    const activeSites = sites.filter(
+      (site) =>
+        !site.isArchived && activeCompanies.some((company) => company.id === site.companyId)
+    );
+    const activeFacilities = facilities.filter(
+      (facility) =>
+        !facility.isArchived &&
+        activeCompanies.some((company) => company.id === facility.companyId) &&
+        activeSites.some((site) => site.id === facility.siteId)
+    );
+
+    const labels = [
+      ...activeCompanies.map((company) => getScopeLabel(company.id)),
+      ...activeSites.map((site) => getScopeLabel(site.companyId, site.id)),
+      ...activeFacilities.map((facility) =>
+        getScopeLabel(facility.companyId, facility.siteId, facility.id)
+      )
+    ].filter(Boolean);
+
     return Array.from(new Set(labels)).map((label) => ({ value: label, label }));
-  }, [deadlines, getEffectiveScopeForLegalDoc, getScopeLabel, legalDocs, projects]);
+  }, [companies, facilities, getScopeLabel, sites]);
 
   const rows = useMemo(() => {
     return deadlines
@@ -134,6 +139,9 @@ export default function DeadlinesPage() {
         };
       })
       .filter((row) => {
+        if ((row.isArchived || row.archivedAt) && !filters.showArchived) {
+          return false;
+        }
         const periodLimit = getPeriodDate(filters.period);
         const matchesSearch = filters.search
           ? row.title.toLowerCase().includes(filters.search.toLowerCase())
@@ -160,6 +168,7 @@ export default function DeadlinesPage() {
     filters.legalDocId,
     filters.period,
     filters.projectId,
+    filters.showArchived,
     filters.scopeLabel,
     filters.search,
     filters.status,
@@ -308,6 +317,17 @@ export default function DeadlinesPage() {
             }
           />
         </div>
+        <div className="sectionSpacer" />
+        <label className="checkboxRow">
+          <input
+            type="checkbox"
+            checked={filters.showArchived}
+            onChange={(event) =>
+              setFilters((prev) => ({ ...prev, showArchived: event.target.checked }))
+            }
+          />
+          <span>{t("common.showArchived")}</span>
+        </label>
       </Card>
 
       <DataTable
@@ -316,6 +336,15 @@ export default function DeadlinesPage() {
         getRowKey={(row) => row.id}
         rowActions={(row) => (
           <div className="tableActions">
+            {row.status === "DONE" ? (
+              <Button size="sm" variant="ghost" onClick={() => reopenDeadline(row.id)}>
+                {t("deadlines.action.reopen")}
+              </Button>
+            ) : (
+              <Button size="sm" variant="secondary" onClick={() => markDeadlineDone(row.id)}>
+                {t("deadlines.action.markDone")}
+              </Button>
+            )}
             <IconButton
               ariaLabel={t("common.view")}
               onClick={() => navigate(`/deadlines/${row.id}`)}

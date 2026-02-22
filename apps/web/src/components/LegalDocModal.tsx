@@ -144,7 +144,11 @@ export default function LegalDocModal({
     return getScopeLabel(form.scopeCompanyId, form.scopeSiteId, form.scopeFacilityId);
   }, [form.scopeCompanyId, form.scopeFacilityId, form.scopeSiteId, getScopeLabel]);
 
-  const isSaveDisabled = !form.projectId || !form.title || !form.type;
+  const scopeOverrideError =
+    form.scopeOverrideEnabled && !form.scopeCompanyId
+      ? t("legalDocs.validation.scopeCompany")
+      : "";
+  const isSaveDisabled = !form.projectId || !form.title || !form.type || Boolean(scopeOverrideError);
 
   const handleSave = () => {
     const scopeOverride = form.scopeOverrideEnabled
@@ -216,6 +220,7 @@ export default function LegalDocModal({
             options={[
               { value: "PERMIT", label: t("legalDocs.types.permit") },
               { value: "DIRECTIVE", label: t("legalDocs.types.directive") },
+              { value: "OTHER", label: t("legalDocs.types.other") },
               { value: "DECISION", label: t("legalDocs.types.decision") }
             ]}
             value={form.type}
@@ -307,6 +312,9 @@ export default function LegalDocModal({
                   }))
                 }
               />
+              {scopeOverrideError ? (
+                <span className="validationText">{scopeOverrideError}</span>
+              ) : null}
             </div>
             <div className="formField">
               <span className="fieldLabel">{t("legalDocs.form.scopeSite")}</span>

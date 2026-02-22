@@ -54,7 +54,7 @@ type ProjectModalProps = {
 export default function ProjectModal({ open, onClose, project }: ProjectModalProps) {
   const { actor } = useAuthorization();
   const { companies, sites, facilities } = useScopes();
-  const { authorities, getContactsForAuthority } = useAuthorities();
+  const { authorities, contacts, getContactsForAuthority } = useAuthorities();
   const { users } = useUsers();
   const { addProject, updateProject } = useProjects();
   const [form, setForm] = useState(emptyForm);
@@ -128,18 +128,35 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
   const authorityOptions = useMemo(
     () =>
       authorities
-        .filter((authority) => !authority.isArchived)
+        .filter((authority) => !authority.isArchived || authority.id === form.authorityId)
         .map((authority) => ({ value: authority.id, label: authority.name })),
-    [authorities]
+    [authorities, form.authorityId]
   );
 
   const contactOptions = useMemo(
-    () =>
-      getContactsForAuthority(form.authorityId).map((contact) => ({
+    () => {
+      const baseContacts = getContactsForAuthority(form.authorityId);
+      const selectedArchivedContact =
+        form.authorityId && form.authorityContactId
+          ? contacts.find(
+              (contact) =>
+                contact.id === form.authorityContactId &&
+                contact.authorityId === form.authorityId
+            )
+          : undefined;
+
+      const mergedContacts =
+        selectedArchivedContact &&
+        !baseContacts.some((contact) => contact.id === selectedArchivedContact.id)
+          ? [...baseContacts, selectedArchivedContact]
+          : baseContacts;
+
+      return mergedContacts.map((contact) => ({
         value: contact.id,
         label: contact.name
-      })),
-    [form.authorityId, getContactsForAuthority]
+      }));
+    },
+    [contacts, form.authorityContactId, form.authorityId, getContactsForAuthority]
   );
 
   const userOptions = useMemo(

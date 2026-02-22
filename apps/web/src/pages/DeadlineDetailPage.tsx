@@ -2,7 +2,9 @@ import React, { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Badge, Breadcrumbs, Button, Card } from "@nemetz/ui";
 import DeadlineModal from "../components/DeadlineModal";
+import AuditTimeline from "../components/AuditTimeline";
 import { t } from "../i18n";
+import { useAuditLog } from "../state/AuditLogStore";
 import { useDeadlines } from "../state/DeadlinesStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useProjects } from "../state/ProjectsStore";
@@ -33,11 +35,12 @@ function getReminderText(daysBefore?: number) {
 
 export default function DeadlineDetailPage() {
   const { id } = useParams();
-  const { deadlines, setDeadlineStatus, getDeadlineStatus } = useDeadlines();
+  const { deadlines, markDeadlineDone, reopenDeadline, getDeadlineStatus } = useDeadlines();
   const { projects } = useProjects();
   const { legalDocs, getEffectiveScopeForLegalDoc } = useLegalDocs();
   const { getScopeLabel } = useScopes();
   const { getUserLabel } = useUsers();
+  const { getEntriesForEntity } = useAuditLog();
   const [modalOpen, setModalOpen] = useState(false);
 
   const deadline = useMemo(() => deadlines.find((item) => item.id === id), [deadlines, id]);
@@ -61,6 +64,13 @@ export default function DeadlineDetailPage() {
     }
     return "";
   }, [deadline, getEffectiveScopeForLegalDoc, getScopeLabel, legalDoc, project]);
+
+  const historyEntries = useMemo(() => {
+    if (!deadline) {
+      return [];
+    }
+    return getEntriesForEntity("DEADLINE", deadline.id);
+  }, [deadline, getEntriesForEntity]);
 
   if (!deadline) {
     return (
@@ -99,10 +109,14 @@ export default function DeadlineDetailPage() {
         </div>
         <div className="inlineMeta">
           {status !== "DONE" ? (
-            <Button variant="secondary" onClick={() => setDeadlineStatus(deadline.id, "DONE")}>
+            <Button variant="secondary" onClick={() => markDeadlineDone(deadline.id)}>
               {t("deadlines.action.markDone")}
             </Button>
-          ) : null}
+          ) : (
+            <Button variant="secondary" onClick={() => reopenDeadline(deadline.id)}>
+              {t("deadlines.action.reopen")}
+            </Button>
+          )}
           <Button onClick={() => setModalOpen(true)}>{t("common.edit")}</Button>
         </div>
       </div>
@@ -159,18 +173,7 @@ export default function DeadlineDetailPage() {
 
       <Card>
         <h2 className="sectionTitle">{t("deadlines.detail.activity")}</h2>
-        <div className="timeline">
-          {[
-            { id: "dah-1", date: "2026-02-18", text: t("deadlines.history.created") },
-            { id: "dah-2", date: "2026-02-20", text: t("deadlines.history.linked") },
-            { id: "dah-3", date: "2026-02-22", text: t("deadlines.history.reminderUpdated") }
-          ].map((entry) => (
-            <div key={entry.id} className="timelineItem">
-              <div className="metaLabel">{entry.date}</div>
-              <div className="metaValue">{entry.text}</div>
-            </div>
-          ))}
-        </div>
+        <AuditTimeline entries={historyEntries} />
       </Card>
 
       <DeadlineModal open={modalOpen} onClose={() => setModalOpen(false)} deadline={deadline} />

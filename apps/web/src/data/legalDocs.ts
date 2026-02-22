@@ -1,11 +1,8 @@
-export type LegalDocType = "PERMIT" | "DIRECTIVE" | "DECISION";
+import type { Attachment } from "../types/models";
 
-export type LegalDocAttachment = {
-  id: string;
-  filename: string;
-  sizeKb: number;
-  addedAt: string;
-};
+export type LegalDocType = "PERMIT" | "DIRECTIVE" | "DECISION" | "OTHER";
+
+export type LegalDocAttachment = Attachment;
 
 export type LegalDoc = {
   id: string;
@@ -21,51 +18,60 @@ export type LegalDoc = {
     siteId?: string;
     facilityId?: string;
   };
+  archivedAt?: string;
+  isArchived: boolean;
+  createdAt: string;
   updatedAt: string;
 };
+
+const seedTimestamp = "2026-02-01T09:00:00.000Z";
 
 export const legalDocs: LegalDoc[] = [
   {
     id: "ld-001",
     projectId: "p-001",
-    type: "PERMIT",
-    title: "Bescheid Abgasreduktion",
-    shortDescription: "Vorgaben fuer die Abluftreinigung",
-    reference: "BHZ-2026-041",
+    type: "DECISION",
+    title: "Bescheid Sortieranlage Leopoldsdorf",
+    shortDescription: "Betriebliche Auflagen fuer Anlagenbetrieb und Nachweisfuehrung.",
+    reference: "BH-2026-017",
     issuedAt: "2026-01-12",
     attachments: [
       {
         id: "lda-001",
-        filename: "Bescheid_Abgasreduktion.pdf",
+        filename: "Bescheid_Sortieranlage_Leopoldsdorf.pdf",
         sizeKb: 1240,
         addedAt: "2026-02-19"
       }
     ],
-    updatedAt: "2026-02-19"
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: "2026-02-19T08:20:00.000Z"
   },
   {
     id: "ld-002",
-    projectId: "p-002",
+    projectId: "p-004",
     type: "DIRECTIVE",
-    title: "Auflage Abfallbilanz",
-    shortDescription: "Quartalsweise Meldung der Abfallmengen",
-    reference: "BHZ-2026-033",
+    title: "Abfallsammelgenehmigung - unternehmensweit",
+    shortDescription: "Rahmenbedingungen fuer Sammlung, Dokumentation und periodische Meldungen.",
+    reference: "LRU-2026-052",
     issuedAt: "2026-01-28",
     attachments: [],
-    updatedAt: "2026-02-17"
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: "2026-02-17T09:45:00.000Z"
   },
   {
     id: "ld-003",
     projectId: "p-003",
-    type: "DECISION",
-    title: "Bescheid Gewaesserschutz",
-    shortDescription: "Anforderungen an Abscheider und Wartung",
-    reference: "BHZ-2026-017",
+    type: "PERMIT",
+    title: "Gewerbeberechtigung Tanklagerbetrieb",
+    shortDescription: "Genehmigungsrahmen fuer Wartungs- und Pruefpflichten im Tanklagerbetrieb.",
+    reference: "MAG-2026-041",
     issuedAt: "2026-01-30",
     attachments: [
       {
         id: "lda-002",
-        filename: "Bescheid_Gewaesserschutz.pdf",
+        filename: "Gewerbeberechtigung_Tanklager.pdf",
         sizeKb: 980,
         addedAt: "2026-02-14"
       }
@@ -75,6 +81,21 @@ export const legalDocs: LegalDoc[] = [
       siteId: "s-003",
       facilityId: "f-006"
     },
-    updatedAt: "2026-02-14"
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: "2026-02-14T10:10:00.000Z"
+  },
+  {
+    id: "ld-004",
+    projectId: "p-002",
+    type: "OTHER",
+    title: "Anzeige/Bestaetigung Zwischenlagerflaeche",
+    shortDescription: "Dokumentation von Anzeigeverfahren inklusive Bestaetigungsschreiben.",
+    reference: "MAG-2026-033",
+    issuedAt: "2026-02-05",
+    attachments: [],
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: "2026-02-16T07:30:00.000Z"
   }
 ];

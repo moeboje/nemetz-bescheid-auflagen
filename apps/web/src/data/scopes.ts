@@ -26,53 +26,36 @@ export type CompanyScope = {
 export const scopes: CompanyScope[] = [
   {
     id: "c-001",
-    name: "Nemetz Group",
+    name: "Nemetz AG",
     sites: [
       {
         id: "s-001",
-        name: "Graz",
+        name: "Wien 1150",
         projects: 5,
         documents: 18,
         openTasks: 6,
         overdue: 1,
-        facilities: [
-          {
-            id: "f-001",
-            name: "Linie 3",
-            projects: 2,
-            documents: 6,
-            openTasks: 3,
-            overdue: 1
-          },
-          {
-            id: "f-002",
-            name: "Logistikhof",
-            projects: 1,
-            documents: 3,
-            openTasks: 1,
-            overdue: 0
-          }
-        ]
+        facilities: []
       },
       {
         id: "s-002",
-        name: "Linz",
+        name: "Leopoldsdorf",
         projects: 3,
         documents: 11,
         openTasks: 4,
         overdue: 1,
         facilities: [
           {
-            id: "f-003",
-            name: "Recyclinghof",
+            id: "f-001",
+            name: "Sortieranlage Leopoldsdorf",
             projects: 2,
             documents: 7,
             openTasks: 2,
             overdue: 1
           },
           {
-            id: "f-004",
-            name: "Materiallager",
+            id: "f-002",
+            name: "Umladestation",
             projects: 1,
             documents: 4,
             openTasks: 2,
@@ -84,11 +67,11 @@ export const scopes: CompanyScope[] = [
   },
   {
     id: "c-002",
-    name: "Nemetz Energy",
+    name: "Nemetz Muehlendorf GmbH",
     sites: [
       {
         id: "s-003",
-        name: "Salzburg",
+        name: "Muehlendorf",
         projects: 4,
         documents: 13,
         openTasks: 5,
@@ -96,7 +79,7 @@ export const scopes: CompanyScope[] = [
         facilities: [
           {
             id: "f-005",
-            name: "Tanklager",
+            name: "Zwischenlager",
             projects: 3,
             documents: 9,
             openTasks: 4,
@@ -104,7 +87,7 @@ export const scopes: CompanyScope[] = [
           },
           {
             id: "f-006",
-            name: "Kesselhaus",
+            name: "Containerplatz",
             projects: 1,
             documents: 4,
             openTasks: 1,

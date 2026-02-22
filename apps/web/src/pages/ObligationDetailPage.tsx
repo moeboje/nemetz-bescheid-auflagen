@@ -2,6 +2,8 @@ import React, { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Badge, Breadcrumbs, Button, Card } from "@nemetz/ui";
 import { t } from "../i18n";
+import AuditTimeline from "../components/AuditTimeline";
+import { useAuditLog } from "../state/AuditLogStore";
 import { useObligations } from "../state/ObligationsStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useProjects } from "../state/ProjectsStore";
@@ -36,6 +38,7 @@ export default function ObligationDetailPage() {
   const { legalDocs, getEffectiveScopeLabel } = useLegalDocs();
   const { projects } = useProjects();
   const { getUserLabel } = useUsers();
+  const { getEntriesForEntity } = useAuditLog();
   const [modalOpen, setModalOpen] = useState(false);
 
   const obligation = useMemo(
@@ -55,6 +58,13 @@ export default function ObligationDetailPage() {
       .slice(0, 5)
       .map((task) => ({ id: task.id, dueDate: task.dueDate }));
   }, [obligation]);
+
+  const historyEntries = useMemo(() => {
+    if (!obligation) {
+      return [];
+    }
+    return getEntriesForEntity("OBLIGATION", obligation.id);
+  }, [getEntriesForEntity, obligation]);
 
   if (!obligation) {
     return (
@@ -171,6 +181,11 @@ export default function ObligationDetailPage() {
         ) : (
           <p className="placeholderText">{t("obligations.detail.noTasks")}</p>
         )}
+      </Card>
+
+      <Card>
+        <h2 className="sectionTitle">{t("obligations.detail.history")}</h2>
+        <AuditTimeline entries={historyEntries} />
       </Card>
 
       <ObligationModal
