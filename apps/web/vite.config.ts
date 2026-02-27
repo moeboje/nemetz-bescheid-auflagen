@@ -10,6 +10,10 @@ export default defineConfig({
     }
   },
   server: {
+    proxy: {
+      "/api/ai": "http://localhost:8787",
+      "/api": "http://localhost:4000"
+    },
     fs: {
       allow: [path.resolve(__dirname, "../..")]
     }

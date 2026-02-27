@@ -77,6 +77,13 @@
   align-items: center;
 }
 
+.filterRowNine {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr;
+  gap: var(--space-3);
+  align-items: center;
+}
+
 .sectionTitle {
   font-size: var(--font-size-lg);
   margin: 0 0 var(--space-3);
@@ -101,6 +108,18 @@
   justify-content: flex-end;
 }
 
+.reportsAdminCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.reportsAdminCardBody {
+  display: grid;
+  gap: var(--space-2);
+}
+
 .modalForm {
   display: grid;
   gap: var(--space-4);
@@ -111,9 +130,20 @@
   gap: var(--space-2);
 }
 
+.formFieldHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
 .fieldLabel {
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
+}
+
+.fieldActionButton {
+  white-space: nowrap;
 }
 
 .placeholderText {
@@ -128,10 +158,35 @@
   gap: var(--space-2);
 }
 
+.modalFooterHint {
+  margin-right: auto;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.inlineCreateRestoreActions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .uploadRow {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+}
+
+.uploadRowWrap {
+  flex-wrap: wrap;
+}
+
+.evidenceUploadSections {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.evidenceUploadSection {
+  display: grid;
+  gap: var(--space-2);
 }
 
 .fileInputHidden {
@@ -151,6 +206,116 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+}
+
+.documentsItem {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+
+.documentsItemMeta {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.documentsItemActions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.documentsLegacy {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.documentsReadOnlySection {
+  margin-top: var(--space-4);
+}
+
+.documentsPreviewImage {
+  width: 100%;
+  max-height: 65vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+
+.documentsPdfViewer {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.documentsPdfControls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.documentsPdfFrame {
+  width: 100%;
+  min-height: 65vh;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+
+.evidenceUploader {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.evidenceRequirementBox {
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+
+.evidenceRequirementList {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.evidenceAttachmentItem {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+
+.evidenceAttachmentMeta {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.evidenceAttachmentActions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.taskCompleteModalFooter {
+  display: flex;
+  width: 100%;
+}
+
+.evidencePreviewImage {
+  width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
 }
 
 .tableSticky thead th {
@@ -194,6 +359,70 @@
   height: var(--space-4);
 }
 
+.relationPickerRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.relationPickerRow > :first-child {
+  flex: 1;
+}
+
+.relationSelectionList {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.relationSelectionItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+
+.relationSelectionMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.relationSelectionLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.relationLinkList {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.relationLinkItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.relationLinkButton {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: var(--color-primary);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.relationLinkButton:hover {
+  text-decoration: underline;
+}
+
 .textarea {
   width: 100%;
   border: 1px solid var(--color-border);
@@ -204,10 +433,93 @@
   background: var(--color-surface);
 }
 
+.commentsPanel {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.commentsComposerActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.commentsList {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.commentsItem {
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.commentsItemHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.commentsItemActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.commentsAuthor {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.commentsBody {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.commentsRevisionsList {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.commentsRevisionItem {
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+
 .detailGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: var(--space-4);
+}
+
+.aiFieldGrid {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.aiFieldLabelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.aiSplitGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-3);
 }
 
 .metaLabel {
@@ -217,6 +529,10 @@
 
 .metaValue {
   font-weight: var(--font-weight-medium);
+}
+
+.obligationEvidenceMeta {
+  min-width: 0;
 }
 
 .timeline {
@@ -389,18 +705,211 @@
   gap: var(--space-4);
 }
 
+.helpHintCard {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.helpHintHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.helpHintTitle {
+  margin-bottom: 0;
+}
+
+.helpHintDismissButton {
+  flex-shrink: 0;
+}
+
+.helpHintDismissGlyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.helpHintList {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: grid;
+  gap: var(--space-1);
+}
+
+.helpHeader {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.helpIndex {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.helpIndexLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.helpIndexLink {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  padding: 6px 10px;
+  text-decoration: none;
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+}
+
+.helpSection {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.helpStepList {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: grid;
+  gap: var(--space-3);
+}
+
+.helpStepItem {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.helpStepTitle {
+  margin: 0;
+  font-size: var(--font-size-md);
+}
+
+.helpLinkRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.helpHintsResetSection {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.helpHintsResetActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.authPage {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+}
+
+.authPage > * {
+  width: min(100%, 460px);
+}
+
+.authForm {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.authActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.authLink {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.authLink:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 768px) {
+  .documentsPdfFrame {
+    min-height: 75vh;
+  }
+}
+
 .topbarRight {
   display: flex;
   align-items: center;
   gap: var(--space-4);
 }
 
-.topbarUser {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+.topbarHelpGlyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  font-weight: var(--font-weight-semibold);
+}
+
+.topbarUserSwitcher {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.topbarUserSelect {
+  min-width: 220px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 6px 8px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.topbarUserBadge {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  display: grid;
+  gap: 2px;
+}
+
+.topbarUserName {
   font-size: var(--font-size-sm);
   color: var(--color-text);
+}
+
+.topbarUserRole {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.topbarBellWrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+.topbarBellBadge {
+  position: absolute;
+  top: -6px;
+  right: -10px;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--color-danger, #bf1d1d);
+  color: #fff;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
 }
 
 .topbarBell {
@@ -422,9 +931,60 @@
   letter-spacing: 0.04em;
 }
 
+.evidenceAttachmentList {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-4);
+}
+
+.diagnosticsActions {
+  align-items: flex-start;
+}
+
+.safeModeBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--color-warning, #7a5a00) 35%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-warning, #7a5a00) 10%, white);
+  color: var(--color-text);
+}
+
+.errorBoundaryPage {
+  min-height: 100vh;
+  padding: var(--space-6);
+  display: grid;
+  place-items: center;
+}
+
+.errorBoundaryContent {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.errorBoundaryActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.validationList,
+.warningList {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: grid;
+  gap: var(--space-1);
+}
+
 @media (max-width: 900px) {
   .filterRow,
-  .filterRowFour {
+  .filterRowFour,
+  .filterRowFive,
+  .filterRowSix,
+  .filterRowEight,
+  .filterRowNine {
     grid-template-columns: 1fr;
   }
 
@@ -435,5 +995,52 @@
   .scopeHeaderActions {
     width: 100%;
     flex-wrap: wrap;
+  }
+
+  .reportsAdminCard {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .topbarRight {
+    gap: var(--space-2);
+  }
+
+  .topbarUserSelect {
+    min-width: 160px;
+  }
+
+  .helpIndexLinks,
+  .helpLinkRow {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .evidenceAttachmentItem {
+    flex-direction: column;
+  }
+
+  .evidenceAttachmentActions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 640px) {
+  .taskCompleteModal {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100vh;
+    max-height: 100vh !important;
+    border-radius: 0 !important;
+  }
+
+  .taskCompleteModalFooter {
+    width: 100%;
+  }
+
+  .taskCompleteModalFooter > * {
+    flex: 1;
+    min-height: 44px;
   }
 }

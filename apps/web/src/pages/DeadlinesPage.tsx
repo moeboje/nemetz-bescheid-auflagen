@@ -13,12 +13,18 @@ import {
 } from "@nemetz/ui";
 import DeadlineModal from "../components/DeadlineModal";
 import { EditIcon, EyeIcon } from "../components/Icons";
+import { useRuntimeConfig } from "../config/runtimeConfig";
 import { t } from "../i18n";
+import HelpHintCard from "../components/HelpHintCard";
+import { exportDeadlinesToIcs } from "../services/icsExport";
 import { useDeadlines } from "../state/DeadlinesStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
 import { useUsers } from "../state/UsersStore";
+import { useAuthorization } from "../state/AuthorizationStore";
+import EvidenceCompletionModal from "../components/EvidenceCompletionModal";
+import EvidenceListModal from "../components/EvidenceListModal";
 
 const statusVariant = {
   OPEN: "warning",
@@ -43,7 +49,7 @@ function getReminderText(daysBefore?: number) {
 }
 
 function getPeriodDate(period: string) {
-  if (period !== "30" && period !== "90") {
+  if (period !== "30" && period !== "90" && period !== "365") {
     return "";
   }
   const value = Number(period);
@@ -54,13 +60,23 @@ function getPeriodDate(period: string) {
 
 export default function DeadlinesPage() {
   const navigate = useNavigate();
-  const { deadlines, getDeadlineStatus, markDeadlineDone, reopenDeadline } = useDeadlines();
+  const runtimeConfig = useRuntimeConfig();
+  const {
+    deadlines,
+    getDeadlineStatus,
+    markDeadlineDone,
+    markDeadlineDoneWithEvidence,
+    reopenDeadline
+  } = useDeadlines();
   const { projects } = useProjects();
   const { legalDocs, getEffectiveScopeForLegalDoc } = useLegalDocs();
   const { companies, sites, facilities, getScopeLabel } = useScopes();
   const { getUserLabel } = useUsers();
+  const { permissions } = useAuthorization();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingDeadlineId, setEditingDeadlineId] = useState<string | null>(null);
+  const [completionDeadlineId, setCompletionDeadlineId] = useState<string | null>(null);
+  const [evidenceDeadlineId, setEvidenceDeadlineId] = useState<string | null>(null);
   const [filters, setFilters] = useState({
     search: "",
     status: "",
@@ -70,6 +86,13 @@ export default function DeadlinesPage() {
     period: "",
     showArchived: false
   });
+
+  const handleCalendarExport = () => {
+    exportDeadlinesToIcs(rows, {
+      calendarName: t("deadlines.action.calendarExport"),
+      baseUrl: typeof window !== "undefined" ? window.location.origin : ""
+    });
+  };
 
   const projectOptions = useMemo(
     () =>
@@ -255,8 +278,33 @@ export default function DeadlinesPage() {
           />
           <h1 className="pageTitle">{t("deadlines.title")}</h1>
         </div>
-        <Button onClick={() => setModalOpen(true)}>{t("deadlines.new")}</Button>
+        <div className="inlineMeta">
+          {runtimeConfig.features.enableCalendarExport ? (
+            <Button variant="secondary" onClick={handleCalendarExport}>
+              {t("deadlines.action.calendarExport")}
+            </Button>
+          ) : null}
+          <Button
+            disabled={!permissions.canEditDeadlines}
+            onClick={() => setModalOpen(true)}
+          >
+            {t("deadlines.new")}
+          </Button>
+        </div>
       </div>
+
+      {runtimeConfig.features.enableHelpHints ? (
+        <HelpHintCard
+          hintId="hint.deadlines"
+          titleKey="helpHints.deadlines.title"
+          bulletsKeys={[
+            "helpHints.deadlines.bullets.1",
+            "helpHints.deadlines.bullets.2",
+            "helpHints.deadlines.bullets.3"
+          ]}
+          link={{ labelKey: "common.openHelp", to: "/help#workflows" }}
+        />
+      ) : null}
 
       <Card>
         <div className="filterRowSix">
@@ -309,6 +357,7 @@ export default function DeadlinesPage() {
               { value: "", label: t("deadlines.filters.period") },
               { value: "30", label: t("tasks.filters.period.30") },
               { value: "90", label: t("tasks.filters.period.90") },
+              { value: "365", label: t("reports.filters.period.365") },
               { value: "CUSTOM", label: t("tasks.filters.period.custom") }
             ]}
             value={filters.period}
@@ -337,11 +386,33 @@ export default function DeadlinesPage() {
         rowActions={(row) => (
           <div className="tableActions">
             {row.status === "DONE" ? (
-              <Button size="sm" variant="ghost" onClick={() => reopenDeadline(row.id)}>
-                {t("deadlines.action.reopen")}
-              </Button>
+              <>
+                <Button size="sm" variant="ghost" onClick={() => reopenDeadline(row.id)}>
+                  {t("deadlines.action.reopen")}
+                </Button>
+                {runtimeConfig.features.enableEvidence ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setEvidenceDeadlineId(row.id)}
+                  >
+                    {t("tasks.action.viewEvidence")}
+                  </Button>
+                ) : null}
+              </>
             ) : (
-              <Button size="sm" variant="secondary" onClick={() => markDeadlineDone(row.id)}>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={!permissions.canCompleteTasks}
+                onClick={() => {
+                  if (!runtimeConfig.features.enableEvidence) {
+                    markDeadlineDone(row.id);
+                    return;
+                  }
+                  setCompletionDeadlineId(row.id);
+                }}
+              >
                 {t("deadlines.action.markDone")}
               </Button>
             )}
@@ -353,6 +424,7 @@ export default function DeadlinesPage() {
             </IconButton>
             <IconButton
               ariaLabel={t("common.edit")}
+              disabled={!permissions.canEditDeadlines}
               onClick={() => {
                 setEditingDeadlineId(row.id);
                 setModalOpen(true);
@@ -372,6 +444,33 @@ export default function DeadlinesPage() {
         }}
         deadline={deadlines.find((item) => item.id === editingDeadlineId)}
       />
+
+      {runtimeConfig.features.enableEvidence ? (
+        <EvidenceCompletionModal
+          open={Boolean(completionDeadlineId)}
+          onClose={() => setCompletionDeadlineId(null)}
+          header={t("tasks.complete.modal.title")}
+          ownerType="DEADLINE"
+          ownerId={completionDeadlineId ?? ""}
+          onSave={(input) => {
+            if (!completionDeadlineId) {
+              return;
+            }
+            markDeadlineDoneWithEvidence(completionDeadlineId, input);
+          }}
+        />
+      ) : null}
+
+      {runtimeConfig.features.enableEvidence ? (
+        <EvidenceListModal
+          open={Boolean(evidenceDeadlineId)}
+          onClose={() => setEvidenceDeadlineId(null)}
+          title={t("tasks.evidence.modal.title")}
+          evidence={deadlines.find((deadline) => deadline.id === evidenceDeadlineId)?.evidence ?? []}
+          ownerType="DEADLINE"
+          ownerId={evidenceDeadlineId ?? ""}
+        />
+      ) : null}
     </div>
   );
 }

@@ -2,10 +2,12 @@ import React, { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Badge, Breadcrumbs, Card, DataTable, Button, IconButton, Modal } from "@nemetz/ui";
 import { t } from "../i18n";
+import { useRuntimeConfig } from "../config/runtimeConfig";
 import AuditTimeline from "../components/AuditTimeline";
 import DeadlineModal from "../components/DeadlineModal";
 import { EyeIcon, EditIcon } from "../components/Icons";
-import FileUploadStub, { UploadItem } from "../components/FileUploadStub";
+import DocumentsPanel from "../components/DocumentsPanel";
+import CommentsPanel from "../components/CommentsPanel";
 import ObligationModal from "../components/ObligationModal";
 import { useAuditLog } from "../state/AuditLogStore";
 import { useDeadlines } from "../state/DeadlinesStore";
@@ -14,6 +16,7 @@ import { useObligations } from "../state/ObligationsStore";
 import { useProjects } from "../state/ProjectsStore";
 import { useUsers } from "../state/UsersStore";
 import { generateTasksFromObligations } from "../state/TasksStore";
+import { useAuthorization } from "../state/AuthorizationStore";
 
 const levelVariant = {
   MANDATORY: "danger",
@@ -42,16 +45,12 @@ function getReminderText(daysBefore?: number) {
   return t("common.daysBefore.7");
 }
 
-function createAttachment(file: File): UploadItem {
-  return {
-    id: `lda-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    filename: file.name,
-    sizeKb: Math.max(1, Math.ceil(file.size / 1024)),
-    addedAt: new Date().toISOString().slice(0, 10)
-  };
+function isArchivedEntity(value: { isArchived?: boolean; archivedAt?: string }) {
+  return Boolean(value.isArchived || value.archivedAt);
 }
 
 export default function LegalDocPage() {
+  const runtimeConfig = useRuntimeConfig();
   const { id } = useParams();
   const navigate = useNavigate();
   const [tab, setTab] = useState("overview");
@@ -62,8 +61,6 @@ export default function LegalDocPage() {
   const [editingDeadlineId, setEditingDeadlineId] = useState<string | null>(null);
   const {
     legalDocs,
-    addLegalDocAttachment,
-    removeLegalDocAttachment,
     getEffectiveScopeLabel,
     archiveLegalDoc,
     restoreLegalDoc
@@ -73,9 +70,17 @@ export default function LegalDocPage() {
   const { obligations, archiveObligation } = useObligations();
   const { deadlines, getDeadlineStatus, archiveDeadline } = useDeadlines();
   const { getUserLabel } = useUsers();
+  const { permissions } = useAuthorization();
 
   const legalDoc = useMemo(() => legalDocs.find((doc) => doc.id === id), [id, legalDocs]);
   const docProject = projects.find((project) => project.id === legalDoc?.projectId);
+  const referencingProjects = useMemo(
+    () =>
+      projects.filter((project) =>
+        (project.referenceLegalDocIds ?? []).includes(legalDoc?.id ?? "")
+      ),
+    [legalDoc?.id, projects]
+  );
   const docObligations = obligations.filter(
     (obligation) =>
       obligation.legalDocId === legalDoc?.id && !obligation.isArchived && !obligation.archivedAt
@@ -105,6 +110,7 @@ export default function LegalDocPage() {
       return false;
     });
   }, [docDeadlines, docObligations, entries, legalDoc]);
+
 
   const getNextDue = (obligationId: string) => {
     const obligation = obligations.find((item) => item.id === obligationId);
@@ -247,11 +253,19 @@ export default function LegalDocPage() {
         </div>
         <div className="inlineMeta">
           {!legalDoc.isArchived ? (
-            <Button variant="secondary" onClick={() => setArchiveModalOpen(true)}>
+            <Button
+              variant="secondary"
+              disabled={!permissions.canEditLegalDocs}
+              onClick={() => setArchiveModalOpen(true)}
+            >
               {t("common.archive")}
             </Button>
           ) : (
-            <Button variant="secondary" onClick={() => restoreLegalDoc(legalDoc.id)}>
+            <Button
+              variant="secondary"
+              disabled={!permissions.canEditLegalDocs}
+              onClick={() => restoreLegalDoc(legalDoc.id)}
+            >
               {t("common.restore")}
             </Button>
           )}
@@ -289,6 +303,13 @@ export default function LegalDocPage() {
         </button>
         <button
           type="button"
+          className={`tabButton ${tab === "notes" ? "tabButtonActive" : ""}`}
+          onClick={() => setTab("notes")}
+        >
+          {t("legalDocs.detail.tabs.notes")}
+        </button>
+        <button
+          type="button"
           className={`tabButton ${tab === "history" ? "tabButtonActive" : ""}`}
           onClick={() => setTab("history")}
         >
@@ -297,33 +318,94 @@ export default function LegalDocPage() {
       </div>
 
       {tab === "overview" ? (
-        <Card>
-          <div className="detailGrid">
-            <div>
-              <div className="metaLabel">{t("legalDoc.section.project")}</div>
-              <div className="metaValue">{docProject?.title ?? t("common.notAvailable")}</div>
+        <>
+          <Card>
+            <div className="detailGrid">
+              <div>
+                <div className="metaLabel">{t("legalDoc.section.project")}</div>
+                <div className="metaValue">{docProject?.title ?? t("common.notAvailable")}</div>
+              </div>
+              <div>
+                <div className="metaLabel">{t("legalDoc.section.ref")}</div>
+                <div className="metaValue">{legalDoc.reference ?? t("common.notAvailable")}</div>
+              </div>
+              <div>
+                <div className="metaLabel">{t("legalDoc.section.scope")}</div>
+                <div className="metaValue">{getEffectiveScopeLabel(legalDoc) || t("legalDocs.scope.unknown")}</div>
+              </div>
+              <div>
+                <div className="metaLabel">{t("legalDoc.section.issuedAt")}</div>
+                <div className="metaValue">{legalDoc.issuedAt ?? t("common.notAvailable")}</div>
+              </div>
             </div>
-            <div>
-              <div className="metaLabel">{t("legalDoc.section.ref")}</div>
-              <div className="metaValue">{legalDoc.reference ?? t("common.notAvailable")}</div>
-            </div>
-            <div>
-              <div className="metaLabel">{t("legalDoc.section.scope")}</div>
-              <div className="metaValue">{getEffectiveScopeLabel(legalDoc) || t("legalDocs.scope.unknown")}</div>
-            </div>
-            <div>
-              <div className="metaLabel">{t("legalDoc.section.issuedAt")}</div>
-              <div className="metaValue">{legalDoc.issuedAt ?? t("common.notAvailable")}</div>
-            </div>
-          </div>
-        </Card>
+          </Card>
+          <Card>
+            <h2 className="sectionTitle">{t("legalDoc.references.title")}</h2>
+            {referencingProjects.length ? (
+              <div className="relationLinkList">
+                {referencingProjects.map((projectRow) => (
+                  <div key={projectRow.id} className="relationLinkItem">
+                    <button
+                      type="button"
+                      className="relationLinkButton"
+                      onClick={() => navigate(`/projects/${projectRow.id}`)}
+                    >
+                      {projectRow.title}
+                    </button>
+                    {isArchivedEntity(projectRow) ? (
+                      <Badge variant="warning">{t("users.archived")}</Badge>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="placeholderText">{t("legalDoc.references.empty")}</p>
+            )}
+          </Card>
+          {runtimeConfig.features.enableAiAnalysis ? (
+            <Card>
+              <h2 className="sectionTitle">{t("ai.analysis.title")}</h2>
+              {legalDoc.aiExtraction ? (
+                <div className="modalForm">
+                  <div className="inlineMeta">
+                    <span>{t("ai.review.language")}: {legalDoc.aiExtraction.language ?? t("common.notAvailable")}</span>
+                    <span>{t("ai.review.createdAt")}: {legalDoc.aiExtraction.createdAt}</span>
+                  </div>
+                  <div className="inlineMeta">
+                    <span>{t("ai.obligations.title")}: {legalDoc.aiExtraction.obligations.length}</span>
+                    <span>{t("ai.deadlines.title")}: {legalDoc.aiExtraction.deadlines.length}</span>
+                  </div>
+                  <p className="placeholderText">{t("ai.review.reopenHint")}</p>
+                  {legalDoc.aiExtraction.warnings?.length ? (
+                    <div className="timeline">
+                      {legalDoc.aiExtraction.warnings.map((warning) => (
+                        <div key={warning} className="placeholderText">
+                          {warning}
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="placeholderText">{t("ai.analysis.empty")}</p>
+              )}
+            </Card>
+          ) : (
+            <Card>
+              <p className="placeholderText">{t("ai.analysis.disabled")}</p>
+            </Card>
+          )}
+        </>
       ) : null}
 
       {tab === "obligations" ? (
         <div className="tableSection">
           <div className="sectionHeader">
             <h2 className="sectionTitle">{t("legalDoc.obligations.titleSection")}</h2>
-            <Button onClick={() => setObligationModalOpen(true)}>
+            <Button
+              disabled={!permissions.canEditObligations}
+              onClick={() => setObligationModalOpen(true)}
+            >
               {t("legalDoc.obligations.actionNew")}
             </Button>
           </div>
@@ -341,6 +423,7 @@ export default function LegalDocPage() {
                 </IconButton>
                 <IconButton
                   ariaLabel={t("obligations.action.edit")}
+                  disabled={!permissions.canEditObligations}
                   onClick={() => {
                     setEditingObligationId(row.id);
                     setObligationModalOpen(true);
@@ -358,7 +441,12 @@ export default function LegalDocPage() {
         <div className="tableSection">
           <div className="sectionHeader">
             <h2 className="sectionTitle">{t("legalDocs.detail.tabs.deadlines")}</h2>
-            <Button onClick={() => setDeadlineModalOpen(true)}>{t("deadlines.new")}</Button>
+            <Button
+              disabled={!permissions.canEditDeadlines}
+              onClick={() => setDeadlineModalOpen(true)}
+            >
+              {t("deadlines.new")}
+            </Button>
           </div>
           <DataTable
             columns={deadlineColumns}
@@ -374,6 +462,7 @@ export default function LegalDocPage() {
                 </IconButton>
                 <IconButton
                   ariaLabel={t("common.edit")}
+                  disabled={!permissions.canEditDeadlines}
                   onClick={() => {
                     setEditingDeadlineId(row.id);
                     setDeadlineModalOpen(true);
@@ -389,16 +478,19 @@ export default function LegalDocPage() {
 
       {tab === "attachments" ? (
         <Card>
-          <FileUploadStub
-            label={t("legalDoc.section.attachments")}
-            selectLabel={t("common.selectFile")}
-            removeLabel={t("common.remove")}
-            items={legalDoc.attachments}
-            onAddFiles={(files) =>
-              files.forEach((file) => addLegalDocAttachment(legalDoc.id, createAttachment(file)))
-            }
-            onRemove={(attachmentId) => removeLegalDocAttachment(legalDoc.id, attachmentId)}
+          <DocumentsPanel
+            ownerType="LEGAL_DOC"
+            ownerId={legalDoc.id}
+            titleKey="legalDoc.section.attachments"
+            allowUpload={permissions.canEditLegalDocs}
+            legacyItems={legalDoc.attachments}
           />
+        </Card>
+      ) : null}
+
+      {tab === "notes" ? (
+        <Card>
+          <CommentsPanel entityType="LEGAL_DOC" entityId={legalDoc.id} />
         </Card>
       ) : null}
 

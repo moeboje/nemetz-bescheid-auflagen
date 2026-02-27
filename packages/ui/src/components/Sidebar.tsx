@@ -22,6 +22,8 @@ export type SidebarNavItemProps = {
   active?: boolean;
   onClick?: () => void;
   href?: string;
+  collapsed?: boolean;
+  tooltip?: string;
   children: React.ReactNode;
   className?: string;
 };
@@ -31,22 +33,28 @@ export function SidebarNavItem({
   active,
   onClick,
   href,
+  collapsed,
+  tooltip,
   children,
   className
 }: SidebarNavItemProps) {
+  const title = collapsed ? tooltip : undefined;
+  const ariaLabel = collapsed ? tooltip : undefined;
   const content = (
     <>
       {icon ? <span className={styles.icon}>{icon}</span> : null}
-      <span className={styles.label}>{children}</span>
+      <span className={cx(styles.label, collapsed && styles.labelCollapsed)}>{children}</span>
     </>
   );
 
   if (href) {
     return (
       <a
-        className={cx(styles.navItem, active && styles.active, className)}
+        className={cx(styles.navItem, collapsed && styles.navItemCollapsed, active && styles.active, className)}
         href={href}
         aria-current={active ? "page" : undefined}
+        aria-label={ariaLabel}
+        title={title}
       >
         {content}
       </a>
@@ -57,8 +65,10 @@ export function SidebarNavItem({
     <button
       type="button"
       onClick={onClick}
-      className={cx(styles.navItem, active && styles.active, className)}
+      className={cx(styles.navItem, collapsed && styles.navItemCollapsed, active && styles.active, className)}
       aria-current={active ? "page" : undefined}
+      aria-label={ariaLabel}
+      title={title}
     >
       {content}
     </button>

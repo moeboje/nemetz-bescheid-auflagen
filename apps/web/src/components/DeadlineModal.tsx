@@ -5,8 +5,8 @@ import { useAuthorities } from "../state/AuthoritiesStore";
 import { useDeadlines } from "../state/DeadlinesStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useProjects } from "../state/ProjectsStore";
-import { useUsers } from "../state/UsersStore";
 import type { Deadline } from "../state/DeadlinesStore";
+import UserSelect from "./UserSelect";
 
 const emptyForm = {
   title: "",
@@ -44,7 +44,6 @@ export default function DeadlineModal({
   const { projects } = useProjects();
   const { legalDocs } = useLegalDocs();
   const { authorities } = useAuthorities();
-  const { users } = useUsers();
   const [form, setForm] = useState(emptyForm);
 
   useEffect(() => {
@@ -101,11 +100,6 @@ export default function DeadlineModal({
         .filter((authority) => !authority.isArchived)
         .map((authority) => ({ value: authority.id, label: authority.name })),
     [authorities]
-  );
-
-  const userOptions = useMemo(
-    () => users.map((user) => ({ value: user.id, label: user.displayName })),
-    [users]
   );
 
   const isSaveDisabled = !form.title || !form.dueDate;
@@ -236,21 +230,25 @@ export default function DeadlineModal({
         </div>
         <div className="formField">
           <span className="fieldLabel">{t("deadlines.form.owner")}</span>
-          <Select
-            options={[{ value: "", label: t("deadlines.form.owner") }, ...userOptions]}
-            value={form.ownerUserId}
-            onChange={(event) =>
-              setForm((prev) => ({ ...prev, ownerUserId: event.target.value }))
+          <UserSelect
+            value={form.ownerUserId || null}
+            includeExternal
+            allowArchivedCurrentValue
+            placeholderKey="deadlines.owner"
+            onChange={(userId) =>
+              setForm((prev) => ({ ...prev, ownerUserId: userId ?? "" }))
             }
           />
         </div>
         <div className="formField">
           <span className="fieldLabel">{t("deadlines.form.deputy")}</span>
-          <Select
-            options={[{ value: "", label: t("deadlines.form.deputy") }, ...userOptions]}
-            value={form.deputyUserId}
-            onChange={(event) =>
-              setForm((prev) => ({ ...prev, deputyUserId: event.target.value }))
+          <UserSelect
+            value={form.deputyUserId || null}
+            includeExternal
+            allowArchivedCurrentValue
+            placeholderKey="deadlines.deputy"
+            onChange={(userId) =>
+              setForm((prev) => ({ ...prev, deputyUserId: userId ?? "" }))
             }
           />
         </div>

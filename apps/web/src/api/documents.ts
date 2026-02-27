@@ -1,0 +1,88 @@
+import { ApiError, apiRequest, resolveApiUrl } from "./client";
+
+export type DocumentOwnerType = "PROJECT" | "LEGAL_DOC" | "OBLIGATION" | "DEADLINE" | "TASK_EVIDENCE";
+
+export type DocumentDto = {
+  id: string;
+  ownerType: DocumentOwnerType;
+  ownerId: string;
+  filename: string;
+  originalFilename?: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string;
+};
+
+function parseErrorMessage(payload: unknown, fallback: string) {
+  if (payload && typeof payload === "object" && "message" in payload && typeof payload.message === "string") {
+    return payload.message;
+  }
+  return fallback;
+}
+
+async function parseJsonResponse(response: Response) {
+  const raw = await response.text();
+  if (!raw) {
+    return null;
+  }
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+export async function listDocuments(ownerType: DocumentOwnerType, ownerId: string) {
+  const query = new URLSearchParams({
+    ownerType,
+    ownerId
+  });
+  const payload = await apiRequest<{ items: DocumentDto[] }>(`/documents?${query.toString()}`);
+  return payload.items ?? [];
+}
+
+export async function getDocument(documentId: string) {
+  const payload = await apiRequest<{ document: DocumentDto }>(`/documents/${encodeURIComponent(documentId)}`);
+  return payload.document;
+}
+
+export async function uploadDocument(ownerType: DocumentOwnerType, ownerId: string, file: File) {
+  const form = new FormData();
+  form.set("ownerType", ownerType);
+  form.set("ownerId", ownerId);
+  form.set("file", file);
+
+  const response = await fetch(resolveApiUrl("/documents"), {
+    method: "POST",
+    credentials: "include",
+    body: form
+  });
+  const payload = await parseJsonResponse(response);
+
+  if (!response.ok) {
+    throw new ApiError(response.status, parseErrorMessage(payload, response.statusText || "request_failed"), payload);
+  }
+
+  if (!payload || typeof payload !== "object" || !("document" in payload)) {
+    throw new ApiError(500, "Invalid upload response.", payload);
+  }
+
+  return (payload as { document: DocumentDto }).document;
+}
+
+export function downloadUrl(documentId: string, forceDownload = false) {
+  const encodedId = encodeURIComponent(documentId);
+  const base = resolveApiUrl(`/documents/${encodedId}/file`);
+  return forceDownload ? `${base}?download=1` : base;
+}
+
+export async function fetchDocumentBlob(documentId: string) {
+  const response = await fetch(downloadUrl(documentId), {
+    credentials: "include"
+  });
+  if (!response.ok) {
+    const payload = await parseJsonResponse(response);
+    throw new ApiError(response.status, parseErrorMessage(payload, response.statusText || "request_failed"), payload);
+  }
+  return response.blob();
+}

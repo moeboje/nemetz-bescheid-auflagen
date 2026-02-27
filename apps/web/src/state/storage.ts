@@ -1,5 +1,7 @@
+import { isSafeModeActive } from "./safeMode";
+
 export function loadFromStorage<T>(key: string, fallback: T): T {
-  if (typeof window === "undefined") {
+  if (typeof window === "undefined" || isSafeModeActive()) {
     return fallback;
   }
   try {
@@ -14,7 +16,7 @@ export function loadFromStorage<T>(key: string, fallback: T): T {
 }
 
 export function saveToStorage<T>(key: string, value: T) {
-  if (typeof window === "undefined") {
+  if (typeof window === "undefined" || isSafeModeActive()) {
     return;
   }
   try {

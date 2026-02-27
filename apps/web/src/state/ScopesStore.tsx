@@ -62,11 +62,11 @@ type ScopesContextValue = ScopesSnapshot & {
   updateCompany: (id: string, input: { name: string; shortName?: string }) => void;
   archiveCompany: (id: string) => void;
   restoreCompany: (id: string) => void;
-  addSite: (input: { companyId: string; name: string }) => void;
+  addSite: (input: { companyId: string; name: string }) => string;
   updateSite: (id: string, input: { companyId: string; name: string }) => void;
   archiveSite: (id: string) => void;
   restoreSite: (id: string) => void;
-  addFacility: (input: { companyId: string; siteId: string; name: string; type?: string }) => void;
+  addFacility: (input: { companyId: string; siteId: string; name: string; type?: string }) => string;
   updateFacility: (
     id: string,
     input: { companyId: string; siteId: string; name: string; type?: string }
@@ -294,12 +294,13 @@ export function ScopesProvider({ children }: { children: React.ReactNode }) {
 
   const addSite = useCallback((input: { companyId: string; name: string }) => {
     const timestamp = nowStamp();
+    const id = createId("s");
     setScopeData((prev) => ({
       ...prev,
       sites: [
         ...prev.sites,
         {
-          id: createId("s"),
+          id,
           companyId: input.companyId,
           name: input.name,
           isArchived: false,
@@ -308,6 +309,7 @@ export function ScopesProvider({ children }: { children: React.ReactNode }) {
         }
       ]
     }));
+    return id;
   }, []);
 
   const updateSite = useCallback((id: string, input: { companyId: string; name: string }) => {
@@ -359,12 +361,13 @@ export function ScopesProvider({ children }: { children: React.ReactNode }) {
   const addFacility = useCallback(
     (input: { companyId: string; siteId: string; name: string; type?: string }) => {
       const timestamp = nowStamp();
+      const id = createId("f");
       setScopeData((prev) => ({
         ...prev,
         facilities: [
           ...prev.facilities,
           {
-            id: createId("f"),
+            id,
             companyId: input.companyId,
             siteId: input.siteId,
             name: input.name,
@@ -375,6 +378,7 @@ export function ScopesProvider({ children }: { children: React.ReactNode }) {
           }
         ]
       }));
+      return id;
     },
     []
   );

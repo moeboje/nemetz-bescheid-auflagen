@@ -21,3 +21,49 @@ build/
 
 # Design reference screenshots (nicht committen wegen sensiblen Daten)
 design/reference/
+
+# env / secrets
+.env
+apps/api/.env
+apps/web/.env
+
+# node
+node_modules/
+dist/
+build/
+coverage/
+
+# prisma / sqlite
+*.sqlite
+*.db
+apps/api/prisma/dev.db
+
+# runtime storage (uploads/outbox)
+apps/api/storage/uploads/
+apps/api/storage/mail-outbox/
+
+# logs
+*.log
+
+# env / secrets
+.env
+apps/api/.env
+apps/web/.env
+
+# node
+node_modules/
+dist/
+build/
+coverage/
+
+# prisma / sqlite
+*.sqlite
+*.db
+apps/api/prisma/dev.db
+
+# runtime storage (uploads/outbox)
+apps/api/storage/uploads/
+apps/api/storage/mail-outbox/
+
+# logs
+*.log

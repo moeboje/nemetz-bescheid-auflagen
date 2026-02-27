@@ -6,21 +6,45 @@ import {
   DeadlineStoredStatus
 } from "../data/deadlines";
 import { useAuditLog } from "./AuditLogStore";
+import { useUsers } from "./UsersStore";
 import { loadJSON, saveJSON, STORAGE_KEYS } from "./persistence";
+import {
+  countAttachmentsByKind,
+  createStableId,
+  inferAttachmentKind,
+  type AttachmentMeta
+} from "../types/attachments";
+import type { Evidence, EvidenceOutcome } from "../types/evidence";
 
 type DeadlineStatusInput = DeadlineStoredStatus;
+
+type DeadlineEvidenceInput = {
+  note?: string;
+  outcome?: EvidenceOutcome;
+  attachments: AttachmentMeta[];
+};
 
 export type DeadlinesContextValue = {
   deadlines: Deadline[];
   addDeadline: (
     input: Omit<
       Deadline,
-      "id" | "status" | "createdAt" | "updatedAt" | "isArchived" | "archivedAt"
+      | "id"
+      | "status"
+      | "createdAt"
+      | "updatedAt"
+      | "isArchived"
+      | "archivedAt"
+      | "completedAt"
+      | "completedByUserId"
+      | "evidence"
     > & { status?: DeadlineStatusInput }
   ) => void;
   updateDeadline: (id: string, input: Partial<Deadline>) => void;
   setDeadlineStatus: (id: string, status: DeadlineStatusInput) => void;
   markDeadlineDone: (id: string) => void;
+  markDeadlineDoneWithEvidence: (id: string, input: DeadlineEvidenceInput) => void;
+  markDeadlineAttachmentUnavailable: (id: string, attachmentId: string) => void;
   reopenDeadline: (id: string) => void;
   archiveDeadline: (id: string) => void;
   restoreDeadline: (id: string) => void;
@@ -67,6 +91,65 @@ function normalizeReminder<T extends Pick<Deadline, "emailReminderEnabled" | "em
   };
 }
 
+function normalizeAttachmentMeta(value: unknown): AttachmentMeta | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const row = value as Partial<AttachmentMeta>;
+  if (typeof row.filename !== "string" || !row.filename.trim()) {
+    return null;
+  }
+  return {
+    id:
+      typeof row.id === "string" && row.id.trim()
+        ? row.id
+        : createStableId("att"),
+    kind:
+      row.kind === "PHOTO" || row.kind === "DOCUMENT" || row.kind === "REPORT"
+        ? row.kind
+        : inferAttachmentKind({ mime: row.mime, filename: row.filename }),
+    filename: row.filename,
+    sizeKb:
+      typeof row.sizeKb === "number" && Number.isFinite(row.sizeKb)
+        ? Number(row.sizeKb)
+        : undefined,
+    mime: typeof row.mime === "string" ? row.mime : undefined,
+    addedAt:
+      typeof row.addedAt === "string" && row.addedAt.trim()
+        ? row.addedAt
+        : nowStamp().slice(0, 10),
+    storage: row.storage === "indexeddb" ? "indexeddb" : "none"
+  };
+}
+
+function normalizeEvidence(value: unknown): Evidence | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const row = value as Partial<Evidence>;
+  return {
+    id:
+      typeof row.id === "string" && row.id.trim()
+        ? row.id
+        : createStableId("ev"),
+    note: typeof row.note === "string" ? row.note : undefined,
+    outcome:
+      row.outcome === "OK" || row.outcome === "NOK" || row.outcome === "FOLLOW_UP"
+        ? row.outcome
+        : undefined,
+    attachments: Array.isArray(row.attachments)
+      ? row.attachments
+          .map((attachment) => normalizeAttachmentMeta(attachment))
+          .filter((attachment): attachment is AttachmentMeta => Boolean(attachment))
+      : [],
+    createdAt:
+      typeof row.createdAt === "string" && row.createdAt.trim() ? row.createdAt : nowStamp(),
+    createdByUserId:
+      typeof row.createdByUserId === "string" ? row.createdByUserId : undefined,
+    createdByLabel: typeof row.createdByLabel === "string" ? row.createdByLabel : undefined
+  };
+}
+
 function normalizeDeadline(value: Partial<Deadline>, index: number): Deadline | null {
   if (
     typeof value.id !== "string" ||
@@ -103,11 +186,26 @@ function normalizeDeadline(value: Partial<Deadline>, index: number): Deadline | 
     deputyUserId: value.deputyUserId ?? undefined,
     emailReminderEnabled: normalizedReminder.emailReminderEnabled,
     emailReminderDaysBefore: normalizedReminder.emailReminderDaysBefore,
+    completedAt: typeof value.completedAt === "string" ? value.completedAt : undefined,
+    completedByUserId:
+      typeof value.completedByUserId === "string" ? value.completedByUserId : undefined,
+    evidence: Array.isArray(value.evidence)
+      ? value.evidence
+          .map((item) => normalizeEvidence(item))
+          .filter((item): item is Evidence => Boolean(item))
+      : [],
     archivedAt: value.archivedAt ?? undefined,
     isArchived: Boolean(value.isArchived || value.archivedAt),
     createdAt,
     updatedAt
   };
+}
+
+function buildTaskCompletedAuditSummary(input: DeadlineEvidenceInput) {
+  const counts = countAttachmentsByKind(input.attachments ?? []);
+  return `Counts PHOTO:${counts.PHOTO}, DOCUMENT:${counts.DOCUMENT}, REPORT:${counts.REPORT}${
+    input.outcome ? ` · OUTCOME:${input.outcome}` : ""
+  }`;
 }
 
 function normalizeDeadlines(value: unknown): Deadline[] {
@@ -131,6 +229,7 @@ function resolveDeadlineStatus(deadline: Deadline): DeadlineStatus {
 
 export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
   const { logEvent } = useAuditLog();
+  const { currentUser, getUserLabel } = useUsers();
   const [deadlines, setDeadlines] = useState<Deadline[]>(() =>
     loadJSON<Deadline[]>(STORAGE_KEYS.deadlines, {
       fallback: initialDeadlines,
@@ -149,7 +248,15 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
     (
       input: Omit<
         Deadline,
-        "id" | "status" | "createdAt" | "updatedAt" | "isArchived" | "archivedAt"
+        | "id"
+        | "status"
+        | "createdAt"
+        | "updatedAt"
+        | "isArchived"
+        | "archivedAt"
+        | "completedAt"
+        | "completedByUserId"
+        | "evidence"
       > & { status?: DeadlineStatusInput }
     ) => {
       const timestamp = nowStamp();
@@ -158,6 +265,9 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
         ...normalizedReminder,
         id: createId(),
         status: input.status ?? "OPEN",
+        completedAt: undefined,
+        completedByUserId: undefined,
+        evidence: [],
         archivedAt: undefined,
         isArchived: false,
         createdAt: timestamp,
@@ -197,6 +307,7 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
             status: normalizeStatus(merged.status),
             id: deadline.id,
             createdAt: deadline.createdAt,
+            evidence: Array.isArray(merged.evidence) ? merged.evidence : deadline.evidence ?? [],
             updatedAt: timestamp
           };
         })
@@ -221,18 +332,26 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
       const timestamp = nowStamp();
       setDeadlines((prev) =>
         prev.map((deadline) =>
-          deadline.id === id ? { ...deadline, status, updatedAt: timestamp } : deadline
+          deadline.id === id
+            ? {
+                ...deadline,
+                status,
+                completedAt: status === "DONE" ? timestamp : undefined,
+                completedByUserId: status === "DONE" ? currentUser?.id : undefined,
+                updatedAt: timestamp
+              }
+            : deadline
         )
       );
       logEvent({
-        actorLabel: "Demo User",
+        actorLabel: getUserLabel(currentUser?.id) || "Demo User",
         entityType: "DEADLINE",
         entityId: id,
         action: "STATUS_CHANGED",
         summary: `Deadline status set to ${status}`
       });
     },
-    [deadlines, logEvent]
+    [currentUser?.id, deadlines, getUserLabel, logEvent]
   );
 
   const markDeadlineDone = useCallback(
@@ -240,6 +359,98 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
       setDeadlineStatus(id, "DONE");
     },
     [setDeadlineStatus]
+  );
+
+  const markDeadlineDoneWithEvidence = useCallback(
+    (id: string, input: DeadlineEvidenceInput) => {
+      const timestamp = nowStamp();
+      const evidenceEntry: Evidence = {
+        id: createStableId("ev"),
+        note: input.note,
+        outcome: input.outcome,
+        attachments: input.attachments ?? [],
+        createdAt: timestamp,
+        createdByUserId: currentUser?.id,
+        createdByLabel: getUserLabel(currentUser?.id)
+      };
+
+      setDeadlines((prev) =>
+        prev.map((deadline) =>
+          deadline.id === id
+            ? {
+                ...deadline,
+                status: "DONE",
+                completedAt: timestamp,
+                completedByUserId: currentUser?.id,
+                evidence: [evidenceEntry, ...(deadline.evidence ?? [])],
+                updatedAt: timestamp
+              }
+            : deadline
+        )
+      );
+
+      logEvent({
+        actorLabel: getUserLabel(currentUser?.id) || "Demo User",
+        entityType: "DEADLINE",
+        entityId: id,
+        action: "TASK_COMPLETED",
+        summary: buildTaskCompletedAuditSummary(input)
+      });
+    },
+    [currentUser?.id, getUserLabel, logEvent]
+  );
+
+  const markDeadlineAttachmentUnavailable = useCallback(
+    (id: string, attachmentId: string) => {
+      if (!attachmentId) {
+        return;
+      }
+
+      let changed = false;
+      const timestamp = nowStamp();
+      setDeadlines((prev) =>
+        prev.map((deadline) => {
+          if (deadline.id !== id || !deadline.evidence?.length) {
+            return deadline;
+          }
+
+          const nextEvidence = deadline.evidence.map((entry) => ({
+            ...entry,
+            attachments: entry.attachments.map((attachment) => {
+              if (attachment.id !== attachmentId || attachment.storage === "none") {
+                return attachment;
+              }
+              changed = true;
+              return {
+                ...attachment,
+                storage: "none"
+              };
+            })
+          }));
+
+          if (!changed) {
+            return deadline;
+          }
+
+          return {
+            ...deadline,
+            evidence: nextEvidence,
+            updatedAt: timestamp
+          };
+        })
+      );
+
+      if (changed) {
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "DEADLINE",
+          entityId: id,
+          action: "CLEANUP",
+          summary: `Attachment marked unavailable (${attachmentId})`
+        });
+      }
+    },
+    [logEvent]
   );
 
   const reopenDeadline = useCallback(
@@ -316,8 +527,7 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
   );
 
   const getDeadlinesForProject = useCallback(
-    (projectId: string) =>
-      deadlines.filter((deadline) => deadline.projectId === projectId),
+    (projectId: string) => deadlines.filter((deadline) => deadline.projectId === projectId),
     [deadlines]
   );
 
@@ -339,6 +549,8 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
       updateDeadline,
       setDeadlineStatus,
       markDeadlineDone,
+      markDeadlineDoneWithEvidence,
+      markDeadlineAttachmentUnavailable,
       reopenDeadline,
       archiveDeadline,
       restoreDeadline,
@@ -356,6 +568,8 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
       getDeadlinesForLegalDoc,
       getDeadlinesForProject,
       markDeadlineDone,
+      markDeadlineDoneWithEvidence,
+      markDeadlineAttachmentUnavailable,
       reopenDeadline,
       replaceDeadlines,
       resetDeadlines,

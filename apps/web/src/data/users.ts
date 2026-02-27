@@ -1,82 +1,171 @@
-export type UserStub = {
+export type UserRole = string;
+export type UserType = "INTERNAL" | "EXTERNAL";
+
+export type User = {
   id: string;
-  displayName: string;
-  email?: string;
+  firstName: string;
+  lastName: string;
+  companyRole: string;
+  email: string;
+  phone?: string;
+  role: UserRole;
+  type: UserType;
   isExternal: boolean;
-  roleLabel?: string;
+  isArchived: boolean;
+  titleOrPosition?: string;
+  department?: string;
+  externalCompany?: string;
+  externalOrgId?: string;
+  externalOrgName?: string;
+  notes?: string;
+  invitedAt?: string;
+  lastPasswordResetAt?: string;
+  mustChangePassword?: boolean;
+  passwordUpdatedAt?: string;
+  failedLoginCount?: number;
+  lockedUntil?: string;
+  lastLoginAt?: string;
+  mfaEnabled?: boolean;
+  mfaEnforced?: boolean;
+  mfaVerifiedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
-export const users: UserStub[] = [
+const seedTimestamp = "2026-02-01T09:00:00.000Z";
+
+export const users: User[] = [
   {
     id: "u-001",
-    displayName: "Betriebsleitung 1",
+    firstName: "Max",
+    lastName: "Mustermann",
+    companyRole: "Betriebsleitung",
+    email: "max.demo@example.com",
+    phone: "+43 800 100 101",
+    role: "ADMIN",
+    type: "INTERNAL",
     isExternal: false,
-    roleLabel: "Betriebsleitung"
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
   },
   {
     id: "u-002",
-    displayName: "Umweltmanagement 1",
+    firstName: "Erika",
+    lastName: "Muster",
+    companyRole: "Umweltmanagement",
+    email: "erika.demo@example.com",
+    phone: "+43 800 100 102",
+    role: "COMPLIANCE",
+    type: "INTERNAL",
     isExternal: false,
-    roleLabel: "Umweltmanagement"
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
   },
   {
     id: "u-003",
-    displayName: "Compliance 1",
+    firstName: "Paul",
+    lastName: "Beispiel",
+    companyRole: "Instandhaltung",
+    email: "paul.demo@example.com",
+    phone: "+43 800 100 103",
+    role: "USER",
+    type: "INTERNAL",
     isExternal: false,
-    roleLabel: "Compliance"
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
   },
   {
     id: "u-004",
-    displayName: "Betriebsleitung 2",
+    firstName: "Nina",
+    lastName: "Demo",
+    companyRole: "Qualitaetsmanagement",
+    email: "nina.demo@example.com",
+    phone: "+43 800 100 104",
+    role: "USER",
+    type: "INTERNAL",
     isExternal: false,
-    roleLabel: "Betriebsleitung"
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
   },
   {
     id: "u-005",
-    displayName: "Umweltmanagement 2",
+    firstName: "Tobias",
+    lastName: "Test",
+    companyRole: "Disposition",
+    email: "tobias.demo@example.com",
+    phone: "+43 800 100 105",
+    role: "USER",
+    type: "INTERNAL",
     isExternal: false,
-    roleLabel: "Umweltmanagement"
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
   },
   {
     id: "u-006",
-    displayName: "Instandhaltung 1",
+    firstName: "Sabine",
+    lastName: "Musterfrau",
+    companyRole: "Betriebsbeauftragte",
+    email: "sabine.demo@example.com",
+    phone: "+43 800 100 106",
+    role: "USER",
+    type: "INTERNAL",
     isExternal: false,
-    roleLabel: "Instandhaltung"
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
   },
   {
     id: "u-007",
-    displayName: "Projektkoordination 1",
-    isExternal: false,
-    roleLabel: "Projektkoordination"
+    firstName: "Alex",
+    lastName: "Extern",
+    companyRole: "Technisches Buero",
+    email: "alex.demo@invalid.local",
+    phone: "+43 800 100 201",
+    role: "EXTERNAL",
+    type: "EXTERNAL",
+    isExternal: true,
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
   },
   {
     id: "u-008",
-    displayName: "EHS 1",
-    isExternal: false,
-    roleLabel: "EHS"
+    firstName: "Chris",
+    lastName: "Partner",
+    companyRole: "Rechtsanwalt",
+    email: "chris.demo@invalid.local",
+    phone: "+43 800 100 202",
+    role: "EXTERNAL",
+    type: "EXTERNAL",
+    isExternal: true,
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
   },
   {
     id: "u-009",
-    displayName: "Instandhaltung 2",
-    isExternal: false,
-    roleLabel: "Instandhaltung"
-  },
-  {
-    id: "u-010",
-    displayName: "Externe Beratung 1",
+    firstName: "Jamie",
+    lastName: "Dienstleister",
+    companyRole: "Prueforganisation",
+    email: "jamie.demo@invalid.local",
+    phone: "+43 800 100 203",
+    role: "EXTERNAL",
+    type: "EXTERNAL",
     isExternal: true,
-    roleLabel: "Beratung"
-  },
-  {
-    id: "u-011",
-    displayName: "Fachgutachten 1",
-    isExternal: true,
-    roleLabel: "Fachgutachten"
-  },
-  {
-    id: "u-012",
-    displayName: "Audits 1",
-    isExternal: true,
-    roleLabel: "Auditorin"
+    isArchived: false,
+    createdAt: seedTimestamp,
+    updatedAt: seedTimestamp
   }
 ];
+
+export function getUserDisplayName(user?: Pick<User, "firstName" | "lastName">) {
+  if (!user) {
+    return "";
+  }
+  return `${user.firstName} ${user.lastName}`.trim();
+}

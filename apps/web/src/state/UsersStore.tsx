@@ -1,82 +1,425 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
-import { users as initialUsers, UserStub } from "../data/users";
-import { loadJSON, saveJSON, STORAGE_KEYS } from "./persistence";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { t } from "../i18n";
+import { getUserDisplayName, type User, type UserRole, type UserType } from "../data/users";
+import {
+  archiveUser as apiArchiveUser,
+  createUser as apiCreateUser,
+  listAdminUsers as apiListAdminUsers,
+  listUserLookup,
+  listUsers,
+  requestUserPasswordReset,
+  resetUserMfa as apiResetUserMfa,
+  setUserMfaEnforced as apiSetUserMfaEnforced,
+  restoreUser as apiRestoreUser,
+  unlockUser as apiUnlockUser,
+  updateUser as apiUpdateUser,
+  type AdminUsersListResult,
+  type AdminUsersQuery
+} from "../api/users";
+import { useAuth } from "./AuthStore";
+
+type UserSelectionFilter = {
+  includeExternal?: boolean;
+  includeInternal?: boolean;
+};
+
+type UserSearchFilter = UserSelectionFilter & {
+  includeArchived?: boolean;
+  role?: UserRole | "ALL";
+  type?: UserType | "ALL";
+};
+
+type UserCreateInput = {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone?: string;
+  role?: UserRole;
+  type?: UserType;
+  titleOrPosition?: string;
+  department?: string;
+  externalCompany?: string;
+  externalOrgId?: string;
+  notes?: string;
+  companyRole?: string;
+  isExternal?: boolean;
+  initialPassword?: string;
+};
+
+type UserUpdatePatch = Partial<UserCreateInput>;
 
 export type UsersContextValue = {
-  users: UserStub[];
-  getUserLabel: (userId?: string) => string;
-  replaceUsers: (value: UserStub[]) => void;
+  users: User[];
+  currentUserId: string;
+  currentUser: User | undefined;
+  setCurrentUserId: (userId: string) => void;
+  addUser: (input: UserCreateInput) => Promise<{ user: User; resetLink?: string; outboxFile?: string }>;
+  updateUser: (id: string, patch: UserUpdatePatch) => Promise<User | null>;
+  archiveUser: (id: string) => Promise<User | null>;
+  restoreUser: (id: string) => Promise<User | null>;
+  unlockUser: (id: string) => Promise<User | null>;
+  setMfaEnforced: (id: string, enforced: boolean) => Promise<User | null>;
+  resetMfa: (id: string) => Promise<User | null>;
+  requestReset: (id: string) => Promise<{ ok: boolean; resetLink?: string; outboxFile?: string }>;
+  loadAdminUsers: (query?: AdminUsersQuery) => Promise<AdminUsersListResult>;
+  getUser: (userId?: string | null) => User | undefined;
+  getDisplayName: (userId?: string | null) => string;
+  listActiveUsers: (filters?: UserSelectionFilter) => User[];
+  searchUsers: (query: string, filters?: UserSearchFilter) => User[];
+  replaceUsers: (value: User[]) => void;
   resetUsers: () => void;
+  reloadUsers: () => Promise<User[]>;
+  getUserById: (userId?: string) => User | undefined;
+  getUserLabel: (userId?: string) => string;
 };
 
 const UsersContext = createContext<UsersContextValue | undefined>(undefined);
 
-function normalizeUsers(value: unknown): UserStub[] {
-  if (!Array.isArray(value)) {
-    return [];
+function sortUsers(rows: User[]) {
+  return [...rows].sort((a, b) => getUserDisplayName(a).localeCompare(getUserDisplayName(b)));
+}
+
+function normalizeType(input: UserCreateInput | UserUpdatePatch, role: UserRole): UserType {
+  if (input.type === "INTERNAL" || input.type === "EXTERNAL") {
+    return input.type;
+  }
+  if (typeof input.isExternal === "boolean") {
+    return input.isExternal ? "EXTERNAL" : "INTERNAL";
+  }
+  if (role === "EXTERNAL") {
+    return "EXTERNAL";
+  }
+  return "INTERNAL";
+}
+
+function normalizeRole(input: UserCreateInput | UserUpdatePatch): UserRole {
+  if (typeof input.role === "string" && input.role.trim()) {
+    return input.role
+      .trim()
+      .toUpperCase()
+      .replace(/[\s-]+/g, "_");
+  }
+  if (input.type === "EXTERNAL" || input.isExternal) {
+    return "EXTERNAL";
+  }
+  return "USER";
+}
+
+function matchesType(user: User, filters?: UserSelectionFilter) {
+  const includeExternal = filters?.includeExternal ?? true;
+  const includeInternal = filters?.includeInternal ?? true;
+
+  if (user.type === "EXTERNAL" && !includeExternal) {
+    return false;
+  }
+  if (user.type === "INTERNAL" && !includeInternal) {
+    return false;
   }
 
-  return value
-    .map((item) => {
-      if (!item || typeof item !== "object") {
-        return null;
-      }
-      const row = item as Partial<UserStub>;
-      if (typeof row.id !== "string" || !row.id.trim() || typeof row.displayName !== "string") {
-        return null;
-      }
-      return {
-        id: row.id,
-        displayName: row.displayName,
-        email: row.email ?? "",
-        isExternal: Boolean(row.isExternal),
-        roleLabel: row.roleLabel ?? ""
-      } satisfies UserStub;
-    })
-    .filter((row): row is UserStub => Boolean(row));
+  return true;
+}
+
+function mergeUser(existing: User, incoming: User) {
+  return {
+    ...existing,
+    ...incoming,
+    companyRole: incoming.companyRole || existing.companyRole
+  };
 }
 
 export function UsersProvider({ children }: { children: React.ReactNode }) {
-  const [users, setUsers] = useState<UserStub[]>(() =>
-    loadJSON<UserStub[]>(STORAGE_KEYS.users, {
-      fallback: initialUsers,
-      migrate: (value) => {
-        const normalized = normalizeUsers(value);
-        return normalized.length ? normalized : initialUsers;
+  const { user: authUser } = useAuth();
+  const [users, setUsers] = useState<User[]>([]);
+
+  const reloadUsers = useCallback(async () => {
+    if (!authUser) {
+      setUsers([]);
+      return [];
+    }
+
+    const nextUsers =
+      authUser.role === "ADMIN"
+        ? await listUsers({ includeArchived: true })
+        : await listUserLookup({ includeArchived: true });
+
+    const sorted = sortUsers(nextUsers);
+    setUsers(sorted);
+    return sorted;
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser) {
+      setUsers([]);
+      return;
+    }
+
+    void reloadUsers().catch(() => {
+      setUsers(sortUsers([authUser]));
+    });
+  }, [authUser, reloadUsers]);
+
+  const getUser = useCallback(
+    (userId?: string | null) => {
+      if (!userId) {
+        return undefined;
       }
-    }) ?? initialUsers
+
+      return users.find((user) => user.id === userId);
+    },
+    [users]
   );
 
-  React.useEffect(() => {
-    saveJSON(STORAGE_KEYS.users, users);
-  }, [users]);
+  const getDisplayName = useCallback(
+    (userId?: string | null) => {
+      const user = getUser(userId);
+      if (!user) {
+        return t("users.unknown");
+      }
+      return getUserDisplayName(user);
+    },
+    [getUser]
+  );
 
-  const getUserLabel = useMemo(() => {
-    return (userId?: string) => {
+  const getUserLabel = useCallback(
+    (userId?: string) => {
       if (!userId) {
         return "";
       }
-      return users.find((user) => user.id === userId)?.displayName ?? "";
-    };
-  }, [users]);
+      const user = getUser(userId);
+      if (!user) {
+        return t("users.unknown");
+      }
+      if (user.isArchived) {
+        return `${getUserDisplayName(user)} (${t("users.archived")})`;
+      }
+      return getUserDisplayName(user);
+    },
+    [getUser]
+  );
 
-  const replaceUsers = useCallback((value: UserStub[]) => {
-    const normalized = normalizeUsers(value);
-    setUsers(normalized.length ? normalized : initialUsers);
+  const setCurrentUserId = useCallback((_userId: string) => {
+    // Legacy compatibility: explicit user switching is disabled with real auth sessions.
+  }, []);
+
+  const currentUserId = authUser?.id ?? "";
+
+  const currentUser = useMemo(() => {
+    if (!authUser) {
+      return undefined;
+    }
+
+    return users.find((user) => user.id === authUser.id) ?? authUser;
+  }, [authUser, users]);
+
+  const addUser = useCallback(async (input: UserCreateInput) => {
+    const role = normalizeRole(input);
+    const type = normalizeType(input, role);
+    const created = await apiCreateUser({
+      firstName: input.firstName.trim(),
+      lastName: input.lastName.trim(),
+      email: input.email.trim(),
+      phone: input.phone?.trim() || undefined,
+      role,
+      type,
+      titleOrPosition: input.titleOrPosition?.trim() || undefined,
+      department: input.department?.trim() || undefined,
+      externalCompany: input.externalCompany?.trim() || undefined,
+      externalOrgId: input.externalOrgId?.trim() || undefined,
+      notes: input.notes?.trim() || undefined,
+      initialPassword: input.initialPassword?.trim() || undefined
+    });
+
+    setUsers((prev) => {
+      const withoutCurrent = prev.filter((user) => user.id !== created.user.id);
+      return sortUsers([created.user, ...withoutCurrent]);
+    });
+
+    return created;
+  }, []);
+
+  const updateUser = useCallback(
+    async (id: string, patch: UserUpdatePatch) => {
+      const existing = users.find((user) => user.id === id);
+      if (!existing) {
+        return null;
+      }
+
+      const role = patch.role ?? normalizeRole({
+        role: existing.role,
+        type: existing.type,
+        isExternal: existing.isExternal
+      });
+      const type = patch.type ?? normalizeType(
+        {
+          type: existing.type,
+          isExternal: existing.isExternal,
+          role: existing.role
+        },
+        role
+      );
+
+      const updated = await apiUpdateUser(id, {
+        firstName: patch.firstName?.trim(),
+        lastName: patch.lastName?.trim(),
+        email: patch.email?.trim(),
+        phone: typeof patch.phone === "string" ? patch.phone.trim() || undefined : undefined,
+        role,
+        type,
+        titleOrPosition:
+          typeof patch.titleOrPosition === "string" ? patch.titleOrPosition.trim() || undefined : undefined,
+        department: typeof patch.department === "string" ? patch.department.trim() || undefined : undefined,
+        externalCompany:
+          typeof patch.externalCompany === "string" ? patch.externalCompany.trim() || undefined : undefined,
+        externalOrgId:
+          typeof patch.externalOrgId === "string" ? patch.externalOrgId.trim() || undefined : undefined,
+        notes: typeof patch.notes === "string" ? patch.notes.trim() || undefined : undefined
+      });
+
+      setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updated) : user))));
+      return updated;
+    },
+    [users]
+  );
+
+  const archiveUser = useCallback(async (id: string) => {
+    const updated = await apiArchiveUser(id);
+    setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updated) : user))));
+    return updated;
+  }, []);
+
+  const restoreUser = useCallback(async (id: string) => {
+    const updated = await apiRestoreUser(id);
+    setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updated) : user))));
+    return updated;
+  }, []);
+
+  const unlockUser = useCallback(async (id: string) => {
+    const updated = await apiUnlockUser(id);
+    setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updated) : user))));
+    return updated;
+  }, []);
+
+  const setMfaEnforced = useCallback(async (id: string, enforced: boolean) => {
+    const updated = await apiSetUserMfaEnforced(id, enforced);
+    setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updated) : user))));
+    return updated;
+  }, []);
+
+  const resetMfa = useCallback(async (id: string) => {
+    const updated = await apiResetUserMfa(id);
+    setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updated) : user))));
+    return updated;
+  }, []);
+
+  const requestReset = useCallback(async (id: string) => {
+    return requestUserPasswordReset(id);
+  }, []);
+
+  const loadAdminUsers = useCallback(async (query: AdminUsersQuery = {}) => {
+    return apiListAdminUsers(query);
+  }, []);
+
+  const listActiveUsers = useCallback(
+    (filters?: UserSelectionFilter) =>
+      users
+        .filter((user) => !user.isArchived)
+        .filter((user) => matchesType(user, filters)),
+    [users]
+  );
+
+  const searchUsers = useCallback(
+    (query: string, filters?: UserSearchFilter) => {
+      const normalizedQuery = query.trim().toLowerCase();
+      return users
+        .filter((user) => (filters?.includeArchived ? true : !user.isArchived))
+        .filter((user) => matchesType(user, filters))
+        .filter((user) => {
+          if (filters?.role && filters.role !== "ALL" && user.role !== filters.role) {
+            return false;
+          }
+          if (filters?.type && filters.type !== "ALL" && user.type !== filters.type) {
+            return false;
+          }
+          if (!normalizedQuery) {
+            return true;
+          }
+
+          const displayName = getUserDisplayName(user).toLowerCase();
+          const email = (user.email || "").toLowerCase();
+          const roleLabel = (user.companyRole || "").toLowerCase();
+
+          return (
+            displayName.includes(normalizedQuery) ||
+            email.includes(normalizedQuery) ||
+            roleLabel.includes(normalizedQuery) ||
+            user.role.toLowerCase().includes(normalizedQuery)
+          );
+        })
+        .sort((a, b) => getUserDisplayName(a).localeCompare(getUserDisplayName(b)));
+    },
+    [users]
+  );
+
+  const replaceUsers = useCallback((value: User[]) => {
+    setUsers(sortUsers(value));
   }, []);
 
   const resetUsers = useCallback(() => {
-    setUsers(initialUsers);
-  }, []);
+    void reloadUsers().catch(() => {
+      if (authUser) {
+        setUsers(sortUsers([authUser]));
+      }
+    });
+  }, [authUser, reloadUsers]);
 
   const value = useMemo(
     () => ({
       users,
-      getUserLabel,
+      currentUserId,
+      currentUser,
+      setCurrentUserId,
+      addUser,
+      updateUser,
+      archiveUser,
+      restoreUser,
+      unlockUser,
+      setMfaEnforced,
+      resetMfa,
+      requestReset,
+      loadAdminUsers,
+      getUser,
+      getDisplayName,
+      listActiveUsers,
+      searchUsers,
       replaceUsers,
-      resetUsers
+      resetUsers,
+      reloadUsers,
+      getUserById: (userId?: string) => getUser(userId),
+      getUserLabel
     }),
-    [getUserLabel, replaceUsers, resetUsers, users]
+    [
+      users,
+      currentUserId,
+      currentUser,
+      setCurrentUserId,
+      addUser,
+      updateUser,
+      archiveUser,
+      restoreUser,
+      unlockUser,
+      setMfaEnforced,
+      resetMfa,
+      requestReset,
+      loadAdminUsers,
+      getUser,
+      getDisplayName,
+      listActiveUsers,
+      searchUsers,
+      replaceUsers,
+      resetUsers,
+      reloadUsers,
+      getUserLabel
+    ]
   );
 
   return <UsersContext.Provider value={value}>{children}</UsersContext.Provider>;
@@ -89,3 +432,5 @@ export function useUsers() {
   }
   return context;
 }
+
+export type { User, UserRole, UserType, AdminUsersQuery, AdminUsersListResult };

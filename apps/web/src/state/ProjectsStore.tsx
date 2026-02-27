@@ -10,6 +10,13 @@ import { ProjectPolicy } from "../policies/ProjectPolicy";
 import { useAuthorization } from "./AuthorizationStore";
 import { useAuditLog } from "./AuditLogStore";
 import { loadJSON, saveJSON, STORAGE_KEYS } from "./persistence";
+import {
+  normalizeRelationIds,
+  sanitizeProjectDependencyIds,
+  sanitizeProjectRelations,
+  validateProjectDependencyCandidate,
+  type ProjectDependencyValidationResult
+} from "./projectRelations";
 
 type ProjectCreateInput = Omit<
   Project,
@@ -20,6 +27,8 @@ type ProjectCreateInput = Omit<
   | "externalParticipants"
   | "participantUserIds"
   | "internalParticipants"
+  | "dependsOnProjectIds"
+  | "referenceLegalDocIds"
   | "isArchived"
   | "archivedAt"
 > & {
@@ -27,6 +36,8 @@ type ProjectCreateInput = Omit<
   externalParticipants?: ExternalParticipant[];
   internalParticipants?: ProjectInternalParticipant[];
   participantUserIds?: string[];
+  dependsOnProjectIds?: string[];
+  referenceLegalDocIds?: string[];
 };
 
 export type ProjectsContextValue = {
@@ -51,6 +62,11 @@ export type ProjectsContextValue = {
   ) => boolean;
   archiveExternalParticipant: (projectId: string, participantId: string) => boolean;
   restoreExternalParticipant: (projectId: string, participantId: string) => boolean;
+  validateDependencyCandidate: (
+    projectId: string,
+    candidateProjectId: string,
+    selectedDependencyIds?: string[]
+  ) => ProjectDependencyValidationResult;
   replaceProjects: (projects: Project[]) => void;
   resetProjects: () => void;
 };
@@ -197,6 +213,8 @@ function normalizeProject(value: Partial<Project>, index: number): Project | nul
     deputyUserId: value.deputyUserId ?? undefined,
     internalParticipants,
     participantUserIds,
+    dependsOnProjectIds: normalizeRelationIds(value.dependsOnProjectIds),
+    referenceLegalDocIds: normalizeRelationIds(value.referenceLegalDocIds),
     externalParticipants,
     attachments,
     archivedAt: value.archivedAt ?? undefined,
@@ -210,26 +228,32 @@ function normalizeProjects(value: unknown): Project[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value
+  const normalized = value
     .map((project, index) => normalizeProject(project as Partial<Project>, index))
     .filter((project): project is Project => Boolean(project));
+  if (!normalized.length) {
+    return [];
+  }
+  return sanitizeProjectRelations(normalized).projects;
 }
 
 function isProjectArchived(project: Project) {
   return Boolean(project.archivedAt || project.isArchived);
 }
 
+const normalizedInitialProjects = sanitizeProjectRelations(initialProjects).projects;
+
 export function ProjectsProvider({ children }: { children: React.ReactNode }) {
   const { actor } = useAuthorization();
   const { logEvent } = useAuditLog();
   const [projects, setProjects] = useState<Project[]>(() =>
     loadJSON<Project[]>(STORAGE_KEYS.projects, {
-      fallback: initialProjects,
+      fallback: normalizedInitialProjects,
       migrate: (value) => {
         const normalized = normalizeProjects(value);
-        return normalized.length ? normalized : initialProjects;
+        return normalized.length ? normalized : normalizedInitialProjects;
       }
-    }) ?? initialProjects
+    }) ?? normalizedInitialProjects
   );
 
   React.useEffect(() => {
@@ -247,6 +271,12 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
         input.internalParticipants && input.internalParticipants.length
           ? input.internalParticipants
           : participantUserIds.map((userId) => ({ userId }));
+      const dependencyIds = sanitizeProjectDependencyIds({
+        projects,
+        projectId: "__draft__",
+        dependencyIds: input.dependsOnProjectIds ?? []
+      }).dependencyIds;
+      const referenceLegalDocIds = normalizeRelationIds(input.referenceLegalDocIds);
 
       const newProject: Project = {
         ...input,
@@ -264,6 +294,8 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
           participantUserIds.length > 0
             ? participantUserIds
             : internalParticipants.map((participant) => participant.userId),
+        dependsOnProjectIds: dependencyIds,
+        referenceLegalDocIds,
         archivedAt: undefined,
         isArchived: false,
         createdAt: timestamp,
@@ -280,7 +312,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       });
       return true;
     },
-    [actor, logEvent]
+    [actor, logEvent, projects]
   );
 
   const updateProject = useCallback(
@@ -298,6 +330,18 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
         internalParticipants: input.internalParticipants,
         participantUserIds: input.participantUserIds
       });
+      const nextDependencyIds =
+        input.dependsOnProjectIds !== undefined
+          ? sanitizeProjectDependencyIds({
+              projects,
+              projectId: id,
+              dependencyIds: input.dependsOnProjectIds
+            }).dependencyIds
+          : currentProject.dependsOnProjectIds;
+      const nextReferenceLegalDocIds =
+        input.referenceLegalDocIds !== undefined
+          ? normalizeRelationIds(input.referenceLegalDocIds)
+          : currentProject.referenceLegalDocIds;
 
       setProjects((prev) =>
         prev.map((project) =>
@@ -328,6 +372,8 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
                         (participant): participant is ExternalParticipant => Boolean(participant)
                       )
                   : project.externalParticipants,
+                dependsOnProjectIds: nextDependencyIds,
+                referenceLegalDocIds: nextReferenceLegalDocIds,
                 updatedAt: timestamp
               }
             : project
@@ -418,6 +464,17 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
     (projectId: string, ownerUserId?: string) =>
       updateProject(projectId, { ownerUserId }),
     [updateProject]
+  );
+
+  const validateDependencyCandidate = useCallback(
+    (projectId: string, candidateProjectId: string, selectedDependencyIds?: string[]) =>
+      validateProjectDependencyCandidate({
+        projects,
+        projectId,
+        candidateProjectId,
+        selectedDependencyIds
+      }),
+    [projects]
   );
 
   const setDeputy = useCallback(
@@ -683,11 +740,11 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
 
   const replaceProjects = useCallback((value: Project[]) => {
     const normalized = normalizeProjects(value);
-    setProjects(normalized.length ? normalized : initialProjects);
+    setProjects(normalized.length ? normalized : normalizedInitialProjects);
   }, []);
 
   const resetProjects = useCallback(() => {
-    setProjects(initialProjects);
+    setProjects(normalizedInitialProjects);
   }, []);
 
   const value = useMemo(
@@ -706,6 +763,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       updateExternalParticipant,
       archiveExternalParticipant,
       restoreExternalParticipant,
+      validateDependencyCandidate,
       replaceProjects,
       resetProjects
     }),
@@ -724,6 +782,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       setDeputy,
       setOwner,
       setParticipants,
+      validateDependencyCandidate,
       updateExternalParticipant,
       updateProject
     ]

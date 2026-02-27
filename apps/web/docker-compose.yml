@@ -1,0 +1,9 @@
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - "8080:80"
+    volumes:
+      - ./public/config.json:/usr/share/nginx/html/config.json:ro

@@ -1,5 +1,10 @@
 import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
-import { obligations as initialObligations, Obligation } from "../data/obligations";
+import {
+  DEFAULT_OBLIGATION_EVIDENCE_REQUIREMENTS,
+  obligations as initialObligations,
+  type Obligation,
+  type ObligationEvidenceRequirements
+} from "../data/obligations";
 import { useAuditLog } from "./AuditLogStore";
 import { loadJSON, saveJSON, STORAGE_KEYS } from "./persistence";
 
@@ -45,6 +50,19 @@ function normalizeObligationInput<
   };
 }
 
+function normalizeEvidenceRequirements(value: unknown): ObligationEvidenceRequirements {
+  if (!value || typeof value !== "object") {
+    return { ...DEFAULT_OBLIGATION_EVIDENCE_REQUIREMENTS };
+  }
+
+  const row = value as Partial<ObligationEvidenceRequirements>;
+  return {
+    requirePhoto: Boolean(row.requirePhoto),
+    requireDocument: Boolean(row.requireDocument),
+    requireReport: Boolean(row.requireReport)
+  };
+}
+
 function normalizeObligation(value: Partial<Obligation>, index: number): Obligation | null {
   if (
     typeof value.id !== "string" ||
@@ -83,9 +101,13 @@ function normalizeObligation(value: Partial<Obligation>, index: number): Obligat
         : undefined,
     ownerUserId: value.ownerUserId ?? undefined,
     deputyUserId: value.deputyUserId ?? undefined,
+    origin: value.origin === "AI_ACCEPTED" ? "AI_ACCEPTED" : value.origin === "MANUAL" ? "MANUAL" : undefined,
+    sourceSuggestionId: value.sourceSuggestionId ?? undefined,
+    sourceRunId: value.sourceRunId ?? undefined,
     criticality: value.criticality ?? undefined,
     emailReminderEnabled: normalizedReminder.emailReminderEnabled,
     emailReminderDaysBefore: normalizedReminder.emailReminderDaysBefore,
+    evidenceRequirements: normalizeEvidenceRequirements(value.evidenceRequirements),
     archivedAt: value.archivedAt ?? undefined,
     isArchived: Boolean(value.isArchived || value.archivedAt),
     createdAt,
@@ -127,6 +149,8 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
       const newObligation: Obligation = {
         ...normalized,
         id: createId(),
+        origin: normalized.origin ?? "MANUAL",
+        evidenceRequirements: normalizeEvidenceRequirements(normalized.evidenceRequirements),
         archivedAt: undefined,
         isArchived: false,
         createdAt: timestamp,
@@ -165,6 +189,7 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
           return {
             ...merged,
             id: obligation.id,
+            evidenceRequirements: normalizeEvidenceRequirements(merged.evidenceRequirements),
             archivedAt: merged.archivedAt,
             isArchived: merged.isArchived,
             createdAt: obligation.createdAt,

@@ -35,6 +35,8 @@ export type Project = {
   deputyUserId?: string;
   internalParticipants: ProjectInternalParticipant[];
   participantUserIds: string[];
+  dependsOnProjectIds: string[];
+  referenceLegalDocIds: string[];
   externalParticipants: ExternalParticipant[];
   attachments: ProjectAttachment[];
   archivedAt?: string;
@@ -61,6 +63,8 @@ export const projects: Project[] = [
     deputyUserId: "u-006",
     internalParticipants: [{ userId: "u-002" }, { userId: "u-007" }],
     participantUserIds: ["u-002", "u-007"],
+    dependsOnProjectIds: [],
+    referenceLegalDocIds: [],
     externalParticipants: [
       {
         id: "ep-001",
@@ -99,6 +103,8 @@ export const projects: Project[] = [
     deputyUserId: "u-008",
     internalParticipants: [{ userId: "u-004" }],
     participantUserIds: ["u-004"],
+    dependsOnProjectIds: ["p-001"],
+    referenceLegalDocIds: ["ld-001", "ld-003"],
     externalParticipants: [
       {
         id: "ep-002",
@@ -128,8 +134,10 @@ export const projects: Project[] = [
     authorityContactId: "contact-002",
     ownerUserId: "u-005",
     deputyUserId: "u-009",
-    internalParticipants: [{ userId: "u-010" }, { userId: "u-011" }],
-    participantUserIds: ["u-010", "u-011"],
+    internalParticipants: [{ userId: "u-005" }, { userId: "u-006" }],
+    participantUserIds: ["u-005", "u-006"],
+    dependsOnProjectIds: ["p-002"],
+    referenceLegalDocIds: ["ld-001", "ld-004"],
     externalParticipants: [],
     attachments: [
       {
@@ -156,9 +164,12 @@ export const projects: Project[] = [
     deputyUserId: "u-009",
     internalParticipants: [{ userId: "u-001" }, { userId: "u-003" }],
     participantUserIds: ["u-001", "u-003"],
+    dependsOnProjectIds: [],
+    referenceLegalDocIds: [],
     externalParticipants: [],
     attachments: [],
-    isArchived: false,
+    archivedAt: "2026-02-22T11:20:00.000Z",
+    isArchived: true,
     createdAt: seedTimestamp,
     updatedAt: "2026-02-21T16:45:00.000Z"
   }

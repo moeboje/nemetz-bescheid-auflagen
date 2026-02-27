@@ -1,3 +1,5 @@
+import type { Evidence } from "../types/evidence";
+
 export type DeadlineStatus = "OPEN" | "DONE" | "OVERDUE";
 export type DeadlineStoredStatus = Exclude<DeadlineStatus, "OVERDUE">;
 
@@ -14,6 +16,9 @@ export type Deadline = {
   deputyUserId?: string;
   emailReminderEnabled: boolean;
   emailReminderDaysBefore?: number;
+  completedAt?: string;
+  completedByUserId?: string;
+  evidence?: Evidence[];
   archivedAt?: string;
   isArchived: boolean;
   createdAt: string;

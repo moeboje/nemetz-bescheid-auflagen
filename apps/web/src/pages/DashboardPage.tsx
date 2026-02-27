@@ -1,16 +1,21 @@
 import React, { useMemo } from "react";
 import { Breadcrumbs, Card, DataTable, StatusDot } from "@nemetz/ui";
 import { t } from "../i18n";
+import HelpHintCard from "../components/HelpHintCard";
+import { useRuntimeConfig } from "../config/runtimeConfig";
 import { useTasks } from "../state/TasksStore";
 import { useDeadlines } from "../state/DeadlinesStore";
+import { useNotifications } from "../state/NotificationsStore";
 
 const statusVariant = {
   OVERDUE: "danger"
 } as const;
 
 export default function DashboardPage() {
+  const runtimeConfig = useRuntimeConfig();
   const { tasks } = useTasks();
   const { deadlines, getDeadlineStatus } = useDeadlines();
+  const { activeNotifications } = useNotifications();
 
   const overdueTasks = useMemo(
     () => tasks.filter((task) => task.status === "OVERDUE").slice(0, 5),
@@ -90,6 +95,26 @@ export default function DashboardPage() {
     }
   ];
 
+  const notificationColumns = [
+    {
+      key: "createdAt",
+      header: t("notifications.table.createdAt"),
+      render: (row: (typeof activeNotifications)[number]) =>
+        row.createdAt.slice(0, 16).replace("T", " ")
+    },
+    {
+      key: "title",
+      header: t("notifications.table.title"),
+      render: (row: (typeof activeNotifications)[number]) => row.title
+    },
+    {
+      key: "body",
+      header: t("notifications.table.body"),
+      render: (row: (typeof activeNotifications)[number]) =>
+        row.body || t("common.notAvailable")
+    }
+  ];
+
   return (
     <div className="page">
       <div className="pageHeader">
@@ -104,6 +129,19 @@ export default function DashboardPage() {
           <h1 className="pageTitle">{t("dashboard.title")}</h1>
         </div>
       </div>
+
+      {runtimeConfig.features.enableHelpHints ? (
+        <HelpHintCard
+          hintId="hint.dashboard"
+          titleKey="helpHints.dashboard.title"
+          bulletsKeys={[
+            "helpHints.dashboard.bullets.1",
+            "helpHints.dashboard.bullets.2",
+            "helpHints.dashboard.bullets.3"
+          ]}
+          link={{ labelKey: "common.openHelp", to: "/help" }}
+        />
+      ) : null}
 
       <div className="cardGrid">
         {stats.map((stat) => (
@@ -121,6 +159,17 @@ export default function DashboardPage() {
           <h2 className="sectionTitle">{t("dashboard.overdue.title")}</h2>
         </div>
         <DataTable columns={columns} data={overdueTasks} getRowKey={(task) => task.id} />
+      </div>
+
+      <div className="tableSection">
+        <div className="sectionHeader">
+          <h2 className="sectionTitle">{t("dashboard.notifications.title")}</h2>
+        </div>
+        <DataTable
+          columns={notificationColumns}
+          data={activeNotifications.slice(0, 5)}
+          getRowKey={(notification) => notification.id}
+        />
       </div>
     </div>
   );

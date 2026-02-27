@@ -1,3 +1,5 @@
+import { isSafeModeActive } from "./safeMode";
+
 export const STORAGE_VERSION = 1;
 
 const SAVE_DEBOUNCE_MS = 250;
@@ -82,7 +84,10 @@ export const STORAGE_KEYS = {
   deadlines: makeStorageKey("deadlines"),
   taskState: makeStorageKey("taskState"),
   auditLog: makeStorageKey("auditLog"),
-  users: makeStorageKey("users")
+  users: makeStorageKey("users"),
+  currentUserId: makeStorageKey("currentUserId"),
+  notifications: makeStorageKey("notifications"),
+  notificationsLastTickAt: makeStorageKey("notificationsLastTickAt")
 } as const;
 
 export function safeParse<T = unknown>(value: string): T | null {
@@ -103,7 +108,7 @@ export function safeStringify(value: unknown): string | null {
 
 function saveWithEnvelope<T>(key: string, data: T) {
   const serialized = safeStringify(buildPayload(data));
-  if (!serialized || typeof window === "undefined") {
+  if (!serialized || typeof window === "undefined" || isSafeModeActive()) {
     return;
   }
   try {
@@ -111,6 +116,60 @@ function saveWithEnvelope<T>(key: string, data: T) {
   } catch {
     // ignore browser storage errors in prototype mode
   }
+}
+
+function migrateObjectToV1(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => migrateObjectToV1(entry));
+  }
+
+  if (!isObject(value)) {
+    return value;
+  }
+
+  const next: Record<string, unknown> = {};
+  Object.entries(value).forEach(([key, rawValue]) => {
+    const migratedValue = migrateObjectToV1(rawValue);
+    let mappedKey = key;
+    if (key === "reminderEnabled") {
+      mappedKey = "emailReminderEnabled";
+    } else if (key === "reminderDaysBefore") {
+      mappedKey = "emailReminderDaysBefore";
+    } else if (key === "archived") {
+      mappedKey = "isArchived";
+    }
+    next[mappedKey] = migratedValue;
+  });
+
+  if (
+    typeof next.emailReminderEnabled === "boolean" &&
+    next.emailReminderEnabled &&
+    typeof next.emailReminderDaysBefore !== "number"
+  ) {
+    next.emailReminderDaysBefore = 7;
+  }
+
+  if (next.emailReminderEnabled === false) {
+    next.emailReminderDaysBefore = undefined;
+  }
+
+  if (typeof next.isArchived !== "boolean" && typeof next.archivedAt === "string") {
+    next.isArchived = true;
+  }
+
+  return next;
+}
+
+export function migratePayload(versionFrom: number, versionTo: number, value: unknown): unknown {
+  if (versionFrom > versionTo) {
+    return value;
+  }
+
+  let migrated = value;
+  if (versionFrom < 1 && versionTo >= 1) {
+    migrated = migrateObjectToV1(migrated);
+  }
+  return migrated;
 }
 
 export function migrateStorage<T>(
@@ -121,18 +180,21 @@ export function migrateStorage<T>(
   const migrate = options?.migrate;
   const fromVersion = payload.version;
 
-  if (!migrate) {
-    if (fromVersion !== STORAGE_VERSION) {
-      return null;
-    }
-    return payload.data as T;
+  if (fromVersion > STORAGE_VERSION) {
+    return null;
   }
 
-  return migrate(payload.data, fromVersion);
+  const migratedPayload = migratePayload(fromVersion, STORAGE_VERSION, payload.data);
+
+  if (!migrate) {
+    return migratedPayload as T;
+  }
+
+  return migrate(migratedPayload, fromVersion);
 }
 
 export function loadJSON<T>(key: string, options?: MigrationOptions<T>): T | null {
-  if (typeof window === "undefined") {
+  if (typeof window === "undefined" || isSafeModeActive()) {
     return options?.fallback ?? null;
   }
 
@@ -164,7 +226,7 @@ export function loadJSON<T>(key: string, options?: MigrationOptions<T>): T | nul
 }
 
 export function saveJSON<T>(key: string, data: T) {
-  if (typeof window === "undefined") {
+  if (typeof window === "undefined" || isSafeModeActive()) {
     return;
   }
 

@@ -1,3 +1,19 @@
+export type ObligationEvidenceRequirements = {
+  requirePhoto: boolean;
+  requireDocument: boolean;
+  requireReport: boolean;
+};
+
+export const DEFAULT_OBLIGATION_EVIDENCE_REQUIREMENTS: ObligationEvidenceRequirements = {
+  requirePhoto: false,
+  requireDocument: false,
+  requireReport: false
+};
+
+export function cloneDefaultObligationEvidenceRequirements(): ObligationEvidenceRequirements {
+  return { ...DEFAULT_OBLIGATION_EVIDENCE_REQUIREMENTS };
+}
+
 export type Obligation = {
   id: string;
   legalDocId: string;
@@ -10,9 +26,13 @@ export type Obligation = {
   intervalValue?: number;
   ownerUserId?: string;
   deputyUserId?: string;
+  origin?: "MANUAL" | "AI_ACCEPTED";
+  sourceSuggestionId?: string;
+  sourceRunId?: string;
   criticality?: "LOW" | "MEDIUM" | "HIGH";
   emailReminderEnabled: boolean;
   emailReminderDaysBefore?: number;
+  evidenceRequirements: ObligationEvidenceRequirements;
   archivedAt?: string;
   isArchived: boolean;
   createdAt: string;
@@ -38,6 +58,7 @@ export const obligations: Obligation[] = [
     criticality: "HIGH",
     emailReminderEnabled: true,
     emailReminderDaysBefore: 30,
+    evidenceRequirements: cloneDefaultObligationEvidenceRequirements(),
     isArchived: false,
     createdAt: seedTimestamp,
     updatedAt: "2026-02-18T08:00:00.000Z"
@@ -58,6 +79,7 @@ export const obligations: Obligation[] = [
     criticality: "MEDIUM",
     emailReminderEnabled: true,
     emailReminderDaysBefore: 14,
+    evidenceRequirements: cloneDefaultObligationEvidenceRequirements(),
     isArchived: false,
     createdAt: seedTimestamp,
     updatedAt: "2026-02-17T08:00:00.000Z"
@@ -78,6 +100,7 @@ export const obligations: Obligation[] = [
     criticality: "HIGH",
     emailReminderEnabled: true,
     emailReminderDaysBefore: 7,
+    evidenceRequirements: cloneDefaultObligationEvidenceRequirements(),
     isArchived: false,
     createdAt: seedTimestamp,
     updatedAt: "2026-02-16T08:00:00.000Z"
@@ -98,6 +121,7 @@ export const obligations: Obligation[] = [
     criticality: "HIGH",
     emailReminderEnabled: true,
     emailReminderDaysBefore: 30,
+    evidenceRequirements: cloneDefaultObligationEvidenceRequirements(),
     isArchived: false,
     createdAt: seedTimestamp,
     updatedAt: "2026-02-15T08:00:00.000Z"
@@ -118,6 +142,7 @@ export const obligations: Obligation[] = [
     criticality: "LOW",
     emailReminderEnabled: true,
     emailReminderDaysBefore: 14,
+    evidenceRequirements: cloneDefaultObligationEvidenceRequirements(),
     isArchived: false,
     createdAt: seedTimestamp,
     updatedAt: "2026-02-14T08:00:00.000Z"

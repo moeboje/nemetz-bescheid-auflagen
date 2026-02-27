@@ -1,0 +1,207 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                  String               @id @default(cuid())
+  firstName           String
+  lastName            String
+  email               String               @unique
+  phone               String?
+  role                String
+  type                String
+  titleOrPosition     String?
+  department          String?
+  externalCompany     String?
+  externalOrgId       String?
+  notes               String?
+  isArchived          Boolean              @default(false)
+  passwordHash        String
+  passwordUpdatedAt   DateTime             @default(now())
+  lastPasswordResetAt DateTime?
+  mustChangePassword  Boolean              @default(false)
+  invitedAt           DateTime?
+  failedLoginCount    Int                  @default(0)
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
+  mfaEnabled          Boolean              @default(false)
+  mfaEnforced         Boolean              @default(false)
+  mfaTotpSecretEnc    String?
+  mfaVerifiedAt       DateTime?
+  mfaRecoveryCodesHashJson String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  sessions            Session[]
+  resetTokens         PasswordResetToken[]
+  mfaPendings         MfaPending[]
+  mfaChallenges       MfaChallenge[]
+  auditLogsAsActor    AuditLog[]           @relation("AuditActor")
+  auditLogsAsTarget   AuditLog[]           @relation("AuditTarget")
+  documentsCreated    Document[]
+  externalOrg         ExternalOrganization? @relation(fields: [externalOrgId], references: [id], onDelete: SetNull)
+
+  @@index([isArchived])
+  @@index([role])
+  @@index([type])
+  @@index([externalOrgId])
+}
+
+model Document {
+  id               String   @id @default(cuid())
+  ownerType        String
+  ownerId          String
+  filename         String
+  originalFilename String?
+  mimeType         String
+  sizeBytes        Int
+  storagePath      String
+  sha256           String?
+  isArchived       Boolean  @default(false)
+  createdByUserId  String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  createdByUser    User?    @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([ownerType, ownerId])
+  @@index([createdAt])
+}
+
+model Comment {
+  id              String            @id @default(cuid())
+  entityType      String
+  entityId        String
+  authorUserId    String
+  body            String
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  isEdited        Boolean           @default(false)
+  editedAt        DateTime?
+  editedByUserId  String?
+  deletedAt       DateTime?
+  deletedByUserId String?
+  revisions       CommentRevision[]
+
+  @@index([entityType, entityId])
+  @@index([authorUserId])
+  @@index([deletedAt])
+}
+
+model CommentRevision {
+  id              String   @id @default(cuid())
+  commentId       String
+  revisionNo      Int
+  body            String
+  createdAt       DateTime @default(now())
+  createdByUserId String
+  comment         Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@unique([commentId, revisionNo])
+  @@index([commentId])
+}
+
+model Role {
+  id            String   @id @default(cuid())
+  key           String   @unique
+  labelDe       String
+  descriptionDe String?
+  isSystem      Boolean  @default(false)
+  isArchived    Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([isArchived])
+  @@index([labelDe])
+}
+
+model ExternalOrganization {
+  id         String   @id @default(cuid())
+  name       String   @unique
+  type       String
+  phone      String?
+  email      String?
+  address    String?
+  isArchived Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  users      User[]
+
+  @@index([isArchived])
+  @@index([type])
+}
+
+model MfaPending {
+  id        String   @id @default(cuid())
+  userId    String
+  secretEnc String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model MfaChallenge {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  ipHash    String?
+  uaHash    String?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+  ip        String?
+  userAgent String?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorUserId  String?
+  targetUserId String?
+  action       String
+  ip           String?
+  userAgent    String?
+  metadataJson String?
+  createdAt    DateTime @default(now())
+  actorUser    User?    @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  targetUser   User?    @relation("AuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorUserId])
+  @@index([targetUserId])
+  @@index([action])
+  @@index([createdAt])
+}

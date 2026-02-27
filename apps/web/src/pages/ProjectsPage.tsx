@@ -11,6 +11,8 @@ import {
 } from "@nemetz/ui";
 import { t } from "../i18n";
 import { EyeIcon } from "../components/Icons";
+import HelpHintCard from "../components/HelpHintCard";
+import { useRuntimeConfig } from "../config/runtimeConfig";
 import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
 import { useAuthorities } from "../state/AuthoritiesStore";
@@ -23,6 +25,7 @@ import ProjectModal from "../components/ProjectModal";
 
 export default function ProjectsPage() {
   const navigate = useNavigate();
+  const runtimeConfig = useRuntimeConfig();
   const { actor } = useAuthorization();
   const { projects } = useProjects();
   const { companies, sites, facilities, getScopeLabel } = useScopes();
@@ -150,6 +153,18 @@ export default function ProjectsPage() {
         legalDocs.filter((doc) => doc.projectId === project.id).length
     },
     {
+      key: "dependsOnCount",
+      header: t("projects.table.dependsOnCount"),
+      render: (project: (typeof projects)[number]) =>
+        (project.dependsOnProjectIds ?? []).length
+    },
+    {
+      key: "legalRefsCount",
+      header: t("projects.table.legalRefsCount"),
+      render: (project: (typeof projects)[number]) =>
+        (project.referenceLegalDocIds ?? []).length
+    },
+    {
       key: "openTasksCount",
       header: t("projects.table.openTasks"),
       render: (project: (typeof projects)[number]) =>
@@ -187,6 +202,19 @@ export default function ProjectsPage() {
           {t("projects.action.new")}
         </Button>
       </div>
+
+      {runtimeConfig.features.enableHelpHints ? (
+        <HelpHintCard
+          hintId="hint.projects"
+          titleKey="helpHints.projects.title"
+          bulletsKeys={[
+            "helpHints.projects.bullets.1",
+            "helpHints.projects.bullets.2",
+            "helpHints.projects.bullets.3"
+          ]}
+          link={{ labelKey: "common.openHelp", to: "/help#workflows" }}
+        />
+      ) : null}
 
       <Card>
         <div className="filterRowFive">

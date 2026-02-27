@@ -18,6 +18,33 @@ function getActionLabel(action: AuditLogEntry["action"]) {
   if (action === "STATUS_CHANGED") {
     return t("audit.actions.statusChanged");
   }
+  if (action === "EVIDENCE_ADDED") {
+    return t("audit.actions.evidenceAdded");
+  }
+  if (action === "TASK_COMPLETED") {
+    return t("audit.actions.taskCompleted");
+  }
+  if (action === "NOTIFICATION_DISMISSED") {
+    return t("audit.actions.notificationDismissed");
+  }
+  if (action === "NOTIFICATION_SNOOZED") {
+    return t("audit.actions.notificationSnoozed");
+  }
+  if (action === "AI_RUN_STARTED") {
+    return t("audit.actions.aiRunStarted");
+  }
+  if (action === "AI_RUN_COMPLETED") {
+    return t("audit.actions.aiRunCompleted");
+  }
+  if (action === "AI_FIELDS_APPLIED") {
+    return t("audit.actions.aiFieldsApplied");
+  }
+  if (action === "AI_SUGGESTION_ACCEPTED") {
+    return t("audit.actions.aiSuggestionAccepted");
+  }
+  if (action === "AI_SUGGESTION_REJECTED") {
+    return t("audit.actions.aiSuggestionRejected");
+  }
   return t("audit.actions.cleanup");
 }
 

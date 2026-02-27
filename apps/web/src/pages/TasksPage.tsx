@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   Breadcrumbs,
   Button,
@@ -12,12 +12,18 @@ import {
   IconButton
 } from "@nemetz/ui";
 import { t } from "../i18n";
+import { useRuntimeConfig } from "../config/runtimeConfig";
 import { EyeIcon } from "../components/Icons";
+import HelpHintCard from "../components/HelpHintCard";
+import { exportTasksToIcs } from "../services/icsExport";
 import { useTasks } from "../state/TasksStore";
 import { useProjects } from "../state/ProjectsStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useScopes } from "../state/ScopesStore";
-import { useUsers } from "../state/UsersStore";
+import { useAuthorization } from "../state/AuthorizationStore";
+import EvidenceListModal from "../components/EvidenceListModal";
+import TaskCompleteModal from "../components/TaskCompleteModal";
+import UserSelect from "../components/UserSelect";
 
 const statusVariant = {
   OPEN: "warning",
@@ -31,23 +37,37 @@ const levelVariant = {
   RECOMMENDED: "warning"
 } as const;
 
+function getPeriodLimit(period: string) {
+  if (period !== "30" && period !== "90" && period !== "365") {
+    return "";
+  }
+  const date = new Date();
+  date.setDate(date.getDate() + Number(period));
+  return date.toISOString().slice(0, 10);
+}
+
 export default function TasksPage() {
   const navigate = useNavigate();
-  const { tasks, markTaskDone, reopenTask } = useTasks();
+  const location = useLocation();
+  const runtimeConfig = useRuntimeConfig();
+  const { tasks, markTaskDoneWithEvidence, reopenTask } = useTasks();
   const { projects } = useProjects();
   const { legalDocs } = useLegalDocs();
   const { companies, sites, facilities, getScopeLabel } = useScopes();
-  const { users } = useUsers();
+  const { actor, permissions } = useAuthorization();
+  const [completionTaskId, setCompletionTaskId] = useState<string | null>(null);
+  const [evidenceTaskId, setEvidenceTaskId] = useState<string | null>(null);
 
   const [filters, setFilters] = useState({
     search: "",
     status: "",
     type: "",
     level: "",
+    period: "365",
     scopeLabel: "",
     projectId: "",
     legalDocId: "",
-    assignee: ""
+    assigneeUserId: ""
   });
 
   const projectOptions = useMemo(
@@ -58,11 +78,6 @@ export default function TasksPage() {
   const legalDocOptions = useMemo(
     () => legalDocs.map((doc) => ({ value: doc.id, label: doc.title })),
     [legalDocs]
-  );
-
-  const assigneeOptions = useMemo(
-    () => users.map((user) => ({ value: user.displayName, label: user.displayName })),
-    [users]
   );
 
   const scopeOptions = useMemo(() => {
@@ -90,7 +105,13 @@ export default function TasksPage() {
   }, [companies, facilities, getScopeLabel, sites]);
 
   const filteredTasks = useMemo(() => {
+    const obligationQuery = new URLSearchParams(location.search).get("obligationId");
+    const periodLimit = getPeriodLimit(filters.period);
+    const today = new Date().toISOString().slice(0, 10);
     return tasks.filter((task) => {
+      if (actor.isExternal && task.assignedToUserId !== actor.userId) {
+        return false;
+      }
       const matchesSearch = filters.search
         ? task.title.toLowerCase().includes(filters.search.toLowerCase())
         : true;
@@ -100,7 +121,13 @@ export default function TasksPage() {
       const matchesScope = filters.scopeLabel ? task.scopeLabel === filters.scopeLabel : true;
       const matchesProject = filters.projectId ? task.projectId === filters.projectId : true;
       const matchesLegalDoc = filters.legalDocId ? task.legalDocId === filters.legalDocId : true;
-      const matchesAssignee = filters.assignee ? task.assignedTo === filters.assignee : true;
+      const matchesAssignee = filters.assigneeUserId
+        ? task.assignedToUserId === filters.assigneeUserId
+        : true;
+      const matchesPeriod = periodLimit ? task.dueDate >= today && task.dueDate <= periodLimit : true;
+      const matchesObligationQuery = obligationQuery
+        ? task.obligationId === obligationQuery
+        : true;
       return (
         matchesSearch &&
         matchesStatus &&
@@ -109,10 +136,35 @@ export default function TasksPage() {
         matchesScope &&
         matchesProject &&
         matchesLegalDoc &&
-        matchesAssignee
+        matchesAssignee &&
+        matchesPeriod &&
+        matchesObligationQuery
       );
     });
-  }, [filters, tasks]);
+  }, [actor.isExternal, actor.userId, filters, location.search, tasks]);
+
+  const projectTitleById = useMemo(
+    () => new Map(projects.map((project) => [project.id, project.title] as const)),
+    [projects]
+  );
+
+  const completionTask = useMemo(
+    () => tasks.find((task) => task.id === completionTaskId),
+    [completionTaskId, tasks]
+  );
+
+  const handleCalendarExport = () => {
+    exportTasksToIcs(
+      filteredTasks.map((task) => ({
+        ...task,
+        projectTitle: task.projectId ? projectTitleById.get(task.projectId) : ""
+      })),
+      {
+        calendarName: t("tasks.action.calendarExport"),
+        baseUrl: typeof window !== "undefined" ? window.location.origin : ""
+      }
+    );
+  };
 
   const columns = [
     {
@@ -168,7 +220,8 @@ export default function TasksPage() {
     {
       key: "assignee",
       header: t("tasks.table.assignee"),
-      render: (task: (typeof tasks)[number]) => task.assignedTo || t("common.notAssigned")
+      render: (task: (typeof tasks)[number]) =>
+        task.assignedToLabel || task.assignedTo || t("tasks.unassigned")
     },
     {
       key: "scope",
@@ -190,10 +243,28 @@ export default function TasksPage() {
           />
           <h1 className="pageTitle">{t("tasks.title")}</h1>
         </div>
+        {runtimeConfig.features.enableCalendarExport ? (
+          <Button variant="secondary" onClick={handleCalendarExport}>
+            {t("tasks.action.calendarExport")}
+          </Button>
+        ) : null}
       </div>
 
+      {runtimeConfig.features.enableHelpHints ? (
+        <HelpHintCard
+          hintId="hint.tasks"
+          titleKey="helpHints.tasks.title"
+          bulletsKeys={[
+            "helpHints.tasks.bullets.1",
+            "helpHints.tasks.bullets.2",
+            "helpHints.tasks.bullets.3"
+          ]}
+          link={{ labelKey: "common.openHelp", to: "/help#workflows" }}
+        />
+      ) : null}
+
       <Card>
-        <div className="filterRowEight">
+        <div className="filterRowNine">
           <Input
             placeholder={t("tasks.filters.search")}
             value={filters.search}
@@ -237,6 +308,18 @@ export default function TasksPage() {
             }
           />
           <Select
+            options={[
+              { value: "", label: t("tasks.filters.period") },
+              { value: "30", label: t("tasks.filters.period.30") },
+              { value: "90", label: t("tasks.filters.period.90") },
+              { value: "365", label: t("reports.filters.period.365") }
+            ]}
+            value={filters.period}
+            onChange={(event) =>
+              setFilters((prev) => ({ ...prev, period: event.target.value }))
+            }
+          />
+          <Select
             options={[{ value: "", label: t("tasks.filters.project") }, ...projectOptions]}
             value={filters.projectId}
             onChange={(event) =>
@@ -257,11 +340,13 @@ export default function TasksPage() {
               setFilters((prev) => ({ ...prev, scopeLabel: event.target.value }))
             }
           />
-          <Select
-            options={[{ value: "", label: t("tasks.filters.assignee") }, ...assigneeOptions]}
-            value={filters.assignee}
-            onChange={(event) =>
-              setFilters((prev) => ({ ...prev, assignee: event.target.value }))
+          <UserSelect
+            value={filters.assigneeUserId || null}
+            includeExternal
+            allowArchivedCurrentValue
+            placeholderKey="tasks.filters.assignee"
+            onChange={(userId) =>
+              setFilters((prev) => ({ ...prev, assigneeUserId: userId ?? "" }))
             }
           />
         </div>
@@ -286,16 +371,47 @@ export default function TasksPage() {
               <EyeIcon />
             </IconButton>
             {task.status !== "DONE" ? (
-              <Button size="sm" variant="secondary" onClick={() => markTaskDone(task.id)}>
-                {t("tasks.action.done")}
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={!permissions.canCompleteTasks}
+                onClick={() => setCompletionTaskId(task.id)}
+              >
+                {t("tasks.actions.complete")}
               </Button>
             ) : (
-              <Button size="sm" variant="ghost" onClick={() => reopenTask(task.id)}>
-                {t("tasks.action.reopen")}
-              </Button>
+              <>
+                <Button size="sm" variant="ghost" onClick={() => reopenTask(task.id)}>
+                  {t("tasks.action.reopen")}
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => setEvidenceTaskId(task.id)}>
+                  {t("tasks.actions.viewEvidence")}
+                </Button>
+              </>
             )}
           </div>
         )}
+      />
+
+      <TaskCompleteModal
+        open={Boolean(completionTaskId)}
+        task={completionTask}
+        onClose={() => setCompletionTaskId(null)}
+        onSaved={(input) => {
+          if (!completionTaskId) {
+            return;
+          }
+          markTaskDoneWithEvidence(completionTaskId, input);
+        }}
+      />
+
+      <EvidenceListModal
+        open={Boolean(evidenceTaskId)}
+        onClose={() => setEvidenceTaskId(null)}
+        title={t("tasks.actions.viewEvidence")}
+        evidence={tasks.find((task) => task.id === evidenceTaskId)?.evidence ?? []}
+        ownerType="TASK_EVIDENCE"
+        ownerId={evidenceTaskId ?? ""}
       />
     </div>
   );

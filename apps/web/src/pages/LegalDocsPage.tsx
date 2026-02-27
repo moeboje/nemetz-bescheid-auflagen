@@ -11,18 +11,23 @@ import {
 } from "@nemetz/ui";
 import { t } from "../i18n";
 import { EyeIcon, EditIcon } from "../components/Icons";
+import HelpHintCard from "../components/HelpHintCard";
+import { useRuntimeConfig } from "../config/runtimeConfig";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
 import { useObligations } from "../state/ObligationsStore";
+import { useAuthorization } from "../state/AuthorizationStore";
 import LegalDocModal from "../components/LegalDocModal";
 
 export default function LegalDocsPage() {
   const navigate = useNavigate();
+  const runtimeConfig = useRuntimeConfig();
   const { legalDocs, getEffectiveScopeLabel } = useLegalDocs();
   const { projects } = useProjects();
   const { companies, sites, facilities, getScopeLabel } = useScopes();
   const { obligations } = useObligations();
+  const { permissions } = useAuthorization();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
   const [filters, setFilters] = useState({
@@ -142,8 +147,26 @@ export default function LegalDocsPage() {
           />
           <h1 className="pageTitle">{t("legalDocs.title")}</h1>
         </div>
-        <Button onClick={() => setModalOpen(true)}>{t("legalDocs.action.new")}</Button>
+        <Button
+          disabled={!permissions.canEditLegalDocs}
+          onClick={() => setModalOpen(true)}
+        >
+          {t("legalDocs.action.new")}
+        </Button>
       </div>
+
+      {runtimeConfig.features.enableHelpHints ? (
+        <HelpHintCard
+          hintId="hint.legalDocs"
+          titleKey="helpHints.legalDocs.title"
+          bulletsKeys={[
+            "helpHints.legalDocs.bullets.1",
+            "helpHints.legalDocs.bullets.2",
+            "helpHints.legalDocs.bullets.3"
+          ]}
+          link={{ labelKey: "common.openHelp", to: "/help#workflows" }}
+        />
+      ) : null}
 
       <Card>
         <div className="filterRowFour">
@@ -210,6 +233,7 @@ export default function LegalDocsPage() {
             </IconButton>
             <IconButton
               ariaLabel={t("legalDocs.action.edit")}
+              disabled={!permissions.canEditLegalDocs}
               onClick={() => {
                 setEditingDocId(doc.id);
                 setModalOpen(true);

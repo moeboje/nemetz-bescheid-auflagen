@@ -6,12 +6,19 @@ export type AppShellProps = {
   sidebar: React.ReactNode;
   topbar?: React.ReactNode;
   children: React.ReactNode;
+  sidebarCollapsed?: boolean;
   className?: string;
 };
 
-export function AppShell({ sidebar, topbar, children, className }: AppShellProps) {
+export function AppShell({
+  sidebar,
+  topbar,
+  children,
+  sidebarCollapsed = false,
+  className
+}: AppShellProps) {
   return (
-    <div className={cx(styles.shell, className)}>
+    <div className={cx(styles.shell, sidebarCollapsed && styles.collapsed, className)}>
       <aside className={styles.sidebar}>{sidebar}</aside>
       <div className={styles.main}>
         {topbar ? <div className={styles.topbar}>{topbar}</div> : null}

@@ -31,6 +31,11 @@
   font: inherit;
 }
 
+.navItemCollapsed {
+  justify-content: center;
+  padding-inline: var(--space-2);
+}
+
 .navItem:hover {
   background: var(--color-hover);
 }
@@ -53,4 +58,8 @@
 
 .label {
   white-space: nowrap;
+}
+
+.labelCollapsed {
+  display: none;
 }

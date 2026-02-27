@@ -8,6 +8,9 @@ import { buildObligationTaskInstanceId, useTaskState } from "./TaskStateStore";
 import { useUsers } from "./UsersStore";
 import type { Deadline } from "./DeadlinesStore";
 import type { Obligation } from "./ObligationsStore";
+import type { AttachmentMeta } from "../types/attachments";
+import type { Evidence, EvidenceOutcome } from "../types/evidence";
+import { t } from "../i18n";
 
 export type TaskType = "OBLIGATION" | "DEADLINE";
 export type TaskStatus = "OPEN" | "IN_PROGRESS" | "DONE" | "OVERDUE";
@@ -21,13 +24,20 @@ export type Task = {
   title: string;
   status: TaskStatus;
   dueDate: string;
+  assignedToUserId?: string;
+  assignedToLabel?: string;
   assignedTo?: string;
+  deputyUserId?: string;
+  deputyLabel?: string;
   deputyId?: string;
   obligationLevel?: "MANDATORY" | "RECOMMENDED";
   scopeLabel: string;
   projectId?: string;
   legalDocId?: string;
   completedAt?: string;
+  completedByUserId?: string;
+  evidence?: Evidence[];
+  requiredEvidence?: Obligation["evidenceRequirements"];
 };
 
 type TaskSeed = Omit<
@@ -88,7 +98,8 @@ export function generateTasksFromObligations(
           assignedToUserId: obligation.ownerUserId,
           deputyUserId: obligation.deputyUserId,
           obligationLevel: obligation.level,
-          legalDocId: obligation.legalDocId
+          legalDocId: obligation.legalDocId,
+          requiredEvidence: obligation.evidenceRequirements
         });
       };
 
@@ -150,6 +161,10 @@ export type TasksContextValue = {
   tasks: Task[];
   setTaskStatus: (taskId: string, status: TaskStatusInput) => void;
   markTaskDone: (taskId: string) => void;
+  markTaskDoneWithEvidence: (
+    taskId: string,
+    input: { note?: string; outcome?: EvidenceOutcome; attachments: AttachmentMeta[] }
+  ) => void;
   reopenTask: (taskId: string) => void;
 };
 
@@ -161,13 +176,18 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
     deadlines,
     getDeadlineStatus,
     markDeadlineDone,
+    markDeadlineDoneWithEvidence,
     reopenDeadline
   } = useDeadlines();
   const { legalDocs, getEffectiveScopeForLegalDoc } = useLegalDocs();
   const { projects } = useProjects();
   const { getScopeLabel } = useScopes();
-  const { getUserLabel } = useUsers();
-  const { taskState, setTaskStatus: setObligationTaskStatus } = useTaskState();
+  const { getDisplayName, getUser } = useUsers();
+  const {
+    taskState,
+    setTaskStatus: setObligationTaskStatus,
+    markDoneWithEvidence: markObligationDoneWithEvidence
+  } = useTaskState();
 
   const setTaskStatus = useCallback(
     (taskId: string, status: TaskStatusInput) => {
@@ -190,6 +210,21 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
     [setTaskStatus]
   );
 
+  const markTaskDoneWithEvidence = useCallback(
+    (
+      taskId: string,
+      input: { note?: string; outcome?: EvidenceOutcome; attachments: AttachmentMeta[] }
+    ) => {
+      const deadlineId = parseDeadlineTaskId(taskId);
+      if (deadlineId) {
+        markDeadlineDoneWithEvidence(deadlineId, input);
+        return;
+      }
+      markObligationDoneWithEvidence(taskId, input);
+    },
+    [markDeadlineDoneWithEvidence, markObligationDoneWithEvidence]
+  );
+
   const reopenTask = useCallback(
     (taskId: string) => setTaskStatus(taskId, "OPEN"),
     [setTaskStatus]
@@ -208,9 +243,13 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
         let scopeLabel = "";
         let status: TaskStatus = "OPEN";
         let completedAt: string | undefined;
+        let completedByUserId: string | undefined;
+        let evidence: Evidence[] | undefined;
+        let requiredEvidence: Obligation["evidenceRequirements"] | undefined;
 
         if (seed.type === "OBLIGATION") {
           const doc = legalDocs.find((item) => item.id === seed.legalDocId);
+          const obligation = obligations.find((item) => item.id === seed.obligationId);
           legalDocId = doc?.id;
           projectId = doc?.projectId;
           if (doc) {
@@ -222,13 +261,18 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
           const stored = taskState[seed.id];
           status = stored?.status ?? "OPEN";
           completedAt = stored?.completedAt;
+          completedByUserId = stored?.completedByUserId;
+          evidence = stored?.evidence ?? [];
+          requiredEvidence = obligation?.evidenceRequirements;
           if (status !== "DONE" && seed.dueDate < today) {
             status = "OVERDUE";
           }
         } else {
           const deadline = deadlines.find((item) => item.id === seed.deadlineId);
           status = deadline ? getDeadlineStatus(deadline) : "OPEN";
-          completedAt = deadline?.status === "DONE" ? deadline.updatedAt : undefined;
+          completedAt = deadline?.status === "DONE" ? deadline.completedAt ?? deadline.updatedAt : undefined;
+          completedByUserId = deadline?.completedByUserId;
+          evidence = deadline?.evidence ?? [];
 
           if (legalDocId) {
             const doc = legalDocs.find((item) => item.id === legalDocId);
@@ -253,8 +297,55 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
           ...seed,
           status,
           completedAt,
-          assignedTo: seed.assignedToUserId ? getUserLabel(seed.assignedToUserId) : "",
-          deputyId: seed.deputyUserId ? getUserLabel(seed.deputyUserId) : "",
+          completedByUserId,
+          evidence,
+          requiredEvidence,
+          assignedToUserId: seed.assignedToUserId,
+          assignedToLabel: seed.assignedToUserId
+            ? (() => {
+                const assignedUser = getUser(seed.assignedToUserId);
+                if (!assignedUser) {
+                  return t("users.unknown");
+                }
+                return assignedUser.isArchived
+                  ? `${getDisplayName(seed.assignedToUserId)} (${t("users.archived")})`
+                  : getDisplayName(seed.assignedToUserId);
+              })()
+            : t("tasks.unassigned"),
+          assignedTo: seed.assignedToUserId
+            ? (() => {
+                const assignedUser = getUser(seed.assignedToUserId);
+                if (!assignedUser) {
+                  return t("users.unknown");
+                }
+                return assignedUser.isArchived
+                  ? `${getDisplayName(seed.assignedToUserId)} (${t("users.archived")})`
+                  : getDisplayName(seed.assignedToUserId);
+              })()
+            : t("tasks.unassigned"),
+          deputyUserId: seed.deputyUserId,
+          deputyLabel: seed.deputyUserId
+            ? (() => {
+                const deputyUser = getUser(seed.deputyUserId);
+                if (!deputyUser) {
+                  return t("users.unknown");
+                }
+                return deputyUser.isArchived
+                  ? `${getDisplayName(seed.deputyUserId)} (${t("users.archived")})`
+                  : getDisplayName(seed.deputyUserId);
+              })()
+            : t("tasks.unassigned"),
+          deputyId: seed.deputyUserId
+            ? (() => {
+                const deputyUser = getUser(seed.deputyUserId);
+                if (!deputyUser) {
+                  return t("users.unknown");
+                }
+                return deputyUser.isArchived
+                  ? `${getDisplayName(seed.deputyUserId)} (${t("users.archived")})`
+                  : getDisplayName(seed.deputyUserId);
+              })()
+            : t("tasks.unassigned"),
           scopeLabel,
           projectId,
           legalDocId
@@ -266,7 +357,8 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
     getDeadlineStatus,
     getEffectiveScopeForLegalDoc,
     getScopeLabel,
-    getUserLabel,
+    getDisplayName,
+    getUser,
     legalDocs,
     obligations,
     projects,
@@ -278,9 +370,10 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
       tasks,
       setTaskStatus,
       markTaskDone,
+      markTaskDoneWithEvidence,
       reopenTask
     }),
-    [markTaskDone, reopenTask, setTaskStatus, tasks]
+    [markTaskDone, markTaskDoneWithEvidence, reopenTask, setTaskStatus, tasks]
   );
 
   return <TasksContext.Provider value={value}>{children}</TasksContext.Provider>;

@@ -3,8 +3,8 @@ import { Button, Input, Modal, Select } from "@nemetz/ui";
 import { t } from "../i18n";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useObligations } from "../state/ObligationsStore";
-import { useUsers } from "../state/UsersStore";
 import type { Obligation } from "../state/ObligationsStore";
+import UserSelect from "./UserSelect";
 
 const emptyForm = {
   legalDocId: "",
@@ -19,7 +19,10 @@ const emptyForm = {
   deputyUserId: "",
   infoTextLong: "",
   emailReminderEnabled: false,
-  emailReminderDaysBefore: "7"
+  emailReminderDaysBefore: "7",
+  requirePhoto: false,
+  requireDocument: false,
+  requireReport: false
 };
 
 type ObligationModalProps = {
@@ -39,7 +42,6 @@ export default function ObligationModal({
 }: ObligationModalProps) {
   const { legalDocs } = useLegalDocs();
   const { addObligation, updateObligation } = useObligations();
-  const { users } = useUsers();
   const [form, setForm] = useState(emptyForm);
 
   useEffect(() => {
@@ -60,7 +62,10 @@ export default function ObligationModal({
         deputyUserId: obligation.deputyUserId ?? "",
         infoTextLong: obligation.infoTextLong ?? "",
         emailReminderEnabled: obligation.emailReminderEnabled,
-        emailReminderDaysBefore: String(obligation.emailReminderDaysBefore ?? 7)
+        emailReminderDaysBefore: String(obligation.emailReminderDaysBefore ?? 7),
+        requirePhoto: Boolean(obligation.evidenceRequirements.requirePhoto),
+        requireDocument: Boolean(obligation.evidenceRequirements.requireDocument),
+        requireReport: Boolean(obligation.evidenceRequirements.requireReport)
       });
       return;
     }
@@ -73,11 +78,6 @@ export default function ObligationModal({
   const legalDocOptions = useMemo(
     () => legalDocs.map((doc) => ({ value: doc.id, label: doc.title })),
     [legalDocs]
-  );
-
-  const userOptions = useMemo(
-    () => users.map((user) => ({ value: user.id, label: user.displayName })),
-    [users]
   );
 
   const requiresFirstDue = form.scheduleType === "ONCE" || form.scheduleType === "ONCE_THEN_RECURRING";
@@ -110,7 +110,12 @@ export default function ObligationModal({
       infoTextLong: form.infoTextLong,
       emailReminderEnabled: form.emailReminderEnabled,
       emailReminderDaysBefore:
-        form.emailReminderEnabled && Number.isFinite(reminderDays) ? reminderDays : undefined
+        form.emailReminderEnabled && Number.isFinite(reminderDays) ? reminderDays : undefined,
+      evidenceRequirements: {
+        requirePhoto: form.requirePhoto,
+        requireDocument: form.requireDocument,
+        requireReport: form.requireReport
+      }
     };
 
     if (obligation) {
@@ -249,21 +254,25 @@ export default function ObligationModal({
         </div>
         <div className="formField">
           <span className="fieldLabel">{t("obligations.form.owner")}</span>
-          <Select
-            options={[{ value: "", label: t("obligations.form.owner") }, ...userOptions]}
-            value={form.ownerUserId}
-            onChange={(event) =>
-              setForm((prev) => ({ ...prev, ownerUserId: event.target.value }))
+          <UserSelect
+            value={form.ownerUserId || null}
+            includeExternal
+            allowArchivedCurrentValue
+            placeholderKey="obligations.owner"
+            onChange={(userId) =>
+              setForm((prev) => ({ ...prev, ownerUserId: userId ?? "" }))
             }
           />
         </div>
         <div className="formField">
           <span className="fieldLabel">{t("obligations.form.deputy")}</span>
-          <Select
-            options={[{ value: "", label: t("obligations.form.deputy") }, ...userOptions]}
-            value={form.deputyUserId}
-            onChange={(event) =>
-              setForm((prev) => ({ ...prev, deputyUserId: event.target.value }))
+          <UserSelect
+            value={form.deputyUserId || null}
+            includeExternal
+            allowArchivedCurrentValue
+            placeholderKey="obligations.deputy"
+            onChange={(userId) =>
+              setForm((prev) => ({ ...prev, deputyUserId: userId ?? "" }))
             }
           />
         </div>
@@ -312,6 +321,39 @@ export default function ObligationModal({
             />
           </div>
         ) : null}
+        <div className="formSection">
+          <div className="fieldLabel">{t("obligations.evidenceRequirements.info")}</div>
+          <label className="checkboxRow">
+            <input
+              type="checkbox"
+              checked={form.requirePhoto}
+              onChange={(event) =>
+                setForm((prev) => ({ ...prev, requirePhoto: event.target.checked }))
+              }
+            />
+            <span>{t("obligations.evidenceRequirements.requirePhoto")}</span>
+          </label>
+          <label className="checkboxRow">
+            <input
+              type="checkbox"
+              checked={form.requireDocument}
+              onChange={(event) =>
+                setForm((prev) => ({ ...prev, requireDocument: event.target.checked }))
+              }
+            />
+            <span>{t("obligations.evidenceRequirements.requireDocument")}</span>
+          </label>
+          <label className="checkboxRow">
+            <input
+              type="checkbox"
+              checked={form.requireReport}
+              onChange={(event) =>
+                setForm((prev) => ({ ...prev, requireReport: event.target.checked }))
+              }
+            />
+            <span>{t("obligations.evidenceRequirements.requireReport")}</span>
+          </label>
+        </div>
       </div>
     </Modal>
   );

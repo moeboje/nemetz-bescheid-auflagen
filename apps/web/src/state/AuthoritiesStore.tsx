@@ -25,7 +25,7 @@ export type AuthoritiesContextValue = {
   contacts: AuthorityContact[];
   getAuthority: (authorityId: string) => Authority | undefined;
   getContacts: (authorityId: string, options?: FilterOptions) => AuthorityContact[];
-  addAuthority: (input: { name: string; shortName?: string }) => void;
+  addAuthority: (input: { name: string; shortName?: string }) => Authority;
   updateAuthority: (id: string, input: { name: string; shortName?: string }) => void;
   archiveAuthority: (id: string) => void;
   restoreAuthority: (id: string) => void;
@@ -35,7 +35,7 @@ export type AuthoritiesContextValue = {
     email?: string;
     phone?: string;
     roleTitle?: string;
-  }) => void;
+  }) => AuthorityContact;
   updateContact: (
     id: string,
     input: {
@@ -162,20 +162,19 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
 
   const addAuthority = useCallback((input: { name: string; shortName?: string }) => {
     const timestamp = nowStamp();
+    const createdAuthority: Authority = {
+      id: createId("auth"),
+      name: input.name,
+      shortName: input.shortName ?? "",
+      isArchived: false,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    };
     setAuthorityData((prev) => ({
       ...prev,
-      authorities: [
-        ...prev.authorities,
-        {
-          id: createId("auth"),
-          name: input.name,
-          shortName: input.shortName ?? "",
-          isArchived: false,
-          createdAt: timestamp,
-          updatedAt: timestamp
-        }
-      ]
+      authorities: [...prev.authorities, createdAuthority]
     }));
+    return createdAuthority;
   }, []);
 
   const updateAuthority = useCallback(
@@ -227,23 +226,22 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       roleTitle?: string;
     }) => {
       const timestamp = nowStamp();
+      const createdContact: AuthorityContact = {
+        id: createId("contact"),
+        authorityId: input.authorityId,
+        name: input.name,
+        email: input.email ?? "",
+        phone: input.phone ?? "",
+        roleTitle: input.roleTitle ?? "",
+        isArchived: false,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      };
       setAuthorityData((prev) => ({
         ...prev,
-        contacts: [
-          ...prev.contacts,
-          {
-            id: createId("contact"),
-            authorityId: input.authorityId,
-            name: input.name,
-            email: input.email ?? "",
-            phone: input.phone ?? "",
-            roleTitle: input.roleTitle ?? "",
-            isArchived: false,
-            createdAt: timestamp,
-            updatedAt: timestamp
-          }
-        ]
+        contacts: [...prev.contacts, createdContact]
       }));
+      return createdContact;
     },
     []
   );

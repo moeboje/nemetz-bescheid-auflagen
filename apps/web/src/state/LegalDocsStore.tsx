@@ -1,9 +1,15 @@
 import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
-import { LegalDoc, LegalDocAttachment, legalDocs as initialLegalDocs } from "../data/legalDocs";
+import {
+  LegalDoc,
+  LegalDocAiExtraction,
+  LegalDocAttachment,
+  legalDocs as initialLegalDocs
+} from "../data/legalDocs";
 import { useAuditLog } from "./AuditLogStore";
 import { useProjects } from "./ProjectsStore";
 import { loadJSON, saveJSON, STORAGE_KEYS } from "./persistence";
 import { useScopes } from "./ScopesStore";
+import { normalizeAiAnalysisResult } from "../services/aiResultValidation";
 
 type LegalDocCreateInput = Omit<
   LegalDoc,
@@ -14,7 +20,7 @@ type LegalDocCreateInput = Omit<
 
 export type LegalDocsContextValue = {
   legalDocs: LegalDoc[];
-  addLegalDoc: (input: LegalDocCreateInput) => void;
+  addLegalDoc: (input: LegalDocCreateInput) => LegalDoc;
   updateLegalDoc: (id: string, input: Partial<LegalDoc>) => void;
   archiveLegalDoc: (id: string) => void;
   restoreLegalDoc: (id: string) => void;
@@ -54,6 +60,13 @@ function normalizeAttachment(
     addedAt: attachment.addedAt ?? nowStamp().slice(0, 10),
     addedByLabel: attachment.addedByLabel ?? undefined
   };
+}
+
+function normalizeAiExtraction(value: unknown): LegalDocAiExtraction | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return normalizeAiAnalysisResult(value);
 }
 
 function normalizeLegalDoc(value: Partial<LegalDoc>, index: number): LegalDoc | null {
@@ -100,7 +113,11 @@ function normalizeLegalDoc(value: Partial<LegalDoc>, index: number): LegalDoc | 
     shortDescription: value.shortDescription ?? "",
     reference: value.reference ?? "",
     issuedAt: value.issuedAt ?? "",
+    authorityId: typeof value.authorityId === "string" ? value.authorityId : undefined,
+    authorityContactId:
+      typeof value.authorityContactId === "string" ? value.authorityContactId : undefined,
     attachments,
+    aiExtraction: normalizeAiExtraction(value.aiExtraction),
     scopeOverride,
     archivedAt: value.archivedAt ?? undefined,
     isArchived: Boolean(value.isArchived || value.archivedAt),
@@ -146,6 +163,7 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
         attachments: (input.attachments ?? []).map((attachment, index) =>
           normalizeAttachment(attachment, `lda-${timestamp}-${index}`)
         ),
+        aiExtraction: normalizeAiExtraction(input.aiExtraction),
         archivedAt: undefined,
         isArchived: false,
         createdAt: timestamp,
@@ -159,6 +177,7 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
         action: "CREATED",
         summary: newDoc.title
       });
+      return newDoc;
     },
     [logEvent]
   );
@@ -181,6 +200,10 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
                       normalizeAttachment(attachment, `lda-${id}-${index}`)
                     )
                   : doc.attachments,
+                aiExtraction:
+                  input.aiExtraction !== undefined
+                    ? normalizeAiExtraction(input.aiExtraction)
+                    : doc.aiExtraction,
                 updatedAt: timestamp
               }
             : doc

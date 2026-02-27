@@ -1,1 +1,61 @@
-@import "../../../../design/tokens.css";
+:root {
+  --color-bg: #f5f5f5;
+  --color-surface: #ffffff;
+  --color-border: #e5e5e5;
+  --color-text: #2b2b2b;
+  --color-text-muted: #8a8a8a;
+  --color-primary: #f2c500;
+  --color-primary-hover: #e0b300;
+  --color-primary-text-on: #1f1f1f;
+  --color-surface-muted: #fafafa;
+  --color-hover: #f0f0f0;
+  --color-hover-strong: #e8e8e8;
+  --color-overlay: rgba(0, 0, 0, 0.3);
+  --color-focus-ring: rgba(242, 197, 0, 0.35);
+  --color-primary-soft: #f7e28b;
+  --color-neutral-soft: rgba(0, 0, 0, 0.06);
+  --color-success-soft: rgba(47, 191, 113, 0.16);
+  --color-warning-soft: rgba(245, 183, 0, 0.16);
+  --color-danger-soft: rgba(225, 85, 84, 0.16);
+  --color-danger-soft-strong: rgba(225, 85, 84, 0.12);
+  --color-spinner-track: rgba(0, 0, 0, 0.2);
+  --color-spinner-head: rgba(0, 0, 0, 0.6);
+  --color-success: #2fbf71;
+  --color-warning: #f5b700;
+  --color-danger: #e15554;
+
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 8px 20px rgba(0, 0, 0, 0.12);
+
+  --space-0: 0px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 48px;
+  --space-10: 64px;
+
+  --font-family: "Poppins", "Helvetica Neue", Arial, sans-serif;
+  --font-size-xs: 12px;
+  --font-size-sm: 14px;
+  --font-size-md: 16px;
+  --font-size-lg: 18px;
+  --font-size-xl: 22px;
+  --font-size-2xl: 28px;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.7;
+}

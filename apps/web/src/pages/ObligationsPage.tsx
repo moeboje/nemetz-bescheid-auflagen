@@ -12,42 +12,34 @@ import {
 } from "@nemetz/ui";
 import { t } from "../i18n";
 import { useObligations } from "../state/ObligationsStore";
+import HelpHintCard from "../components/HelpHintCard";
+import { useRuntimeConfig } from "../config/runtimeConfig";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
 import { useUsers } from "../state/UsersStore";
 import { generateTasksFromObligations } from "../state/TasksStore";
 import { EyeIcon, EditIcon } from "../components/Icons";
+import EmailReminderCompact from "../components/EmailReminderCompact";
 import ObligationModal from "../components/ObligationModal";
+import RequirementIcons from "../components/RequirementIcons";
+import { useAuthorization } from "../state/AuthorizationStore";
+import { getUserDisplayName } from "../data/users";
 
 const levelVariant = {
   MANDATORY: "danger",
   RECOMMENDED: "warning"
 } as const;
 
-function getReminderText(daysBefore?: number) {
-  if (daysBefore === 0) {
-    return t("common.onDueDate");
-  }
-  if (daysBefore === 1) {
-    return t("common.daysBefore.1");
-  }
-  if (daysBefore === 14) {
-    return t("common.daysBefore.14");
-  }
-  if (daysBefore === 30) {
-    return t("common.daysBefore.30");
-  }
-  return t("common.daysBefore.7");
-}
-
 export default function ObligationsPage() {
   const navigate = useNavigate();
+  const runtimeConfig = useRuntimeConfig();
   const { obligations } = useObligations();
   const { legalDocs, getEffectiveScopeLabel } = useLegalDocs();
   const { projects } = useProjects();
   const { companies, sites, facilities, getScopeLabel } = useScopes();
-  const { users, getUserLabel } = useUsers();
+  const { listActiveUsers, getUserLabel } = useUsers();
+  const { permissions } = useAuthorization();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingObligationId, setEditingObligationId] = useState<string | null>(null);
   const [filters, setFilters] = useState({
@@ -71,8 +63,12 @@ export default function ObligationsPage() {
   );
 
   const ownerOptions = useMemo(
-    () => users.map((user) => ({ value: user.id, label: user.displayName })),
-    [users]
+    () =>
+      listActiveUsers({ includeExternal: true, includeInternal: true }).map((user) => ({
+        value: user.id,
+        label: getUserDisplayName(user)
+      })),
+    [listActiveUsers]
   );
 
   const scopeOptions = useMemo(() => {
@@ -173,15 +169,19 @@ export default function ObligationsPage() {
     {
       key: "emailReminder",
       header: t("obligations.table.emailReminder"),
-      render: (row: (typeof obligations)[number]) =>
-        row.emailReminderEnabled ? (
-          <span className="inlineMeta">
-            <Badge variant="neutral">{t("common.email")}</Badge>
-            <span>{getReminderText(row.emailReminderDaysBefore)}</span>
-          </span>
-        ) : (
-          t("common.notAvailable")
-        )
+      render: (row: (typeof obligations)[number]) => (
+        <EmailReminderCompact
+          enabled={row.emailReminderEnabled}
+          daysBefore={row.emailReminderDaysBefore ?? null}
+        />
+      )
+    },
+    {
+      key: "evidence",
+      header: t("obligations.table.evidence"),
+      render: (row: (typeof obligations)[number]) => (
+        <RequirementIcons requirements={row.evidenceRequirements} />
+      )
     },
     {
       key: "owner",
@@ -204,8 +204,26 @@ export default function ObligationsPage() {
           />
           <h1 className="pageTitle">{t("obligations.title")}</h1>
         </div>
-        <Button onClick={() => setModalOpen(true)}>{t("obligations.action.new")}</Button>
+        <Button
+          disabled={!permissions.canEditObligations}
+          onClick={() => setModalOpen(true)}
+        >
+          {t("obligations.action.new")}
+        </Button>
       </div>
+
+      {runtimeConfig.features.enableHelpHints ? (
+        <HelpHintCard
+          hintId="hint.obligations"
+          titleKey="helpHints.obligations.title"
+          bulletsKeys={[
+            "helpHints.obligations.bullets.1",
+            "helpHints.obligations.bullets.2",
+            "helpHints.obligations.bullets.3"
+          ]}
+          link={{ labelKey: "common.openHelp", to: "/help#workflows" }}
+        />
+      ) : null}
 
       <Card>
         <div className="filterRowSix">
@@ -283,6 +301,7 @@ export default function ObligationsPage() {
             </IconButton>
             <IconButton
               ariaLabel={t("obligations.action.edit")}
+              disabled={!permissions.canEditObligations}
               onClick={() => {
                 setEditingObligationId(row.id);
                 setModalOpen(true);

@@ -1,19 +1,20 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
+  Badge,
   Breadcrumbs,
   Button,
   Card,
   DataTable,
   IconButton,
-  Modal,
-  Select
+  Modal
 } from "@nemetz/ui";
 import { t } from "../i18n";
 import AuditTimeline from "../components/AuditTimeline";
 import DeadlineModal from "../components/DeadlineModal";
 import { EyeIcon, EditIcon } from "../components/Icons";
-import FileUploadStub, { UploadItem } from "../components/FileUploadStub";
+import DocumentsPanel from "../components/DocumentsPanel";
+import CommentsPanel from "../components/CommentsPanel";
 import ExternalParticipantModal from "../components/ExternalParticipantModal";
 import LegalDocModal from "../components/LegalDocModal";
 import ProjectModal from "../components/ProjectModal";
@@ -28,15 +29,8 @@ import { useObligations } from "../state/ObligationsStore";
 import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
 import { useUsers } from "../state/UsersStore";
-
-function createAttachment(file: File): UploadItem {
-  return {
-    id: `pa-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    filename: file.name,
-    sizeKb: Math.max(1, Math.ceil(file.size / 1024)),
-    addedAt: new Date().toISOString().slice(0, 10)
-  };
-}
+import UserMultiSelect from "../components/UserMultiSelect";
+import UserSelect from "../components/UserSelect";
 
 function getExternalTypeLabel(type: ExternalParticipant["type"]) {
   if (type === "LAWYER") {
@@ -71,6 +65,10 @@ function getTaskStatusLabel(status: "OPEN" | "DONE" | "OVERDUE") {
   return t("tasks.status.open");
 }
 
+function isArchivedEntity(value: { isArchived?: boolean; archivedAt?: string }) {
+  return Boolean(value.isArchived || value.archivedAt);
+}
+
 export default function ProjectDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -81,8 +79,6 @@ export default function ProjectDetailPage() {
     updateProject,
     archiveProject,
     restoreProject,
-    addProjectAttachment,
-    removeProjectAttachment,
     addExternalParticipant,
     updateExternalParticipant,
     archiveExternalParticipant,
@@ -91,7 +87,7 @@ export default function ProjectDetailPage() {
   const { obligations, archiveObligation } = useObligations();
   const { getScopeLabel } = useScopes();
   const { contacts, getAuthorityName, getContactsForAuthority } = useAuthorities();
-  const { users, getUserLabel } = useUsers();
+  const { getUser, getDisplayName } = useUsers();
   const { legalDocs, archiveLegalDoc } = useLegalDocs();
   const { deadlines, archiveDeadline, getDeadlineStatus } = useDeadlines();
 
@@ -155,6 +151,44 @@ export default function ProjectDetailPage() {
     [obligations, projectDocIds]
   );
 
+  const predecessorProjects = useMemo(
+    () =>
+      (project?.dependsOnProjectIds ?? []).map((projectId) => {
+        const linkedProject = projects.find((item) => item.id === projectId);
+        return {
+          id: projectId,
+          title: linkedProject?.title ?? projectId,
+          missing: !linkedProject,
+          isArchived: linkedProject ? isArchivedEntity(linkedProject) : false
+        };
+      }),
+    [project?.dependsOnProjectIds, projects]
+  );
+
+  const dependentProjects = useMemo(
+    () =>
+      projects.filter(
+        (candidate) =>
+          candidate.id !== project?.id &&
+          (candidate.dependsOnProjectIds ?? []).includes(project?.id ?? "")
+      ),
+    [project?.id, projects]
+  );
+
+  const referenceLegalDocs = useMemo(
+    () =>
+      (project?.referenceLegalDocIds ?? []).map((legalDocId) => {
+        const linkedDoc = legalDocs.find((item) => item.id === legalDocId);
+        return {
+          id: legalDocId,
+          title: linkedDoc?.title ?? legalDocId,
+          missing: !linkedDoc,
+          isArchived: linkedDoc ? isArchivedEntity(linkedDoc) : false
+        };
+      }),
+    [legalDocs, project?.referenceLegalDocIds]
+  );
+
   const historyEntries = useMemo(() => {
     if (!project) {
       return [];
@@ -180,11 +214,6 @@ export default function ProjectDetailPage() {
     });
   }, [entries, project, projectDeadlines, projectDocs, projectObligations]);
 
-  const userOptions = useMemo(
-    () => users.map((user) => ({ value: user.id, label: user.displayName })),
-    [users]
-  );
-
   if (!project) {
     return (
       <div className="page">
@@ -198,7 +227,6 @@ export default function ProjectDetailPage() {
   const canView = ProjectPolicy.view(actor, project);
   const canUpdate = ProjectPolicy.update(actor, project);
   const canArchive = ProjectPolicy.archive(actor, project);
-  const canRemoveAttachment = ProjectPolicy.removeAttachment(actor, project);
 
   if (!canView) {
     return (
@@ -316,6 +344,25 @@ export default function ProjectDetailPage() {
     }
   };
 
+  const renderUserValue = (userId?: string) => {
+    if (!userId) {
+      return t("common.notAssigned");
+    }
+    const user = getUser(userId);
+    const label = user ? getDisplayName(userId) : t("users.unknown");
+    return (
+      <span className="inlineMeta">
+        <span>{label}</span>
+        {user ? (
+          <Badge variant={user.isExternal ? "warning" : "neutral"}>
+            {user.isExternal ? t("users.external") : t("users.internal")}
+          </Badge>
+        ) : null}
+        {user?.isArchived ? <Badge variant="warning">{t("users.archived")}</Badge> : null}
+      </span>
+    );
+  };
+
   return (
     <div className="page">
       <div className="pageHeader">
@@ -389,6 +436,13 @@ export default function ProjectDetailPage() {
         </button>
         <button
           type="button"
+          className={`tabButton ${tab === "notes" ? "tabButtonActive" : ""}`}
+          onClick={() => setTab("notes")}
+        >
+          {t("projects.detail.tabs.notes")}
+        </button>
+        <button
+          type="button"
           className={`tabButton ${tab === "history" ? "tabButtonActive" : ""}`}
           onClick={() => setTab("history")}
         >
@@ -397,34 +451,118 @@ export default function ProjectDetailPage() {
       </div>
 
       {tab === "overview" ? (
-        <Card>
-          <div className="detailGrid">
-            <div>
-              <div className="metaLabel">{t("projects.detail.shortDescription")}</div>
-              <div className="metaValue">{project.shortDescription || t("common.notAvailable")}</div>
+        <>
+          <Card>
+            <div className="detailGrid">
+              <div>
+                <div className="metaLabel">{t("projects.detail.shortDescription")}</div>
+                <div className="metaValue">{project.shortDescription || t("common.notAvailable")}</div>
+              </div>
+              <div>
+                <div className="metaLabel">{t("projects.detail.authorityRef")}</div>
+                <div className="metaValue">{project.authorityRef || t("common.notAvailable")}</div>
+              </div>
+              <div>
+                <div className="metaLabel">{t("projects.detail.authority")}</div>
+                <div className="metaValue">{authorityName || t("common.notAvailable")}</div>
+              </div>
+              <div>
+                <div className="metaLabel">{t("projects.detail.authorityContact")}</div>
+                <div className="metaValue">{contactName || t("common.notAvailable")}</div>
+              </div>
+              <div>
+                <div className="metaLabel">{t("projects.detail.owner")}</div>
+                <div className="metaValue">{renderUserValue(project.ownerUserId)}</div>
+              </div>
+              <div>
+                <div className="metaLabel">{t("projects.detail.deputy")}</div>
+                <div className="metaValue">{renderUserValue(project.deputyUserId)}</div>
+              </div>
             </div>
-            <div>
-              <div className="metaLabel">{t("projects.detail.authorityRef")}</div>
-              <div className="metaValue">{project.authorityRef || t("common.notAvailable")}</div>
+          </Card>
+          <Card>
+            <h2 className="sectionTitle">{t("projects.relations.title")}</h2>
+            <div className="detailGrid">
+              <div>
+                <div className="metaLabel">{t("projects.relations.dependsOn")}</div>
+                {predecessorProjects.length ? (
+                  <div className="relationLinkList">
+                    {predecessorProjects.map((row) => (
+                      <div key={row.id} className="relationLinkItem">
+                        {row.missing ? (
+                          <span className="relationSelectionLabel">{row.title}</span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="relationLinkButton"
+                            onClick={() => navigate(`/projects/${row.id}`)}
+                          >
+                            {row.title}
+                          </button>
+                        )}
+                        {row.isArchived ? (
+                          <Badge variant="warning">{t("users.archived")}</Badge>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="placeholderText">{t("projects.relations.empty.dependsOn")}</p>
+                )}
+              </div>
+              <div>
+                <div className="metaLabel">{t("projects.relations.dependents")}</div>
+                {dependentProjects.length ? (
+                  <div className="relationLinkList">
+                    {dependentProjects.map((linkedProject) => (
+                      <div key={linkedProject.id} className="relationLinkItem">
+                        <button
+                          type="button"
+                          className="relationLinkButton"
+                          onClick={() => navigate(`/projects/${linkedProject.id}`)}
+                        >
+                          {linkedProject.title}
+                        </button>
+                        {isArchivedEntity(linkedProject) ? (
+                          <Badge variant="warning">{t("users.archived")}</Badge>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="placeholderText">{t("projects.relations.empty.dependents")}</p>
+                )}
+              </div>
+              <div>
+                <div className="metaLabel">{t("projects.relations.legalRefs")}</div>
+                {referenceLegalDocs.length ? (
+                  <div className="relationLinkList">
+                    {referenceLegalDocs.map((row) => (
+                      <div key={row.id} className="relationLinkItem">
+                        {row.missing ? (
+                          <span className="relationSelectionLabel">{row.title}</span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="relationLinkButton"
+                            onClick={() => navigate(`/legal-docs/${row.id}`)}
+                          >
+                            {row.title}
+                          </button>
+                        )}
+                        {row.isArchived ? (
+                          <Badge variant="warning">{t("users.archived")}</Badge>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="placeholderText">{t("projects.relations.empty.legalRefs")}</p>
+                )}
+              </div>
             </div>
-            <div>
-              <div className="metaLabel">{t("projects.detail.authority")}</div>
-              <div className="metaValue">{authorityName || t("common.notAvailable")}</div>
-            </div>
-            <div>
-              <div className="metaLabel">{t("projects.detail.authorityContact")}</div>
-              <div className="metaValue">{contactName || t("common.notAvailable")}</div>
-            </div>
-            <div>
-              <div className="metaLabel">{t("projects.detail.owner")}</div>
-              <div className="metaValue">{getUserLabel(project.ownerUserId) || t("common.notAssigned")}</div>
-            </div>
-            <div>
-              <div className="metaLabel">{t("projects.detail.deputy")}</div>
-              <div className="metaValue">{getUserLabel(project.deputyUserId) || t("common.notAssigned")}</div>
-            </div>
-          </div>
-        </Card>
+          </Card>
+        </>
       ) : null}
 
       {tab === "legalDocs" ? (
@@ -498,23 +636,12 @@ export default function ProjectDetailPage() {
 
       {tab === "attachments" ? (
         <Card>
-          <FileUploadStub
-            label={t("projects.detail.attachments")}
-            selectLabel={t("common.selectFile")}
-            removeLabel={t("common.remove")}
-            disabled={!canUpdate}
-            items={project.attachments}
-            onAddFiles={(files) =>
-              files.forEach((file) => {
-                addProjectAttachment(project.id, createAttachment(file));
-              })
-            }
-            onRemove={(attachmentId) => {
-              if (!canRemoveAttachment) {
-                return;
-              }
-              removeProjectAttachment(project.id, attachmentId);
-            }}
+          <DocumentsPanel
+            ownerType="PROJECT"
+            ownerId={project.id}
+            titleKey="projects.detail.attachments"
+            allowUpload={canUpdate}
+            legacyItems={project.attachments}
           />
         </Card>
       ) : null}
@@ -526,37 +653,39 @@ export default function ProjectDetailPage() {
             <div className="modalForm">
               <div className="formField">
                 <span className="fieldLabel">{t("projects.detail.owner")}</span>
-                <Select
-                  options={[{ value: "", label: t("projects.detail.owner") }, ...userOptions]}
-                  value={project.ownerUserId ?? ""}
+                <UserSelect
+                  value={project.ownerUserId ?? null}
+                  includeExternal
+                  allowArchivedCurrentValue
+                  placeholderKey="projects.owner"
                   disabled={!canUpdate}
-                  onChange={(event) =>
-                    updateProject(project.id, { ownerUserId: event.target.value || undefined })
+                  onChange={(userId) =>
+                    updateProject(project.id, { ownerUserId: userId ?? undefined })
                   }
                 />
               </div>
               <div className="formField">
                 <span className="fieldLabel">{t("projects.detail.deputy")}</span>
-                <Select
-                  options={[{ value: "", label: t("projects.detail.deputy") }, ...userOptions]}
-                  value={project.deputyUserId ?? ""}
+                <UserSelect
+                  value={project.deputyUserId ?? null}
+                  includeExternal
+                  allowArchivedCurrentValue
+                  placeholderKey="projects.deputy"
                   disabled={!canUpdate}
-                  onChange={(event) =>
-                    updateProject(project.id, { deputyUserId: event.target.value || undefined })
+                  onChange={(userId) =>
+                    updateProject(project.id, { deputyUserId: userId ?? undefined })
                   }
                 />
               </div>
               <div className="formField">
                 <span className="fieldLabel">{t("projects.detail.participants")}</span>
-                <Select
-                  multiple
-                  options={userOptions}
+                <UserMultiSelect
                   value={getParticipantUserIds(project)}
+                  includeExternal
+                  allowArchivedCurrentValue
+                  showSearch
                   disabled={!canUpdate}
-                  onChange={(event) => {
-                    const values = Array.from(event.currentTarget.selectedOptions).map(
-                      (option) => option.value
-                    );
+                  onChange={(values) => {
                     const internalParticipants = values.map((userId) => ({ userId }));
                     updateProject(project.id, {
                       internalParticipants,
@@ -631,6 +760,12 @@ export default function ProjectDetailPage() {
             />
           </div>
         </div>
+      ) : null}
+
+      {tab === "notes" ? (
+        <Card>
+          <CommentsPanel entityType="PROJECT" entityId={project.id} />
+        </Card>
       ) : null}
 
       {tab === "history" ? (

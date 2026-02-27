@@ -3,6 +3,9 @@ import { useParams } from "react-router-dom";
 import { Badge, Breadcrumbs, Button, Card, Modal, StatusDot } from "@nemetz/ui";
 import { t } from "../i18n";
 import { useTasks } from "../state/TasksStore";
+import EvidenceListModal from "../components/EvidenceListModal";
+import { useAuthorization } from "../state/AuthorizationStore";
+import TaskCompleteModal from "../components/TaskCompleteModal";
 
 const statusVariant = {
   OPEN: "warning",
@@ -18,8 +21,11 @@ const levelVariant = {
 
 export default function TaskDetailPage() {
   const { id } = useParams();
-  const { tasks, setTaskStatus } = useTasks();
+  const { tasks, setTaskStatus, markTaskDoneWithEvidence } = useTasks();
+  const { permissions } = useAuthorization();
   const [modalOpen, setModalOpen] = useState(false);
+  const [completionModalOpen, setCompletionModalOpen] = useState(false);
+  const [evidenceModalOpen, setEvidenceModalOpen] = useState(false);
 
   const task = useMemo(() => tasks.find((t) => t.id === id), [id, tasks]);
 
@@ -61,6 +67,11 @@ export default function TaskDetailPage() {
             )}
           </Badge>
           <Button onClick={() => setModalOpen(true)}>{t("tasks.detail.changeStatus")}</Button>
+          {task.status === "DONE" ? (
+            <Button variant="secondary" onClick={() => setEvidenceModalOpen(true)}>
+              {t("tasks.actions.viewEvidence")}
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -91,11 +102,11 @@ export default function TaskDetailPage() {
           ) : null}
           <div>
             <div className="metaLabel">{t("tasks.detail.assignee")}</div>
-            <div className="metaValue">{task.assignedTo || t("common.notAssigned")}</div>
+            <div className="metaValue">{task.assignedTo || t("tasks.unassigned")}</div>
           </div>
           <div>
             <div className="metaLabel">{t("tasks.detail.deputy")}</div>
-            <div className="metaValue">{task.deputyId || t("common.notAssigned")}</div>
+            <div className="metaValue">{task.deputyId || t("tasks.unassigned")}</div>
           </div>
         </div>
       </Card>
@@ -123,11 +134,36 @@ export default function TaskDetailPage() {
               {t("tasks.status.inProgress")}
             </Button>
           ) : null}
-          <Button variant="secondary" onClick={() => setTaskStatus(task.id, "DONE")}>
+          <Button
+            variant="secondary"
+            disabled={!permissions.canCompleteTasks}
+            onClick={() => {
+              setModalOpen(false);
+              setCompletionModalOpen(true);
+            }}
+          >
             {t("tasks.status.done")}
           </Button>
         </div>
       </Modal>
+
+      <TaskCompleteModal
+        open={completionModalOpen}
+        task={task}
+        onClose={() => setCompletionModalOpen(false)}
+        onSaved={(input) => {
+          markTaskDoneWithEvidence(task.id, input);
+        }}
+      />
+
+      <EvidenceListModal
+        open={evidenceModalOpen}
+        onClose={() => setEvidenceModalOpen(false)}
+        title={t("tasks.actions.viewEvidence")}
+        evidence={task.evidence ?? []}
+        ownerType="TASK_EVIDENCE"
+        ownerId={task.id}
+      />
     </div>
   );
 }

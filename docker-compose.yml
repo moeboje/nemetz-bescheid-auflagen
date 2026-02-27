@@ -1,0 +1,48 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      PORT: 4000
+      DATABASE_URL: file:/app/apps/api/prisma/dev.db
+      APP_ORIGIN: http://localhost:8080
+      SESSION_SECRET: ${SESSION_SECRET:-replace-me-with-long-random-secret}
+      NODE_ENV: production
+      RESET_TOKEN_TTL_MINUTES: 30
+      SESSION_TTL_DAYS: 7
+      COOKIE_SECURE: "false"
+      BASE_PATH: /api
+      ADMIN_EMAIL: admin@example.com
+      ADMIN_PASSWORD: ChangeMe123!
+      SEED_DEFAULT_PASSWORD: ChangeMe123!
+    volumes:
+      - api_sqlite:/app/apps/api/prisma
+      - api_outbox:/app/apps/api/storage/mail-outbox
+    networks:
+      default:
+        aliases:
+          - api
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    networks:
+      default:
+        aliases:
+          - web
+
+  proxy:
+    image: nginx:1.27-alpine
+    depends_on:
+      - api
+      - web
+    ports:
+      - "8080:80"
+    volumes:
+      - ./ops/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  api_sqlite:
+  api_outbox:

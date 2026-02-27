@@ -3,6 +3,8 @@ import { useParams } from "react-router-dom";
 import { Badge, Breadcrumbs, Button, Card } from "@nemetz/ui";
 import DeadlineModal from "../components/DeadlineModal";
 import AuditTimeline from "../components/AuditTimeline";
+import EvidenceCompletionModal from "../components/EvidenceCompletionModal";
+import EvidenceListModal from "../components/EvidenceListModal";
 import { t } from "../i18n";
 import { useAuditLog } from "../state/AuditLogStore";
 import { useDeadlines } from "../state/DeadlinesStore";
@@ -10,6 +12,7 @@ import { useLegalDocs } from "../state/LegalDocsStore";
 import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
 import { useUsers } from "../state/UsersStore";
+import { useAuthorization } from "../state/AuthorizationStore";
 
 const statusVariant = {
   OPEN: "warning",
@@ -35,13 +38,21 @@ function getReminderText(daysBefore?: number) {
 
 export default function DeadlineDetailPage() {
   const { id } = useParams();
-  const { deadlines, markDeadlineDone, reopenDeadline, getDeadlineStatus } = useDeadlines();
+  const {
+    deadlines,
+    markDeadlineDoneWithEvidence,
+    reopenDeadline,
+    getDeadlineStatus
+  } = useDeadlines();
   const { projects } = useProjects();
   const { legalDocs, getEffectiveScopeForLegalDoc } = useLegalDocs();
   const { getScopeLabel } = useScopes();
-  const { getUserLabel } = useUsers();
+  const { getUser, getDisplayName } = useUsers();
+  const { permissions } = useAuthorization();
   const { getEntriesForEntity } = useAuditLog();
   const [modalOpen, setModalOpen] = useState(false);
+  const [completionModalOpen, setCompletionModalOpen] = useState(false);
+  const [evidenceModalOpen, setEvidenceModalOpen] = useState(false);
 
   const deadline = useMemo(() => deadlines.find((item) => item.id === id), [deadlines, id]);
   const status = deadline ? getDeadlineStatus(deadline) : "OPEN";
@@ -71,6 +82,25 @@ export default function DeadlineDetailPage() {
     }
     return getEntriesForEntity("DEADLINE", deadline.id);
   }, [deadline, getEntriesForEntity]);
+
+  const renderUserValue = (userId?: string) => {
+    if (!userId) {
+      return t("common.notAssigned");
+    }
+    const user = getUser(userId);
+    const label = user ? getDisplayName(userId) : t("users.unknown");
+    return (
+      <span className="inlineMeta">
+        <span>{label}</span>
+        {user ? (
+          <Badge variant={user.isExternal ? "warning" : "neutral"}>
+            {user.isExternal ? t("users.external") : t("users.internal")}
+          </Badge>
+        ) : null}
+        {user?.isArchived ? <Badge variant="warning">{t("users.archived")}</Badge> : null}
+      </span>
+    );
+  };
 
   if (!deadline) {
     return (
@@ -109,15 +139,29 @@ export default function DeadlineDetailPage() {
         </div>
         <div className="inlineMeta">
           {status !== "DONE" ? (
-            <Button variant="secondary" onClick={() => markDeadlineDone(deadline.id)}>
+            <Button
+              variant="secondary"
+              disabled={!permissions.canCompleteTasks}
+              onClick={() => setCompletionModalOpen(true)}
+            >
               {t("deadlines.action.markDone")}
             </Button>
           ) : (
-            <Button variant="secondary" onClick={() => reopenDeadline(deadline.id)}>
-              {t("deadlines.action.reopen")}
-            </Button>
+            <>
+              <Button variant="secondary" onClick={() => reopenDeadline(deadline.id)}>
+                {t("deadlines.action.reopen")}
+              </Button>
+              <Button variant="secondary" onClick={() => setEvidenceModalOpen(true)}>
+                {t("tasks.action.viewEvidence")}
+              </Button>
+            </>
           )}
-          <Button onClick={() => setModalOpen(true)}>{t("common.edit")}</Button>
+          <Button
+            disabled={!permissions.canEditDeadlines}
+            onClick={() => setModalOpen(true)}
+          >
+            {t("common.edit")}
+          </Button>
         </div>
       </div>
 
@@ -149,15 +193,11 @@ export default function DeadlineDetailPage() {
         <div className="detailGrid">
           <div>
             <div className="metaLabel">{t("deadlines.form.owner")}</div>
-            <div className="metaValue">
-              {getUserLabel(deadline.ownerUserId) || t("common.notAssigned")}
-            </div>
+            <div className="metaValue">{renderUserValue(deadline.ownerUserId)}</div>
           </div>
           <div>
             <div className="metaLabel">{t("deadlines.form.deputy")}</div>
-            <div className="metaValue">
-              {getUserLabel(deadline.deputyUserId) || t("common.notAssigned")}
-            </div>
+            <div className="metaValue">{renderUserValue(deadline.deputyUserId)}</div>
           </div>
         </div>
       </Card>
@@ -177,6 +217,26 @@ export default function DeadlineDetailPage() {
       </Card>
 
       <DeadlineModal open={modalOpen} onClose={() => setModalOpen(false)} deadline={deadline} />
+
+      <EvidenceCompletionModal
+        open={completionModalOpen}
+        onClose={() => setCompletionModalOpen(false)}
+        header={t("tasks.complete.modal.title")}
+        ownerType="DEADLINE"
+        ownerId={deadline.id}
+        onSave={(input) => {
+          markDeadlineDoneWithEvidence(deadline.id, input);
+        }}
+      />
+
+      <EvidenceListModal
+        open={evidenceModalOpen}
+        onClose={() => setEvidenceModalOpen(false)}
+        title={t("tasks.evidence.modal.title")}
+        evidence={deadline.evidence ?? []}
+        ownerType="DEADLINE"
+        ownerId={deadline.id}
+      />
     </div>
   );
 }

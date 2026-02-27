@@ -1,0 +1,18 @@
+{
+  "appName": "Nemetz Bescheid-Auflagen Prototype",
+  "buildLabel": "local",
+  "features": {
+    "enableReports": true,
+    "enableDiagnostics": true,
+    "enableNotifications": true,
+    "enableEvidence": true,
+    "enableRbacDemo": true,
+    "enableCalendarExport": true,
+    "enableAiAnalysis": false,
+    "enableHelpHints": true
+  },
+  "ai": {
+    "provider": "disabled",
+    "proxyBaseUrl": ""
+  }
+}
