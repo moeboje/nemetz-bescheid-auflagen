@@ -7,6 +7,7 @@ import { type AuditLog, type Prisma, type Session, type User as PrismaUser } fro
 import { Issuer } from "openid-client";
 import { loadConfig, type AppConfig } from "./config.js";
 import { prisma } from "./prisma.js";
+import { createStateRouter } from "./routes/state.js";
 import {
   createRateLimiter,
   decryptString,
@@ -1210,6 +1211,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   app.use(csrfProtectionMiddleware);
 
   const router = express.Router();
+  router.use(createStateRouter(prisma));
   const entraStateStore = createEntraStateStore();
   const entraEnabled = isEntraConfigured(config);
   let entraClientPromise: ReturnType<typeof discoverEntraClient> | null = null;

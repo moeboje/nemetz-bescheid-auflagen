@@ -1,6 +1,6 @@
 import { isSafeModeActive } from "./safeMode";
 
-export const STORAGE_VERSION = 1;
+export const STORAGE_VERSION = 2;
 
 const SAVE_DEBOUNCE_MS = 250;
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();

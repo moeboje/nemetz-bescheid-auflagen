@@ -18,9 +18,9 @@ COPY --from=build /app/apps/api/package*.json ./
 COPY --from=build /app/apps/api/node_modules ./node_modules
 COPY --from=build /app/apps/api/prisma ./prisma
 COPY --from=build /app/apps/api/dist ./dist
-COPY --from=build /app/apps/api/storage ./storage
+RUN mkdir -p ./storage/uploads ./storage/mail-outbox
 
 ENV NODE_ENV=production
 EXPOSE 4000
 
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/seed.js && node dist/index.js"]
+CMD ["sh","-c","if echo \"$DATABASE_URL\" | grep -q \"^file:/tmp/\"; then cp -f /data/db/prod.db /tmp/prod.db || true; fi; exec node dist/index.js"]

@@ -3,6 +3,7 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-
 import { AppShell, Button, Card, IconButton, Sidebar, SidebarNavItem, Topbar } from "@nemetz/ui";
 import { t } from "./i18n";
 import TasksPage from "./pages/TasksPage";
+import { ServerStateSync } from "./components/ServerStateSync";
 import TaskDetailPage from "./pages/TaskDetailPage";
 import LegalDocPage from "./pages/LegalDocPage";
 import UiDemoPage from "./pages/UiDemoPage";
@@ -340,6 +341,7 @@ function AppLayout() {
           </Button>
         </div>
       ) : null}
+      <ServerStateSync />
       <Routes>
         <Route path="/" element={<Navigate to={`${MODULE_BASE_PATH}/dashboard`} replace />} />
         <Route path={MODULE_PREFIX}>
