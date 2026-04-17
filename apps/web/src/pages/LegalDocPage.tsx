@@ -227,13 +227,15 @@ export default function LegalDocPage() {
     );
   }
 
-  const handleArchive = (cascadeChildren: boolean) => {
+  const handleArchive = async (cascadeChildren: boolean) => {
     if (cascadeChildren) {
-      docObligations.forEach((obligation) => archiveObligation(obligation.id));
+      await Promise.all(docObligations.map((obligation) => archiveObligation(obligation.id)));
       docDeadlines.forEach((deadline) => archiveDeadline(deadline.id));
     }
-    archiveLegalDoc(legalDoc.id);
-    navigate("..", { relative: "path" });
+    const archived = await archiveLegalDoc(legalDoc.id);
+    if (archived) {
+      navigate("..", { relative: "path" });
+    }
   };
 
   return (
@@ -264,7 +266,7 @@ export default function LegalDocPage() {
             <Button
               variant="secondary"
               disabled={!permissions.canEditLegalDocs}
-              onClick={() => restoreLegalDoc(legalDoc.id)}
+              onClick={() => void restoreLegalDoc(legalDoc.id)}
             >
               {t("common.restore")}
             </Button>
@@ -538,7 +540,7 @@ export default function LegalDocPage() {
               variant="secondary"
               onClick={() => {
                 setArchiveModalOpen(false);
-                handleArchive(false);
+                void handleArchive(false);
               }}
             >
               {t("legalDocs.archive.parentOnly")}
@@ -546,7 +548,7 @@ export default function LegalDocPage() {
             <Button
               onClick={() => {
                 setArchiveModalOpen(false);
-                handleArchive(true);
+                void handleArchive(true);
               }}
               disabled={docObligations.length + docDeadlines.length === 0}
             >

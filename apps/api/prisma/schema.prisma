@@ -8,42 +8,50 @@ datasource db {
 }
 
 model User {
-  id                  String               @id @default(cuid())
-  firstName           String
-  lastName            String
-  email               String               @unique
-  phone               String?
-  role                String
-  type                String
-  titleOrPosition     String?
-  department          String?
-  externalCompany     String?
-  externalOrgId       String?
-  notes               String?
-  isArchived          Boolean              @default(false)
-  passwordHash        String
-  passwordUpdatedAt   DateTime             @default(now())
-  lastPasswordResetAt DateTime?
-  mustChangePassword  Boolean              @default(false)
-  invitedAt           DateTime?
-  failedLoginCount    Int                  @default(0)
-  lockedUntil         DateTime?
-  lastLoginAt         DateTime?
-  mfaEnabled          Boolean              @default(false)
-  mfaEnforced         Boolean              @default(false)
-  mfaTotpSecretEnc    String?
-  mfaVerifiedAt       DateTime?
+  id                       String                @id @default(cuid())
+  firstName                String
+  lastName                 String
+  email                    String                @unique
+  phone                    String?
+  role                     String
+  type                     String
+  titleOrPosition          String?
+  department               String?
+  externalCompany          String?
+  externalOrgId            String?
+  notes                    String?
+  isArchived               Boolean               @default(false)
+  passwordHash             String
+  passwordUpdatedAt        DateTime              @default(now())
+  lastPasswordResetAt      DateTime?
+  mustChangePassword       Boolean               @default(false)
+  invitedAt                DateTime?
+  failedLoginCount         Int                   @default(0)
+  lockedUntil              DateTime?
+  lastLoginAt              DateTime?
+  mfaEnabled               Boolean               @default(false)
+  mfaEnforced              Boolean               @default(false)
+  mfaTotpSecretEnc         String?
+  mfaVerifiedAt            DateTime?
   mfaRecoveryCodesHashJson String?
-  createdAt           DateTime             @default(now())
-  updatedAt           DateTime             @updatedAt
-  sessions            Session[]
-  resetTokens         PasswordResetToken[]
-  mfaPendings         MfaPending[]
-  mfaChallenges       MfaChallenge[]
-  auditLogsAsActor    AuditLog[]           @relation("AuditActor")
-  auditLogsAsTarget   AuditLog[]           @relation("AuditTarget")
-  documentsCreated    Document[]
-  externalOrg         ExternalOrganization? @relation(fields: [externalOrgId], references: [id], onDelete: SetNull)
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+  sessions                 Session[]
+  resetTokens              PasswordResetToken[]
+  mfaPendings              MfaPending[]
+  mfaChallenges            MfaChallenge[]
+  auditLogsAsActor         AuditLog[]            @relation("AuditActor")
+  auditLogsAsTarget        AuditLog[]            @relation("AuditTarget")
+  documentsCreated         Document[]
+  externalOrg              ExternalOrganization? @relation(fields: [externalOrgId], references: [id], onDelete: SetNull)
+  ownedProjects            Project[]             @relation("ProjectOwner")
+  deputyProjects           Project[]             @relation("ProjectDeputy")
+  ownedObligations         Obligation[]          @relation("ObligationOwner")
+  deputyObligations        Obligation[]          @relation("ObligationDeputy")
+  ownedDeadlines           Deadline[]            @relation("DeadlineOwner")
+  deputyDeadlines          Deadline[]            @relation("DeadlineDeputy")
+  completedDeadlines       Deadline[]            @relation("DeadlineCompletedBy")
+  completedTaskStateEntries TaskStateEntry[]       @relation("TaskStateCompletedBy")
 
   @@index([isArchived])
   @@index([role])
@@ -134,6 +142,250 @@ model ExternalOrganization {
   @@index([type])
 }
 
+model Company {
+  id         String     @id @default(cuid())
+  name       String
+  shortName  String?
+  isArchived Boolean    @default(false)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  sites      Site[]
+  facilities Facility[]
+  projects   Project[]
+
+  @@index([isArchived])
+}
+
+model Site {
+  id         String     @id @default(cuid())
+  companyId  String
+  name       String
+  isArchived Boolean    @default(false)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  company    Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  facilities Facility[]
+  projects   Project[]
+
+  @@index([companyId])
+  @@index([isArchived])
+}
+
+model Facility {
+  id         String    @id @default(cuid())
+  companyId  String
+  siteId     String
+  name       String
+  type       String?
+  isArchived Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  company    Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  site       Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  projects   Project[]
+
+  @@index([companyId])
+  @@index([siteId])
+  @@index([isArchived])
+}
+
+model Authority {
+  id         String             @id @default(cuid())
+  name       String
+  shortName  String?
+  isArchived Boolean            @default(false)
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+  contacts   AuthorityContact[]
+  legalDocs  LegalDocument[]
+  projects   Project[]
+  deadlines  Deadline[]
+
+  @@index([isArchived])
+}
+
+model AuthorityContact {
+  id          String          @id @default(cuid())
+  authorityId String
+  name        String
+  firstName   String?
+  lastName    String?
+  email       String?
+  phone       String?
+  mobile      String?
+  roleTitle   String?
+  notes       String?
+  department  String?
+  isPrimary   Boolean         @default(false)
+  isArchived  Boolean         @default(false)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  authority   Authority       @relation(fields: [authorityId], references: [id], onDelete: Cascade)
+  legalDocs   LegalDocument[]
+  projects    Project[]
+
+  @@index([authorityId])
+  @@index([isArchived])
+}
+
+model Project {
+  id                   String            @id
+  title                String
+  shortDescription     String?
+  authorityRef         String?
+  companyId            String
+  siteId               String?
+  facilityId           String?
+  authorityId          String?
+  authorityContactId   String?
+  ownerUserId          String?
+  deputyUserId         String?
+  participantUserIds   Json
+  internalParticipants Json
+  externalParticipants Json
+  attachments          Json
+  dependsOnProjectIds  Json
+  referenceLegalDocIds Json
+  archivedAt           DateTime?
+  isArchived           Boolean           @default(false)
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  company              Company           @relation(fields: [companyId], references: [id])
+  legalDocuments       LegalDocument[]
+  deadlines            Deadline[]
+  site                 Site?             @relation(fields: [siteId], references: [id])
+  facility             Facility?         @relation(fields: [facilityId], references: [id])
+  authority            Authority?        @relation(fields: [authorityId], references: [id])
+  authorityContact     AuthorityContact? @relation(fields: [authorityContactId], references: [id])
+  ownerUser            User?             @relation("ProjectOwner", fields: [ownerUserId], references: [id])
+  deputyUser           User?             @relation("ProjectDeputy", fields: [deputyUserId], references: [id])
+
+  @@index([companyId])
+  @@index([siteId])
+  @@index([facilityId])
+  @@index([authorityId])
+  @@index([authorityContactId])
+  @@index([ownerUserId])
+  @@index([deputyUserId])
+  @@index([isArchived])
+}
+
+model LegalDocument {
+  id                 String            @id
+  projectId          String
+  type               String
+  title              String
+  shortDescription   String?
+  reference          String?
+  issuedAt           String?
+  authorityId        String?
+  authorityContactId String?
+  attachments        Json
+  aiExtraction       Json?
+  scopeOverride      Json?
+  archivedAt         DateTime?
+  isArchived         Boolean           @default(false)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  project            Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  authority          Authority?        @relation(fields: [authorityId], references: [id], onDelete: SetNull)
+  authorityContact   AuthorityContact? @relation(fields: [authorityContactId], references: [id], onDelete: SetNull)
+  obligations        Obligation[]
+  deadlines          Deadline[]
+
+  @@index([projectId])
+  @@index([authorityId])
+  @@index([authorityContactId])
+  @@index([isArchived])
+}
+
+model Obligation {
+  id                      String        @id
+  legalDocId              String
+  title                   String
+  infoTextLong            String?
+  level                   String
+  criticality             String?
+  scheduleType            String
+  firstDueDate            String?
+  intervalUnit            String?
+  intervalValue           Int?
+  ownerUserId             String?
+  deputyUserId            String?
+  origin                  String?
+  sourceSuggestionId      String?
+  sourceRunId             String?
+  emailReminderEnabled    Boolean       @default(false)
+  emailReminderDaysBefore Int?
+  evidenceRequirements    Json
+  archivedAt              DateTime?
+  isArchived              Boolean       @default(false)
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+  legalDocument           LegalDocument @relation(fields: [legalDocId], references: [id], onDelete: Cascade)
+  ownerUser               User?         @relation("ObligationOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  deputyUser              User?         @relation("ObligationDeputy", fields: [deputyUserId], references: [id], onDelete: SetNull)
+
+  @@index([legalDocId])
+  @@index([ownerUserId])
+  @@index([deputyUserId])
+  @@index([isArchived])
+}
+
+model Deadline {
+  id                      String        @id
+  title                   String
+  description             String?
+  dueDate                 String
+  status                  String
+  projectId               String?
+  legalDocId              String?
+  authorityId             String?
+  ownerUserId             String?
+  deputyUserId            String?
+  emailReminderEnabled    Boolean       @default(false)
+  emailReminderDaysBefore Int?
+  completedAt             DateTime?
+  completedByUserId       String?
+  evidence                Json
+  archivedAt              DateTime?
+  isArchived              Boolean       @default(false)
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+  project                 Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  legalDocument           LegalDocument? @relation(fields: [legalDocId], references: [id], onDelete: SetNull)
+  authority               Authority?    @relation(fields: [authorityId], references: [id], onDelete: SetNull)
+  ownerUser               User?         @relation("DeadlineOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  deputyUser              User?         @relation("DeadlineDeputy", fields: [deputyUserId], references: [id], onDelete: SetNull)
+  completedByUser         User?         @relation("DeadlineCompletedBy", fields: [completedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([legalDocId])
+  @@index([authorityId])
+  @@index([ownerUserId])
+  @@index([deputyUserId])
+  @@index([completedByUserId])
+  @@index([status])
+  @@index([dueDate])
+  @@index([isArchived])
+}
+
+model TaskStateEntry {
+  taskInstanceId    String   @id
+  status            String
+  completedAt       DateTime?
+  completedByUserId String?
+  completedByLabel  String?
+  evidence          Json
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  completedByUser   User?    @relation("TaskStateCompletedBy", fields: [completedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([completedByUserId])
+  @@index([status])
+  @@index([updatedAt])
+}
+
 model MfaPending {
   id        String   @id @default(cuid())
   userId    String
@@ -161,28 +413,28 @@ model MfaChallenge {
 }
 
 model Session {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  tokenHash String   @unique
-  createdAt DateTime @default(now())
+  tokenHash String    @unique
+  createdAt DateTime  @default(now())
   expiresAt DateTime
   revokedAt DateTime?
   ip        String?
   userAgent String?
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([expiresAt])
 }
 
 model PasswordResetToken {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   userId    String
-  tokenHash String   @unique
+  tokenHash String    @unique
   expiresAt DateTime
   usedAt    DateTime?
-  createdAt DateTime @default(now())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([expiresAt])
@@ -205,6 +457,7 @@ model AuditLog {
   @@index([action])
   @@index([createdAt])
 }
+
 model PortalSnapshot {
   id              String   @id @default(cuid())
   scopeKey        String   @unique

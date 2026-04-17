@@ -1,10 +1,23 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { scopes as initialScopes } from "../data/scopes";
+import { useAuth } from "./AuthStore";
+import { clearPersistedValue, makeStorageKey } from "./persistence";
 import {
-  loadPersistedValue,
-  makeStorageKey,
-  savePersistedValue
-} from "./persistence";
+  archiveCompany as apiArchiveCompany,
+  archiveFacility as apiArchiveFacility,
+  archiveSite as apiArchiveSite,
+  bulkReplaceScopes,
+  createCompany as apiCreateCompany,
+  createFacility as apiCreateFacility,
+  createSite as apiCreateSite,
+  listScopes,
+  restoreCompany as apiRestoreCompany,
+  restoreFacility as apiRestoreFacility,
+  restoreSite as apiRestoreSite,
+  updateCompany as apiUpdateCompany,
+  updateFacility as apiUpdateFacility,
+  updateSite as apiUpdateSite
+} from "../api/scopes";
 
 export type ScopeCompany = {
   id: string;
@@ -58,23 +71,30 @@ type ScopesContextValue = ScopesSnapshot & {
   getCompany: (id: string) => ScopeCompany | undefined;
   getSites: (companyId: string, options?: ScopeFilterOptions) => ScopeSite[];
   getFacilities: (siteId: string, options?: ScopeFilterOptions) => ScopeFacility[];
-  addCompany: (input: { name: string; shortName?: string }) => void;
-  updateCompany: (id: string, input: { name: string; shortName?: string }) => void;
-  archiveCompany: (id: string) => void;
-  restoreCompany: (id: string) => void;
-  addSite: (input: { companyId: string; name: string }) => string;
-  updateSite: (id: string, input: { companyId: string; name: string }) => void;
-  archiveSite: (id: string) => void;
-  restoreSite: (id: string) => void;
-  addFacility: (input: { companyId: string; siteId: string; name: string; type?: string }) => string;
+  addCompany: (input: { id?: string; name: string; shortName?: string }) => Promise<ScopeCompany>;
+  updateCompany: (id: string, input: { name: string; shortName?: string }) => Promise<ScopeCompany | null>;
+  archiveCompany: (id: string) => Promise<ScopeCompany | null>;
+  restoreCompany: (id: string) => Promise<ScopeCompany | null>;
+  addSite: (input: { id?: string; companyId: string; name: string }) => Promise<string>;
+  updateSite: (id: string, input: { companyId: string; name: string }) => Promise<ScopeSite | null>;
+  archiveSite: (id: string) => Promise<ScopeSite | null>;
+  restoreSite: (id: string) => Promise<ScopeSite | null>;
+  addFacility: (input: {
+    id?: string;
+    companyId: string;
+    siteId: string;
+    name: string;
+    type?: string;
+  }) => Promise<string>;
   updateFacility: (
     id: string,
     input: { companyId: string; siteId: string; name: string; type?: string }
-  ) => void;
-  archiveFacility: (id: string) => void;
-  restoreFacility: (id: string) => void;
-  replaceScopes: (value: ScopesSnapshot) => void;
-  resetScopes: () => void;
+  ) => Promise<ScopeFacility | null>;
+  archiveFacility: (id: string) => Promise<ScopeFacility | null>;
+  restoreFacility: (id: string) => Promise<ScopeFacility | null>;
+  replaceScopes: (value: ScopesSnapshot) => Promise<void>;
+  resetScopes: () => Promise<void>;
+  reloadScopes: () => Promise<ScopesSnapshot>;
   getScopeLabel: (
     companyIdOrInput: string | ScopeLabelInput,
     siteId?: string,
@@ -195,22 +215,65 @@ function normalizeScopes(value: ScopesSnapshot): ScopesSnapshot {
   };
 }
 
-function createId(prefix: "c" | "s" | "f") {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+function mergeCompany(existing: ScopeCompany, incoming: ScopeCompany) {
+  return {
+    ...existing,
+    ...incoming,
+    shortName: incoming.shortName ?? existing.shortName ?? ""
+  };
+}
+
+function mergeSite(existing: ScopeSite, incoming: ScopeSite) {
+  return {
+    ...existing,
+    ...incoming
+  };
+}
+
+function mergeFacility(existing: ScopeFacility, incoming: ScopeFacility) {
+  return {
+    ...existing,
+    ...incoming,
+    type: incoming.type ?? existing.type ?? ""
+  };
 }
 
 export function ScopesProvider({ children }: { children: React.ReactNode }) {
-  const [scopeData, setScopeData] = useState<ScopesSnapshot>(() => {
-    const fallback = createSeedScopes();
-    const stored = loadPersistedValue<ScopesSnapshot>(SCOPES_STORAGE_KEY, fallback);
-    return normalizeScopes(stored);
+  const { user: authUser } = useAuth();
+  const [scopeData, setScopeData] = useState<ScopesSnapshot>({
+    companies: [],
+    sites: [],
+    facilities: []
   });
 
   const { companies, sites, facilities } = scopeData;
 
-  React.useEffect(() => {
-    savePersistedValue(SCOPES_STORAGE_KEY, scopeData);
-  }, [scopeData]);
+  const reloadScopes = useCallback(async () => {
+    if (!authUser || authUser.type === "EXTERNAL") {
+      const empty = { companies: [], sites: [], facilities: [] } satisfies ScopesSnapshot;
+      setScopeData(empty);
+      clearPersistedValue(SCOPES_STORAGE_KEY);
+      return empty;
+    }
+
+    const next = normalizeScopes(await listScopes());
+    setScopeData(next);
+    clearPersistedValue(SCOPES_STORAGE_KEY);
+    return next;
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser || authUser.type === "EXTERNAL") {
+      setScopeData({ companies: [], sites: [], facilities: [] });
+      clearPersistedValue(SCOPES_STORAGE_KEY);
+      return;
+    }
+
+    void reloadScopes().catch(() => {
+      setScopeData({ companies: [], sites: [], facilities: [] });
+      clearPersistedValue(SCOPES_STORAGE_KEY);
+    });
+  }, [authUser, reloadScopes]);
 
   const getCompany = useCallback(
     (id: string) => companies.find((company) => company.id === id),
@@ -237,241 +300,300 @@ export function ScopesProvider({ children }: { children: React.ReactNode }) {
     [facilities]
   );
 
-  const addCompany = useCallback((input: { name: string; shortName?: string }) => {
-    const timestamp = nowStamp();
+  const addCompany = useCallback(async (input: { id?: string; name: string; shortName?: string }) => {
+    const createdCompany = await apiCreateCompany({
+      id: input.id,
+      name: input.name.trim(),
+      shortName: input.shortName?.trim() || undefined
+    });
+
     setScopeData((prev) => ({
       ...prev,
-      companies: [
-        ...prev.companies,
-        {
-          id: createId("c"),
-          name: input.name,
-          shortName: input.shortName ?? "",
-          isArchived: false,
-          createdAt: timestamp,
-          updatedAt: timestamp
-        }
-      ]
+      companies: [...prev.companies, createdCompany]
     }));
+    clearPersistedValue(SCOPES_STORAGE_KEY);
+    return createdCompany;
   }, []);
 
-  const updateCompany = useCallback((id: string, input: { name: string; shortName?: string }) => {
-    const timestamp = nowStamp();
-    setScopeData((prev) => ({
-      ...prev,
-      companies: prev.companies.map((company) =>
-        company.id === id
-          ? {
-              ...company,
-              name: input.name,
-              shortName: input.shortName ?? "",
-              updatedAt: timestamp
-            }
-          : company
-      )
-    }));
-  }, []);
+  const updateCompany = useCallback(
+    async (id: string, input: { name: string; shortName?: string }) => {
+      const existing = companies.find((company) => company.id === id);
+      if (!existing) {
+        return null;
+      }
 
-  const archiveCompany = useCallback((id: string) => {
-    const timestamp = nowStamp();
-    setScopeData((prev) => ({
-      ...prev,
-      companies: prev.companies.map((company) =>
-        company.id === id ? { ...company, isArchived: true, updatedAt: timestamp } : company
-      )
-    }));
-  }, []);
+      const updatedCompany = await apiUpdateCompany(id, {
+        name: input.name.trim(),
+        shortName: input.shortName?.trim() || undefined
+      });
 
-  const restoreCompany = useCallback((id: string) => {
-    const timestamp = nowStamp();
-    setScopeData((prev) => ({
-      ...prev,
-      companies: prev.companies.map((company) =>
-        company.id === id ? { ...company, isArchived: false, updatedAt: timestamp } : company
-      )
-    }));
-  }, []);
-
-  const addSite = useCallback((input: { companyId: string; name: string }) => {
-    const timestamp = nowStamp();
-    const id = createId("s");
-    setScopeData((prev) => ({
-      ...prev,
-      sites: [
-        ...prev.sites,
-        {
-          id,
-          companyId: input.companyId,
-          name: input.name,
-          isArchived: false,
-          createdAt: timestamp,
-          updatedAt: timestamp
-        }
-      ]
-    }));
-    return id;
-  }, []);
-
-  const updateSite = useCallback((id: string, input: { companyId: string; name: string }) => {
-    const timestamp = nowStamp();
-    setScopeData((prev) => ({
-      companies: prev.companies,
-      sites: prev.sites.map((site) =>
-        site.id === id
-          ? {
-              ...site,
-              companyId: input.companyId,
-              name: input.name,
-              updatedAt: timestamp
-            }
-          : site
-      ),
-      facilities: prev.facilities.map((facility) =>
-        facility.siteId === id
-          ? {
-              ...facility,
-              companyId: input.companyId,
-              updatedAt: timestamp
-            }
-          : facility
-      )
-    }));
-  }, []);
-
-  const archiveSite = useCallback((id: string) => {
-    const timestamp = nowStamp();
-    setScopeData((prev) => ({
-      ...prev,
-      sites: prev.sites.map((site) =>
-        site.id === id ? { ...site, isArchived: true, updatedAt: timestamp } : site
-      )
-    }));
-  }, []);
-
-  const restoreSite = useCallback((id: string) => {
-    const timestamp = nowStamp();
-    setScopeData((prev) => ({
-      ...prev,
-      sites: prev.sites.map((site) =>
-        site.id === id ? { ...site, isArchived: false, updatedAt: timestamp } : site
-      )
-    }));
-  }, []);
-
-  const addFacility = useCallback(
-    (input: { companyId: string; siteId: string; name: string; type?: string }) => {
-      const timestamp = nowStamp();
-      const id = createId("f");
       setScopeData((prev) => ({
         ...prev,
-        facilities: [
-          ...prev.facilities,
-          {
-            id,
-            companyId: input.companyId,
-            siteId: input.siteId,
-            name: input.name,
-            type: input.type ?? "",
-            isArchived: false,
-            createdAt: timestamp,
-            updatedAt: timestamp
-          }
-        ]
+        companies: prev.companies.map((company) =>
+          company.id === id ? mergeCompany(company, updatedCompany) : company
+        )
       }));
-      return id;
+      clearPersistedValue(SCOPES_STORAGE_KEY);
+      return updatedCompany;
+    },
+    [companies]
+  );
+
+  const archiveCompany = useCallback(
+    async (id: string) => {
+      const existing = companies.find((company) => company.id === id);
+      if (!existing) {
+        return null;
+      }
+
+      const updatedCompany = await apiArchiveCompany(id);
+      setScopeData((prev) => ({
+        ...prev,
+        companies: prev.companies.map((company) =>
+          company.id === id ? mergeCompany(company, updatedCompany) : company
+        )
+      }));
+      clearPersistedValue(SCOPES_STORAGE_KEY);
+      return updatedCompany;
+    },
+    [companies]
+  );
+
+  const restoreCompany = useCallback(
+    async (id: string) => {
+      const existing = companies.find((company) => company.id === id);
+      if (!existing) {
+        return null;
+      }
+
+      const updatedCompany = await apiRestoreCompany(id);
+      setScopeData((prev) => ({
+        ...prev,
+        companies: prev.companies.map((company) =>
+          company.id === id ? mergeCompany(company, updatedCompany) : company
+        )
+      }));
+      clearPersistedValue(SCOPES_STORAGE_KEY);
+      return updatedCompany;
+    },
+    [companies]
+  );
+
+  const addSite = useCallback(async (input: { id?: string; companyId: string; name: string }) => {
+    const createdSite = await apiCreateSite({
+      id: input.id,
+      companyId: input.companyId,
+      name: input.name.trim()
+    });
+
+    setScopeData((prev) => ({
+      ...prev,
+      sites: [...prev.sites, createdSite]
+    }));
+    clearPersistedValue(SCOPES_STORAGE_KEY);
+    return createdSite.id;
+  }, []);
+
+  const updateSite = useCallback(
+    async (id: string, input: { companyId: string; name: string }) => {
+      const existing = sites.find((site) => site.id === id);
+      if (!existing) {
+        return null;
+      }
+
+      const updatedSite = await apiUpdateSite(id, {
+        companyId: input.companyId,
+        name: input.name.trim()
+      });
+
+      setScopeData((prev) => ({
+        ...prev,
+        sites: prev.sites.map((site) => (site.id === id ? mergeSite(site, updatedSite) : site))
+      }));
+      clearPersistedValue(SCOPES_STORAGE_KEY);
+      return updatedSite;
+    },
+    [sites]
+  );
+
+  const archiveSite = useCallback(
+    async (id: string) => {
+      const existing = sites.find((site) => site.id === id);
+      if (!existing) {
+        return null;
+      }
+
+      const updatedSite = await apiArchiveSite(id);
+      setScopeData((prev) => ({
+        ...prev,
+        sites: prev.sites.map((site) => (site.id === id ? mergeSite(site, updatedSite) : site))
+      }));
+      clearPersistedValue(SCOPES_STORAGE_KEY);
+      return updatedSite;
+    },
+    [sites]
+  );
+
+  const restoreSite = useCallback(
+    async (id: string) => {
+      const existing = sites.find((site) => site.id === id);
+      if (!existing) {
+        return null;
+      }
+
+      const updatedSite = await apiRestoreSite(id);
+      setScopeData((prev) => ({
+        ...prev,
+        sites: prev.sites.map((site) => (site.id === id ? mergeSite(site, updatedSite) : site))
+      }));
+      clearPersistedValue(SCOPES_STORAGE_KEY);
+      return updatedSite;
+    },
+    [sites]
+  );
+
+  const addFacility = useCallback(
+    async (input: {
+      id?: string;
+      companyId: string;
+      siteId: string;
+      name: string;
+      type?: string;
+    }) => {
+      const createdFacility = await apiCreateFacility({
+        id: input.id,
+        companyId: input.companyId,
+        siteId: input.siteId,
+        name: input.name.trim(),
+        type: input.type?.trim() || undefined
+      });
+
+      setScopeData((prev) => ({
+        ...prev,
+        facilities: [...prev.facilities, createdFacility]
+      }));
+      clearPersistedValue(SCOPES_STORAGE_KEY);
+      return createdFacility.id;
     },
     []
   );
 
   const updateFacility = useCallback(
-    (id: string, input: { companyId: string; siteId: string; name: string; type?: string }) => {
-      const timestamp = nowStamp();
+    async (
+      id: string,
+      input: { companyId: string; siteId: string; name: string; type?: string }
+    ) => {
+      const existing = facilities.find((facility) => facility.id === id);
+      if (!existing) {
+        return null;
+      }
+
+      const updatedFacility = await apiUpdateFacility(id, {
+        companyId: input.companyId,
+        siteId: input.siteId,
+        name: input.name.trim(),
+        type: input.type?.trim() || undefined
+      });
+
       setScopeData((prev) => ({
         ...prev,
         facilities: prev.facilities.map((facility) =>
-          facility.id === id
-            ? {
-                ...facility,
-                companyId: input.companyId,
-                siteId: input.siteId,
-                name: input.name,
-                type: input.type ?? "",
-                updatedAt: timestamp
-              }
-            : facility
+          facility.id === id ? mergeFacility(facility, updatedFacility) : facility
         )
       }));
+      clearPersistedValue(SCOPES_STORAGE_KEY);
+      return updatedFacility;
     },
-    []
+    [facilities]
   );
 
-  const archiveFacility = useCallback((id: string) => {
-    const timestamp = nowStamp();
-    setScopeData((prev) => ({
-      ...prev,
-      facilities: prev.facilities.map((facility) =>
-        facility.id === id ? { ...facility, isArchived: true, updatedAt: timestamp } : facility
-      )
-    }));
+  const archiveFacility = useCallback(
+    async (id: string) => {
+      const existing = facilities.find((facility) => facility.id === id);
+      if (!existing) {
+        return null;
+      }
+
+      const updatedFacility = await apiArchiveFacility(id);
+      setScopeData((prev) => ({
+        ...prev,
+        facilities: prev.facilities.map((facility) =>
+          facility.id === id ? mergeFacility(facility, updatedFacility) : facility
+        )
+      }));
+      clearPersistedValue(SCOPES_STORAGE_KEY);
+      return updatedFacility;
+    },
+    [facilities]
+  );
+
+  const restoreFacility = useCallback(
+    async (id: string) => {
+      const existing = facilities.find((facility) => facility.id === id);
+      if (!existing) {
+        return null;
+      }
+
+      const updatedFacility = await apiRestoreFacility(id);
+      setScopeData((prev) => ({
+        ...prev,
+        facilities: prev.facilities.map((facility) =>
+          facility.id === id ? mergeFacility(facility, updatedFacility) : facility
+        )
+      }));
+      clearPersistedValue(SCOPES_STORAGE_KEY);
+      return updatedFacility;
+    },
+    [facilities]
+  );
+
+  const replaceScopes = useCallback(async (value: ScopesSnapshot) => {
+    const replaced = normalizeScopes(await bulkReplaceScopes(value));
+    setScopeData(replaced);
+    clearPersistedValue(SCOPES_STORAGE_KEY);
   }, []);
 
-  const restoreFacility = useCallback((id: string) => {
-    const timestamp = nowStamp();
-    setScopeData((prev) => ({
-      ...prev,
-      facilities: prev.facilities.map((facility) =>
-        facility.id === id ? { ...facility, isArchived: false, updatedAt: timestamp } : facility
-      )
-    }));
-  }, []);
-
-  const replaceScopes = useCallback((value: ScopesSnapshot) => {
-    setScopeData(normalizeScopes(value));
-  }, []);
-
-  const resetScopes = useCallback(() => {
-    setScopeData(createSeedScopes());
+  const resetScopes = useCallback(async () => {
+    const seed = createSeedScopes();
+    const replaced = normalizeScopes(await bulkReplaceScopes(seed));
+    setScopeData(replaced);
+    clearPersistedValue(SCOPES_STORAGE_KEY);
   }, []);
 
   const getScopeLabel = useCallback(
-    (companyIdOrInput: string | ScopeLabelInput, siteIdInput?: string, facilityIdInput?: string) => {
-      const companyId =
-        typeof companyIdOrInput === "string" ? companyIdOrInput : companyIdOrInput.companyId;
-      const siteId =
-        typeof companyIdOrInput === "string" ? siteIdInput : companyIdOrInput.siteId;
-      const facilityId =
-        typeof companyIdOrInput === "string" ? facilityIdInput : companyIdOrInput.facilityId;
+    (
+      companyIdOrInput: string | ScopeLabelInput,
+      siteId?: string,
+      facilityId?: string
+    ) => {
+      const input =
+        typeof companyIdOrInput === "string"
+          ? { companyId: companyIdOrInput, siteId, facilityId }
+          : companyIdOrInput;
 
-      const facility = facilityId
-        ? facilities.find((item) => item.id === facilityId)
-        : undefined;
-      const site = siteId
-        ? sites.find((item) => item.id === siteId)
-        : facility
-        ? sites.find((item) => item.id === facility.siteId)
-        : undefined;
-      const company =
-        companies.find((item) => item.id === companyId) ||
-        (facility ? companies.find((item) => item.id === facility.companyId) : undefined);
+      const company = companies.find((item) => item.id === input.companyId);
+      const companyName = company?.name ?? input.companyId;
 
-      if (!company) {
-        return "";
+      if (!input.siteId) {
+        return companyName;
       }
-      if (facility && site) {
-        return `${company.name} / ${site.name} / ${facility.name}`;
+
+      const site = sites.find((item) => item.id === input.siteId);
+      const siteName = site?.name ?? input.siteId;
+
+      if (!input.facilityId) {
+        return `${companyName} / ${siteName}`;
       }
-      if (facility) {
-        return `${company.name} / ${facility.name}`;
-      }
-      if (site) {
-        return `${company.name} / ${site.name}`;
-      }
-      return company.name;
+
+      const facility = facilities.find((item) => item.id === input.facilityId);
+      const facilityName = facility?.name ?? input.facilityId;
+
+      return `${companyName} / ${siteName} / ${facilityName}`;
     },
     [companies, facilities, sites]
   );
 
-  const value = useMemo(
+  const value = useMemo<ScopesContextValue>(
     () => ({
       companies,
       sites,
@@ -493,30 +615,32 @@ export function ScopesProvider({ children }: { children: React.ReactNode }) {
       restoreFacility,
       replaceScopes,
       resetScopes,
+      reloadScopes,
       getScopeLabel
     }),
     [
-      addCompany,
-      addFacility,
-      addSite,
-      archiveCompany,
-      archiveFacility,
-      archiveSite,
       companies,
+      sites,
       facilities,
       getCompany,
-      getFacilities,
       getSites,
-      getScopeLabel,
+      getFacilities,
+      addCompany,
+      updateCompany,
+      archiveCompany,
+      restoreCompany,
+      addSite,
+      updateSite,
+      archiveSite,
+      restoreSite,
+      addFacility,
+      updateFacility,
+      archiveFacility,
+      restoreFacility,
       replaceScopes,
       resetScopes,
-      restoreCompany,
-      restoreFacility,
-      restoreSite,
-      sites,
-      updateCompany,
-      updateFacility,
-      updateSite
+      reloadScopes,
+      getScopeLabel
     ]
   );
 

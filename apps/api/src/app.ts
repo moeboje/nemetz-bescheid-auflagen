@@ -7,7 +7,13 @@ import { type AuditLog, type Prisma, type Session, type User as PrismaUser } fro
 import { Issuer } from "openid-client";
 import { loadConfig, type AppConfig } from "./config.js";
 import { prisma } from "./prisma.js";
-import { createStateRouter } from "./routes/state.js";
+import { createAuthoritiesRouter } from "./routes/authorities.js";
+import { createDeadlinesRouter } from "./routes/deadlines.js";
+import { createLegalDocsRouter } from "./routes/legalDocs.js";
+import { createObligationsRouter } from "./routes/obligations.js";
+import { createProjectsRouter } from "./routes/projects.js";
+import { createScopesRouter } from "./routes/scopes.js";
+import { createTaskStateRouter } from "./routes/taskState.js";
 import {
   createRateLimiter,
   decryptString,
@@ -1211,7 +1217,13 @@ export function createApp(config: AppConfig = loadConfig()) {
   app.use(csrfProtectionMiddleware);
 
   const router = express.Router();
-  router.use(createStateRouter(prisma));
+  router.use(createAuthoritiesRouter(prisma));
+  router.use(createDeadlinesRouter(prisma));
+  router.use(createLegalDocsRouter(prisma));
+  router.use(createObligationsRouter(prisma));
+  router.use(createProjectsRouter(prisma));
+  router.use(createScopesRouter(prisma));
+  router.use(createTaskStateRouter(prisma));
   const entraStateStore = createEntraStateStore();
   const entraEnabled = isEntraConfigured(config);
   let entraClientPromise: ReturnType<typeof discoverEntraClient> | null = null;

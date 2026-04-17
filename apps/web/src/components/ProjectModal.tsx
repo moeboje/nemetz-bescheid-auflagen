@@ -411,7 +411,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     closeInlineCreate();
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (isSaveDisabled) {
       return;
     }
@@ -420,7 +420,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     let saveSucceeded = false;
 
     if (project) {
-      saveSucceeded = updateProject(project.id, {
+      saveSucceeded = await updateProject(project.id, {
         title: form.title,
         shortDescription: form.shortDescription,
         companyId: form.companyId,
@@ -438,7 +438,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
         attachments: form.attachments
       });
     } else {
-      saveSucceeded = addProject({
+      saveSucceeded = await addProject({
         title: form.title,
         shortDescription: form.shortDescription,
         companyId: form.companyId,
@@ -524,7 +524,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
           <Button variant="secondary" onClick={onClose}>
             {t("modal.cancel")}
           </Button>
-          <Button onClick={handleSave} disabled={isSaveDisabled}>
+          <Button onClick={() => void handleSave()} disabled={isSaveDisabled}>
             {t("modal.save")}
           </Button>
         </div>

@@ -10,6 +10,7 @@ import {
 
 type ErrorBoundaryState = {
   hasError: boolean;
+  exportError: string;
 };
 
 export default class ErrorBoundary extends React.Component<
@@ -17,7 +18,8 @@ export default class ErrorBoundary extends React.Component<
   ErrorBoundaryState
 > {
   state: ErrorBoundaryState = {
-    hasError: false
+    hasError: false,
+    exportError: ""
   };
 
   static getDerivedStateFromError() {
@@ -34,9 +36,17 @@ export default class ErrorBoundary extends React.Component<
     }
   };
 
-  private handleExportData = () => {
-    const payload = buildStorageExportPayload();
-    downloadExportPayload(payload, "nemetz-compliance-recovery");
+  private handleExportData = async () => {
+    try {
+      const payload = await buildStorageExportPayload();
+      downloadExportPayload(payload, "nemetz-compliance-recovery");
+      this.setState({ exportError: "" });
+    } catch (error) {
+      const detail = error instanceof Error && error.message ? ` ${error.message}` : "";
+      this.setState({
+        exportError: `${t("errorBoundary.exportFailed")}${detail}`
+      });
+    }
   };
 
   private handleReset = () => {
@@ -65,9 +75,10 @@ export default class ErrorBoundary extends React.Component<
           <div className="errorBoundaryContent">
             <h1 className="pageTitle">{t("errorBoundary.title")}</h1>
             <p className="placeholderText">{t("errorBoundary.description")}</p>
+            {this.state.exportError ? <p className="validationText">{this.state.exportError}</p> : null}
             <div className="errorBoundaryActions">
               <Button onClick={this.handleReload}>{t("errorBoundary.reload")}</Button>
-              <Button variant="secondary" onClick={this.handleExportData}>
+              <Button variant="secondary" onClick={() => void this.handleExportData()}>
                 {t("errorBoundary.exportData")}
               </Button>
               <Button variant="secondary" onClick={this.handleReset}>

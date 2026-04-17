@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Badge,
@@ -219,9 +219,15 @@ const emptyAuthorityForm = {
 const emptyContactForm = {
   authorityId: "",
   name: "",
+  firstName: "",
+  lastName: "",
   email: "",
   phone: "",
-  roleTitle: ""
+  mobile: "",
+  roleTitle: "",
+  notes: "",
+  department: "",
+  isPrimary: false
 };
 
 const emptyUserForm = {
@@ -560,9 +566,15 @@ export default function AdminPage() {
         setContactForm({
           authorityId: contact.authorityId,
           name: contact.name,
+          firstName: contact.firstName ?? "",
+          lastName: contact.lastName ?? "",
           email: contact.email ?? "",
           phone: contact.phone ?? "",
-          roleTitle: contact.roleTitle ?? ""
+          mobile: contact.mobile ?? "",
+          roleTitle: contact.roleTitle ?? "",
+          notes: contact.notes ?? "",
+          department: contact.department ?? "",
+          isPrimary: Boolean(contact.isPrimary)
         });
         setEditingContactId(contact.id);
       }
@@ -604,7 +616,10 @@ export default function AdminPage() {
   const contactAuthorityError = !contactForm.authorityId
     ? t("admin.validation.contactAuthority")
     : "";
-  const contactNameError = !contactForm.name.trim()
+  const derivedContactName = [contactForm.firstName.trim(), contactForm.lastName.trim()]
+    .filter(Boolean)
+    .join(" ");
+  const contactNameError = !(contactForm.name.trim() || derivedContactName)
     ? t("admin.validation.contactName")
     : "";
   const contactEmailError =
@@ -639,7 +654,7 @@ export default function AdminPage() {
       userUniqueEmailError
   );
 
-  const handleSaveAuthority = () => {
+  const handleSaveAuthority = async () => {
     if (isAuthoritySaveDisabled) {
       return;
     }
@@ -649,9 +664,9 @@ export default function AdminPage() {
     };
 
     if (editingAuthorityId) {
-      updateAuthority(editingAuthorityId, payload);
+      await updateAuthority(editingAuthorityId, payload);
     } else {
-      addAuthority(payload);
+      await addAuthority(payload);
     }
 
     setAuthorityModalOpen(false);
@@ -659,22 +674,28 @@ export default function AdminPage() {
     setAuthorityForm(emptyAuthorityForm);
   };
 
-  const handleSaveContact = () => {
+  const handleSaveContact = async () => {
     if (isContactSaveDisabled) {
       return;
     }
     const payload = {
       authorityId: contactForm.authorityId,
       name: contactForm.name.trim(),
+      firstName: contactForm.firstName.trim(),
+      lastName: contactForm.lastName.trim(),
       email: contactForm.email.trim(),
       phone: contactForm.phone.trim(),
-      roleTitle: contactForm.roleTitle.trim()
+      mobile: contactForm.mobile.trim(),
+      roleTitle: contactForm.roleTitle.trim(),
+      notes: contactForm.notes.trim(),
+      department: contactForm.department.trim(),
+      isPrimary: contactForm.isPrimary
     };
 
     if (editingContactId) {
-      updateContact(editingContactId, payload);
+      await updateContact(editingContactId, payload);
     } else {
-      addContact(payload);
+      await addContact(payload);
     }
 
     setContactModalOpen(false);
@@ -705,6 +726,43 @@ export default function AdminPage() {
     setEditingUserId(null);
     setUserForm(emptyUserForm);
   };
+
+  const clearServerDomainsInDependencyOrder = useCallback(async () => {
+    await replaceTaskState({});
+    await replaceDeadlines([]);
+    await replaceObligations([]);
+    await replaceLegalDocs([]);
+    await replaceProjects([]);
+  }, [replaceDeadlines, replaceLegalDocs, replaceObligations, replaceProjects, replaceTaskState]);
+
+  const applyFullDomainReplaceInDependencyOrder = useCallback(
+    async (input: {
+      scopes: ExportPayload["data"]["scopes"];
+      authorities: ExportPayload["data"]["authorities"];
+      projects: Project[];
+      legalDocs: LegalDoc[];
+      obligations: Obligation[];
+      deadlines: Deadline[];
+      taskState: TaskStateMap;
+    }) => {
+      await replaceScopes(input.scopes);
+      await replaceAuthorities(input.authorities);
+      await replaceProjects(input.projects);
+      await replaceLegalDocs(input.legalDocs);
+      await replaceObligations(input.obligations);
+      await replaceDeadlines(input.deadlines);
+      await replaceTaskState(input.taskState);
+    },
+    [
+      replaceAuthorities,
+      replaceDeadlines,
+      replaceLegalDocs,
+      replaceObligations,
+      replaceProjects,
+      replaceScopes,
+      replaceTaskState
+    ]
+  );
 
   const handleExport = () => {
     const payload = buildExportPayload({
@@ -789,22 +847,49 @@ export default function AdminPage() {
       taskState: imported.taskState
     });
 
-    replaceScopes(imported.scopes);
-    replaceAuthorities(imported.authorities);
+    if (
+      sanitizedProjectImport &&
+      (!imported.legalDocs || !imported.obligations || !imported.deadlines || !imported.taskState)
+    ) {
+      setImportErrors([
+        {
+          key: "import.validation.projectReplaceRequiresDependents",
+          path: "data.projects"
+        }
+      ]);
+      setImportConfirmOpen(false);
+      return;
+    }
+
     if (sanitizedProjectImport) {
-      replaceProjects(sanitizedProjectImport.projects);
-    }
-    if (imported.legalDocs) {
-      replaceLegalDocs(imported.legalDocs);
-    }
-    if (imported.obligations) {
-      replaceObligations(imported.obligations);
-    }
-    if (imported.deadlines) {
-      replaceDeadlines(normalizedEvidenceStorage.deadlines ?? imported.deadlines);
-    }
-    if (imported.taskState) {
-      replaceTaskState(normalizedEvidenceStorage.taskState ?? imported.taskState);
+      await clearServerDomainsInDependencyOrder();
+      await applyFullDomainReplaceInDependencyOrder({
+        scopes: imported.scopes,
+        authorities: imported.authorities,
+        projects: sanitizedProjectImport.projects,
+        legalDocs: imported.legalDocs ?? [],
+        obligations: imported.obligations ?? [],
+        deadlines: normalizedEvidenceStorage.deadlines ?? imported.deadlines ?? [],
+        taskState: normalizedEvidenceStorage.taskState ?? imported.taskState ?? {}
+      });
+    } else {
+      if (imported.deadlines) {
+        await replaceDeadlines([]);
+      }
+      await replaceScopes(imported.scopes);
+      await replaceAuthorities(imported.authorities);
+      if (imported.legalDocs) {
+        await replaceLegalDocs(imported.legalDocs);
+      }
+      if (imported.obligations) {
+        await replaceObligations(imported.obligations);
+      }
+      if (imported.deadlines) {
+        await replaceDeadlines(normalizedEvidenceStorage.deadlines ?? imported.deadlines);
+      }
+      if (imported.taskState) {
+        await replaceTaskState(normalizedEvidenceStorage.taskState ?? imported.taskState);
+      }
     }
     replaceAuditLog(imported.auditLog ?? []);
     replaceUsers(imported.users ?? users);
@@ -840,15 +925,16 @@ export default function AdminPage() {
     setDataManagementMessage(t("admin.dataManagement.importSuccess"));
   };
 
-  const handleConfirmReset = () => {
+  const handleConfirmReset = async () => {
     resetAllPersistedData();
-    resetScopes();
-    resetAuthorities();
-    resetProjects();
-    resetLegalDocs();
-    resetObligations();
-    resetDeadlines();
-    resetTaskState();
+    await clearServerDomainsInDependencyOrder();
+    await resetScopes();
+    await resetAuthorities();
+    await resetProjects();
+    await resetLegalDocs();
+    await resetObligations();
+    await resetDeadlines();
+    await resetTaskState();
     resetAuditLog();
     resetUsers();
     resetNotifications();
@@ -859,8 +945,8 @@ export default function AdminPage() {
     setDataManagementMessage(t("admin.dataManagement.resetSuccess"));
   };
 
-  const handleCleanupTaskState = () => {
-    const removed = cleanupOld(365);
+  const handleCleanupTaskState = async () => {
+    const removed = await cleanupOld(365);
     setDataManagementMessage(t("admin.dataManagement.cleanupTaskStateSuccess").replace("{count}", String(removed)));
   };
 
@@ -873,16 +959,11 @@ export default function AdminPage() {
     );
   };
 
-  const handleConfirmDemoScenario = () => {
+  const handleConfirmDemoScenario = async () => {
     const seed = createDemoScenarioSeed();
     if (demoMode === "replace") {
-      replaceScopes(seed.scopes);
-      replaceAuthorities(seed.authorities);
-      replaceProjects(seed.projects);
-      replaceLegalDocs(seed.legalDocs);
-      replaceObligations(seed.obligations);
-      replaceDeadlines(seed.deadlines);
-      replaceTaskState(seed.taskState);
+      await clearServerDomainsInDependencyOrder();
+      await applyFullDomainReplaceInDependencyOrder(seed);
       replaceNotifications([]);
     } else {
       const merged = mergeDemoScenario(
@@ -897,13 +978,8 @@ export default function AdminPage() {
         },
         seed
       );
-      replaceScopes(merged.scopes);
-      replaceAuthorities(merged.authorities);
-      replaceProjects(merged.projects);
-      replaceLegalDocs(merged.legalDocs);
-      replaceObligations(merged.obligations);
-      replaceDeadlines(merged.deadlines);
-      replaceTaskState(merged.taskState);
+      await clearServerDomainsInDependencyOrder();
+      await applyFullDomainReplaceInDependencyOrder(merged);
     }
 
     setDemoConfirmOpen(false);
@@ -960,7 +1036,7 @@ export default function AdminPage() {
     if (finding.entityType === "LEGAL_DOC") {
       const legalDoc = legalDocs.find((item) => item.id === finding.entityId);
       if (legalDoc && !legalDoc.isArchived) {
-        updateLegalDoc(legalDoc.id, { archivedAt: new Date().toISOString(), isArchived: true });
+        void updateLegalDoc(legalDoc.id, { archivedAt: new Date().toISOString(), isArchived: true });
         logIntegrityFix(finding, "archive");
       }
       return;
@@ -999,9 +1075,9 @@ export default function AdminPage() {
     }
     if (finding.entityType === "LEGAL_DOC") {
       if (finding.field === "scopeOverride.companyId") {
-        updateLegalDoc(finding.entityId, { scopeOverride: undefined } as Partial<LegalDoc>);
+        void updateLegalDoc(finding.entityId, { scopeOverride: undefined } as Partial<LegalDoc>);
       } else {
-        updateLegalDoc(finding.entityId, { [finding.field]: undefined } as Partial<LegalDoc>);
+        void updateLegalDoc(finding.entityId, { [finding.field]: undefined } as Partial<LegalDoc>);
       }
       logIntegrityFix(finding, "unlink");
       return;
@@ -1036,7 +1112,7 @@ export default function AdminPage() {
     if (finding.entityType === "LEGAL_DOC") {
       if (finding.field === "scopeOverride.companyId") {
         const current = legalDocs.find((item) => item.id === finding.entityId);
-        updateLegalDoc(finding.entityId, {
+        void updateLegalDoc(finding.entityId, {
           scopeOverride: {
             companyId: value,
             siteId: current?.scopeOverride?.siteId,
@@ -1044,7 +1120,7 @@ export default function AdminPage() {
           }
         });
       } else {
-        updateLegalDoc(finding.entityId, { [finding.field]: value } as Partial<LegalDoc>);
+        void updateLegalDoc(finding.entityId, { [finding.field]: value } as Partial<LegalDoc>);
       }
       logIntegrityFix(finding, "reassign");
       return;
@@ -1073,7 +1149,7 @@ export default function AdminPage() {
     }
 
     if (finding.entityType === "TASK") {
-      markAttachmentUnavailable(finding.entityId, finding.attachmentId);
+      void markAttachmentUnavailable(finding.entityId, finding.attachmentId);
       logIntegrityFix(finding, "markUnavailable");
     }
   };
@@ -1191,13 +1267,13 @@ export default function AdminPage() {
                   <EditIcon />
                 </IconButton>
                 {row.isArchived ? (
-                  <Button size="sm" variant="ghost" onClick={() => restoreAuthority(row.id)}>
+                  <Button size="sm" variant="ghost" onClick={() => void restoreAuthority(row.id)}>
                     {t("common.restore")}
                   </Button>
                 ) : (
                   <IconButton
                     ariaLabel={t("common.archive")}
-                    onClick={() => archiveAuthority(row.id)}
+                    onClick={() => void archiveAuthority(row.id)}
                   >
                     <ArchiveIcon />
                   </IconButton>
@@ -1249,13 +1325,13 @@ export default function AdminPage() {
                     <EditIcon />
                   </IconButton>
                   {row.isArchived ? (
-                    <Button size="sm" variant="ghost" onClick={() => restoreContact(row.id)}>
+                    <Button size="sm" variant="ghost" onClick={() => void restoreContact(row.id)}>
                       {t("common.restore")}
                     </Button>
                   ) : (
                     <IconButton
                       ariaLabel={t("common.archive")}
-                      onClick={() => archiveContact(row.id)}
+                      onClick={() => void archiveContact(row.id)}
                     >
                       <ArchiveIcon />
                     </IconButton>
@@ -1437,7 +1513,7 @@ export default function AdminPage() {
               <Button variant="secondary" onClick={() => setDemoConfirmOpen(true)}>
                 {t("admin.dataManagement.generateDemoScenario")}
               </Button>
-              <Button variant="secondary" onClick={handleCleanupTaskState}>
+              <Button variant="secondary" onClick={() => void handleCleanupTaskState()}>
                 {t("admin.dataManagement.cleanupTaskState")}
               </Button>
               <Button variant="secondary" onClick={() => setResetConfirmOpen(true)}>
@@ -1574,6 +1650,36 @@ export default function AdminPage() {
             {contactNameError ? <span className="validationText">{contactNameError}</span> : null}
           </div>
           <div className="formField">
+            <span className="fieldLabel">{t("users.firstName")}</span>
+            <Input
+              placeholder={t("users.firstName")}
+              value={contactForm.firstName}
+              onChange={(event) =>
+                setContactForm((prev) => ({ ...prev, firstName: event.target.value }))
+              }
+            />
+          </div>
+          <div className="formField">
+            <span className="fieldLabel">{t("users.lastName")}</span>
+            <Input
+              placeholder={t("users.lastName")}
+              value={contactForm.lastName}
+              onChange={(event) =>
+                setContactForm((prev) => ({ ...prev, lastName: event.target.value }))
+              }
+            />
+          </div>
+          <div className="formField">
+            <span className="fieldLabel">{t("admin.contacts.form.department")}</span>
+            <Input
+              placeholder={t("admin.contacts.form.department")}
+              value={contactForm.department}
+              onChange={(event) =>
+                setContactForm((prev) => ({ ...prev, department: event.target.value }))
+              }
+            />
+          </div>
+          <div className="formField">
             <span className="fieldLabel">{t("admin.contacts.form.role")}</span>
             <Input
               placeholder={t("admin.contacts.form.role")}
@@ -1605,6 +1711,39 @@ export default function AdminPage() {
                 setContactForm((prev) => ({ ...prev, phone: event.target.value }))
               }
             />
+          </div>
+          <div className="formField">
+            <span className="fieldLabel">{t("admin.contacts.form.mobile")}</span>
+            <Input
+              placeholder={t("admin.contacts.form.mobile")}
+              value={contactForm.mobile}
+              onChange={(event) =>
+                setContactForm((prev) => ({ ...prev, mobile: event.target.value }))
+              }
+            />
+          </div>
+          <div className="formField">
+            <span className="fieldLabel">{t("admin.contacts.form.notes")}</span>
+            <textarea
+              className="textarea"
+              rows={3}
+              value={contactForm.notes}
+              onChange={(event) =>
+                setContactForm((prev) => ({ ...prev, notes: event.target.value }))
+              }
+            />
+          </div>
+          <div className="formField">
+            <label className="checkboxRow">
+              <input
+                type="checkbox"
+                checked={contactForm.isPrimary}
+                onChange={(event) =>
+                  setContactForm((prev) => ({ ...prev, isPrimary: event.target.checked }))
+                }
+              />
+              <span>{t("admin.contacts.form.isPrimary")}</span>
+            </label>
           </div>
         </div>
       </Modal>

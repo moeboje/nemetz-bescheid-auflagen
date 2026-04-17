@@ -11,9 +11,15 @@ export type AuthorityContact = {
   id: string;
   authorityId: string;
   name: string;
+  firstName?: string;
+  lastName?: string;
   email?: string;
   phone?: string;
+  mobile?: string;
   roleTitle?: string;
+  notes?: string;
+  department?: string;
+  isPrimary?: boolean;
   isArchived: boolean;
   createdAt?: string;
   updatedAt?: string;

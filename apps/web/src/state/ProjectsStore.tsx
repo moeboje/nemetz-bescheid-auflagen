@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   ExternalParticipant,
   ProjectInternalParticipant,
@@ -9,7 +9,16 @@ import {
 import { ProjectPolicy } from "../policies/ProjectPolicy";
 import { useAuthorization } from "./AuthorizationStore";
 import { useAuditLog } from "./AuditLogStore";
-import { loadJSON, saveJSON, STORAGE_KEYS } from "./persistence";
+import { clearPersistedValue, makeStorageKey } from "./persistence";
+import {
+  archiveProject as apiArchiveProject,
+  bulkReplaceProjects,
+  createProject as apiCreateProject,
+  listProjects,
+  restoreProject as apiRestoreProject,
+  updateProject as apiUpdateProject
+} from "../api/projects";
+import { useAuth } from "./AuthStore";
 import {
   normalizeRelationIds,
   sanitizeProjectDependencyIds,
@@ -42,40 +51,39 @@ type ProjectCreateInput = Omit<
 
 export type ProjectsContextValue = {
   projects: Project[];
-  addProject: (input: ProjectCreateInput) => boolean;
-  updateProject: (id: string, input: Partial<Project>) => boolean;
-  archiveProject: (id: string) => boolean;
-  restoreProject: (id: string) => boolean;
-  setOwner: (projectId: string, ownerUserId?: string) => boolean;
-  setDeputy: (projectId: string, deputyUserId?: string) => boolean;
-  setParticipants: (projectId: string, participantUserIds: string[]) => boolean;
-  addProjectAttachment: (projectId: string, attachment: ProjectAttachment) => boolean;
-  removeProjectAttachment: (projectId: string, attachmentId: string) => boolean;
+  addProject: (input: ProjectCreateInput) => Promise<boolean>;
+  updateProject: (id: string, input: Partial<Project>) => Promise<boolean>;
+  archiveProject: (id: string) => Promise<boolean>;
+  restoreProject: (id: string) => Promise<boolean>;
+  setOwner: (projectId: string, ownerUserId?: string) => Promise<boolean>;
+  setDeputy: (projectId: string, deputyUserId?: string) => Promise<boolean>;
+  setParticipants: (projectId: string, participantUserIds: string[]) => Promise<boolean>;
+  addProjectAttachment: (projectId: string, attachment: ProjectAttachment) => Promise<boolean>;
+  removeProjectAttachment: (projectId: string, attachmentId: string) => Promise<boolean>;
   addExternalParticipant: (
     projectId: string,
     participant: Omit<ExternalParticipant, "id" | "createdAt" | "updatedAt">
-  ) => boolean;
+  ) => Promise<boolean>;
   updateExternalParticipant: (
     projectId: string,
     participantId: string,
     input: Partial<ExternalParticipant>
-  ) => boolean;
-  archiveExternalParticipant: (projectId: string, participantId: string) => boolean;
-  restoreExternalParticipant: (projectId: string, participantId: string) => boolean;
+  ) => Promise<boolean>;
+  archiveExternalParticipant: (projectId: string, participantId: string) => Promise<boolean>;
+  restoreExternalParticipant: (projectId: string, participantId: string) => Promise<boolean>;
   validateDependencyCandidate: (
     projectId: string,
     candidateProjectId: string,
     selectedDependencyIds?: string[]
   ) => ProjectDependencyValidationResult;
-  replaceProjects: (projects: Project[]) => void;
-  resetProjects: () => void;
+  replaceProjects: (projects: Project[]) => Promise<void>;
+  resetProjects: () => Promise<void>;
+  reloadProjects: () => Promise<Project[]>;
 };
 
 const ProjectsContext = createContext<ProjectsContextValue | undefined>(undefined);
 
-function createId(prefix: "p" | "pa" | "ep") {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-}
+export const PROJECTS_STORAGE_KEY = makeStorageKey("projects");
 
 function nowStamp() {
   return new Date().toISOString();
@@ -231,9 +239,6 @@ function normalizeProjects(value: unknown): Project[] {
   const normalized = value
     .map((project, index) => normalizeProject(project as Partial<Project>, index))
     .filter((project): project is Project => Boolean(project));
-  if (!normalized.length) {
-    return [];
-  }
   return sanitizeProjectRelations(normalized).projects;
 }
 
@@ -244,79 +249,102 @@ function isProjectArchived(project: Project) {
 const normalizedInitialProjects = sanitizeProjectRelations(initialProjects).projects;
 
 export function ProjectsProvider({ children }: { children: React.ReactNode }) {
+  const { user: authUser } = useAuth();
   const { actor } = useAuthorization();
   const { logEvent } = useAuditLog();
-  const [projects, setProjects] = useState<Project[]>(() =>
-    loadJSON<Project[]>(STORAGE_KEYS.projects, {
-      fallback: normalizedInitialProjects,
-      migrate: (value) => {
-        const normalized = normalizeProjects(value);
-        return normalized.length ? normalized : normalizedInitialProjects;
-      }
-    }) ?? normalizedInitialProjects
-  );
+  const [projects, setProjects] = useState<Project[]>([]);
 
-  React.useEffect(() => {
-    saveJSON(STORAGE_KEYS.projects, projects);
-  }, [projects]);
+  const reloadProjects = useCallback(async () => {
+    if (!authUser || authUser.type === "EXTERNAL") {
+      setProjects([]);
+      clearPersistedValue(PROJECTS_STORAGE_KEY);
+      return [];
+    }
+
+    const next = normalizeProjects(await listProjects());
+    setProjects(next);
+    clearPersistedValue(PROJECTS_STORAGE_KEY);
+    return next;
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser || authUser.type === "EXTERNAL") {
+      setProjects([]);
+      clearPersistedValue(PROJECTS_STORAGE_KEY);
+      return;
+    }
+
+    void reloadProjects().catch(() => {
+      setProjects([]);
+      clearPersistedValue(PROJECTS_STORAGE_KEY);
+    });
+  }, [authUser, reloadProjects]);
 
   const addProject = useCallback(
-    (input: ProjectCreateInput) => {
+    async (input: ProjectCreateInput) => {
       if (!ProjectPolicy.create(actor)) {
         return false;
       }
-      const timestamp = nowStamp();
-      const participantUserIds = normalizeParticipantUserIds(input);
-      const internalParticipants =
-        input.internalParticipants && input.internalParticipants.length
-          ? input.internalParticipants
-          : participantUserIds.map((userId) => ({ userId }));
-      const dependencyIds = sanitizeProjectDependencyIds({
-        projects,
-        projectId: "__draft__",
-        dependencyIds: input.dependsOnProjectIds ?? []
-      }).dependencyIds;
-      const referenceLegalDocIds = normalizeRelationIds(input.referenceLegalDocIds);
 
-      const newProject: Project = {
-        ...input,
-        id: createId("p"),
-        attachments: (input.attachments ?? []).map((attachment, index) =>
-          normalizeAttachment(attachment, `pa-${timestamp}-${index}`)
-        ),
-        externalParticipants: (input.externalParticipants ?? [])
-          .map((participant, index) =>
-            normalizeExternalParticipant(participant, `ep-${timestamp}-${index}`)
-          )
-          .filter((participant): participant is ExternalParticipant => Boolean(participant)),
-        internalParticipants,
-        participantUserIds:
-          participantUserIds.length > 0
-            ? participantUserIds
-            : internalParticipants.map((participant) => participant.userId),
-        dependsOnProjectIds: dependencyIds,
-        referenceLegalDocIds,
-        archivedAt: undefined,
-        isArchived: false,
-        createdAt: timestamp,
-        updatedAt: timestamp
-      };
+      try {
+        const participantUserIds = normalizeParticipantUserIds(input);
+        const internalParticipants =
+          input.internalParticipants && input.internalParticipants.length
+            ? input.internalParticipants
+            : participantUserIds.map((userId) => ({ userId }));
+        const dependencyIds = sanitizeProjectDependencyIds({
+          projects,
+          projectId: "__draft__",
+          dependencyIds: input.dependsOnProjectIds ?? []
+        }).dependencyIds;
+        const referenceLegalDocIds = normalizeRelationIds(input.referenceLegalDocIds);
 
-      setProjects((prev) => [newProject, ...prev]);
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "PROJECT",
-        entityId: newProject.id,
-        action: "CREATED",
-        summary: newProject.title
-      });
-      return true;
+        const createdProject = normalizeProjects([
+          await apiCreateProject({
+            ...input,
+            shortDescription: input.shortDescription ?? "",
+            authorityRef: input.authorityRef ?? "",
+            internalParticipants,
+            participantUserIds:
+              participantUserIds.length > 0
+                ? participantUserIds
+                : internalParticipants.map((participant) => participant.userId),
+            dependsOnProjectIds: dependencyIds,
+            referenceLegalDocIds,
+            attachments: (input.attachments ?? []).map((attachment, index) =>
+              normalizeAttachment(attachment, `pa-create-${index}`)
+            ),
+            externalParticipants: (input.externalParticipants ?? [])
+              .map((participant, index) =>
+                normalizeExternalParticipant(participant, `ep-create-${index}`)
+              )
+              .filter((participant): participant is ExternalParticipant => Boolean(participant))
+          })
+        ])[0];
+
+        if (!createdProject) {
+          return false;
+        }
+
+        setProjects((prev) => sanitizeProjectRelations([createdProject, ...prev]).projects);
+        clearPersistedValue(PROJECTS_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "PROJECT",
+          entityId: createdProject.id,
+          action: "CREATED",
+          summary: createdProject.title
+        });
+        return true;
+      } catch {
+        return false;
+      }
     },
     [actor, logEvent, projects]
   );
 
   const updateProject = useCallback(
-    (id: string, input: Partial<Project>) => {
+    async (id: string, input: Partial<Project>) => {
       const currentProject = projects.find((project) => project.id === id);
       if (!currentProject) {
         return false;
@@ -325,75 +353,89 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
 
-      const timestamp = nowStamp();
-      const participantUserIds = normalizeParticipantUserIds({
-        internalParticipants: input.internalParticipants,
-        participantUserIds: input.participantUserIds
-      });
-      const nextDependencyIds =
-        input.dependsOnProjectIds !== undefined
-          ? sanitizeProjectDependencyIds({
-              projects,
-              projectId: id,
-              dependencyIds: input.dependsOnProjectIds
-            }).dependencyIds
-          : currentProject.dependsOnProjectIds;
-      const nextReferenceLegalDocIds =
-        input.referenceLegalDocIds !== undefined
-          ? normalizeRelationIds(input.referenceLegalDocIds)
-          : currentProject.referenceLegalDocIds;
+      try {
+        const participantUserIds = normalizeParticipantUserIds({
+          internalParticipants: input.internalParticipants,
+          participantUserIds: input.participantUserIds
+        });
+        const nextInternalParticipants =
+          input.internalParticipants !== undefined || input.participantUserIds !== undefined
+            ? input.internalParticipants && input.internalParticipants.length
+              ? input.internalParticipants
+              : participantUserIds.map((userId) => ({ userId }))
+            : undefined;
+        const nextDependencyIds =
+          input.dependsOnProjectIds !== undefined
+            ? sanitizeProjectDependencyIds({
+                projects,
+                projectId: id,
+                dependencyIds: input.dependsOnProjectIds
+              }).dependencyIds
+            : currentProject.dependsOnProjectIds;
+        const nextReferenceLegalDocIds =
+          input.referenceLegalDocIds !== undefined
+            ? normalizeRelationIds(input.referenceLegalDocIds)
+            : currentProject.referenceLegalDocIds;
 
-      setProjects((prev) =>
-        prev.map((project) =>
-          project.id === id
-            ? {
-                ...project,
-                ...input,
-                internalParticipants:
-                  input.internalParticipants && input.internalParticipants.length
-                    ? input.internalParticipants
-                    : project.internalParticipants,
-                participantUserIds:
-                  participantUserIds.length > 0 ? participantUserIds : project.participantUserIds,
-                attachments: Array.isArray(input.attachments)
-                  ? input.attachments.map((attachment, index) =>
-                      normalizeAttachment(attachment, `pa-${id}-${index}`)
-                    )
-                  : project.attachments,
-                externalParticipants: Array.isArray(input.externalParticipants)
-                  ? input.externalParticipants
-                      .map((participant, index) =>
-                        normalizeExternalParticipant(
-                          participant,
-                          `ep-${id}-${index}`
-                        )
-                      )
-                      .filter(
-                        (participant): participant is ExternalParticipant => Boolean(participant)
-                      )
-                  : project.externalParticipants,
-                dependsOnProjectIds: nextDependencyIds,
-                referenceLegalDocIds: nextReferenceLegalDocIds,
-                updatedAt: timestamp
-              }
-            : project
-        )
-      );
+        const updatedProject = normalizeProjects([
+          await apiUpdateProject(id, {
+            ...input,
+            shortDescription:
+              input.shortDescription !== undefined
+                ? input.shortDescription
+                : currentProject.shortDescription,
+            authorityRef:
+              input.authorityRef !== undefined ? input.authorityRef : currentProject.authorityRef,
+            internalParticipants: nextInternalParticipants,
+            participantUserIds:
+              input.internalParticipants !== undefined || input.participantUserIds !== undefined
+                ? participantUserIds
+                : currentProject.participantUserIds,
+            dependsOnProjectIds: nextDependencyIds,
+            referenceLegalDocIds: nextReferenceLegalDocIds,
+            attachments: Array.isArray(input.attachments)
+              ? input.attachments.map((attachment, index) =>
+                  normalizeAttachment(attachment, `pa-${id}-${index}`)
+                )
+              : undefined,
+            externalParticipants: Array.isArray(input.externalParticipants)
+              ? input.externalParticipants
+                  .map((participant, index) =>
+                    normalizeExternalParticipant(participant, `ep-${id}-${index}`)
+                  )
+                  .filter((participant): participant is ExternalParticipant => Boolean(participant))
+              : undefined
+          })
+        ])[0];
 
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "PROJECT",
-        entityId: id,
-        action: "UPDATED",
-        summary: currentProject.title
-      });
-      return true;
+        if (!updatedProject) {
+          return false;
+        }
+
+        setProjects((prev) =>
+          sanitizeProjectRelations(
+            prev.map((project) => (project.id === id ? updatedProject : project))
+          ).projects
+        );
+        clearPersistedValue(PROJECTS_STORAGE_KEY);
+
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "PROJECT",
+          entityId: id,
+          action: "UPDATED",
+          summary: currentProject.title
+        });
+        return true;
+      } catch {
+        return false;
+      }
     },
     [actor, logEvent, projects]
   );
 
   const archiveProject = useCallback(
-    (id: string) => {
+    async (id: string) => {
       const currentProject = projects.find((project) => project.id === id);
       if (!currentProject) {
         return false;
@@ -401,33 +443,34 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       if (!ProjectPolicy.archive(actor, currentProject)) {
         return false;
       }
-      const timestamp = nowStamp();
-      setProjects((prev) =>
-        prev.map((project) =>
-          project.id === id
-            ? {
-                ...project,
-                archivedAt: timestamp,
-                isArchived: true,
-                updatedAt: timestamp
-              }
-            : project
-        )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "PROJECT",
-        entityId: id,
-        action: "ARCHIVED",
-        summary: currentProject.title
-      });
-      return true;
+
+      try {
+        const updatedProject = normalizeProjects([await apiArchiveProject(id)])[0];
+        if (!updatedProject) {
+          return false;
+        }
+
+        setProjects((prev) =>
+          prev.map((project) => (project.id === id ? updatedProject : project))
+        );
+        clearPersistedValue(PROJECTS_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "PROJECT",
+          entityId: id,
+          action: "ARCHIVED",
+          summary: currentProject.title
+        });
+        return true;
+      } catch {
+        return false;
+      }
     },
     [actor, logEvent, projects]
   );
 
   const restoreProject = useCallback(
-    (id: string) => {
+    async (id: string) => {
       const currentProject = projects.find((project) => project.id === id);
       if (!currentProject) {
         return false;
@@ -435,27 +478,28 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       if (!ProjectPolicy.archive(actor, currentProject)) {
         return false;
       }
-      const timestamp = nowStamp();
-      setProjects((prev) =>
-        prev.map((project) =>
-          project.id === id
-            ? {
-                ...project,
-                archivedAt: undefined,
-                isArchived: false,
-                updatedAt: timestamp
-              }
-            : project
-        )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "PROJECT",
-        entityId: id,
-        action: "RESTORED",
-        summary: currentProject.title
-      });
-      return true;
+
+      try {
+        const updatedProject = normalizeProjects([await apiRestoreProject(id)])[0];
+        if (!updatedProject) {
+          return false;
+        }
+
+        setProjects((prev) =>
+          prev.map((project) => (project.id === id ? updatedProject : project))
+        );
+        clearPersistedValue(PROJECTS_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "PROJECT",
+          entityId: id,
+          action: "RESTORED",
+          summary: currentProject.title
+        });
+        return true;
+      } catch {
+        return false;
+      }
     },
     [actor, logEvent, projects]
   );
@@ -493,44 +537,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
   );
 
   const addProjectAttachment = useCallback(
-    (projectId: string, attachment: ProjectAttachment) => {
-      const currentProject = projects.find((project) => project.id === projectId);
-      if (!currentProject || isProjectArchived(currentProject)) {
-        return false;
-      }
-      if (!ProjectPolicy.update(actor, currentProject)) {
-        return false;
-      }
-
-      const timestamp = nowStamp();
-      setProjects((prev) =>
-        prev.map((project) =>
-          project.id === projectId
-            ? {
-                ...project,
-                attachments: [
-                  ...project.attachments,
-                  normalizeAttachment(attachment, createId("pa"))
-                ],
-                updatedAt: timestamp
-              }
-            : project
-        )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "PROJECT",
-        entityId: projectId,
-        action: "UPDATED",
-        summary: currentProject.title
-      });
-      return true;
-    },
-    [actor, logEvent, projects]
-  );
-
-  const removeProjectAttachment = useCallback(
-    (projectId: string, attachmentId: string) => {
+    async (projectId: string, attachment: ProjectAttachment) => {
       const currentProject = projects.find((project) => project.id === projectId);
       if (!currentProject || isProjectArchived(currentProject)) {
         return false;
@@ -538,32 +545,36 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       if (!ProjectPolicy.removeAttachment(actor, currentProject)) {
         return false;
       }
-      const timestamp = nowStamp();
-      setProjects((prev) =>
-        prev.map((project) =>
-          project.id === projectId
-            ? {
-                ...project,
-                attachments: project.attachments.filter((item) => item.id !== attachmentId),
-                updatedAt: timestamp
-              }
-            : project
-        )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "PROJECT",
-        entityId: projectId,
-        action: "UPDATED",
-        summary: currentProject.title
-      });
-      return true;
+
+      const nextAttachments = [
+        ...currentProject.attachments,
+        normalizeAttachment(attachment, `pa-${projectId}-${currentProject.attachments.length}`)
+      ];
+
+      return updateProject(projectId, { attachments: nextAttachments });
     },
-    [actor, logEvent, projects]
+    [actor, projects, updateProject]
+  );
+
+  const removeProjectAttachment = useCallback(
+    async (projectId: string, attachmentId: string) => {
+      const currentProject = projects.find((project) => project.id === projectId);
+      if (!currentProject || isProjectArchived(currentProject)) {
+        return false;
+      }
+      if (!ProjectPolicy.removeAttachment(actor, currentProject)) {
+        return false;
+      }
+
+      return updateProject(projectId, {
+        attachments: currentProject.attachments.filter((item) => item.id !== attachmentId)
+      });
+    },
+    [actor, projects, updateProject]
   );
 
   const addExternalParticipant = useCallback(
-    (
+    async (
       projectId: string,
       participant: Omit<ExternalParticipant, "id" | "createdAt" | "updatedAt">
     ) => {
@@ -574,47 +585,31 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       if (!ProjectPolicy.update(actor, currentProject)) {
         return false;
       }
-      const timestamp = nowStamp();
-      setProjects((prev) =>
-        prev.map((project) =>
-          project.id === projectId
-            ? {
-                ...project,
-                externalParticipants: [
-                  ...project.externalParticipants,
-                  {
-                    id: createId("ep"),
-                    type: participant.type,
-                    organization: participant.organization ?? "",
-                    name: participant.name,
-                    email: participant.email ?? "",
-                    phone: participant.phone ?? "",
-                    notes: participant.notes ?? "",
-                    archivedAt: participant.archivedAt,
-                    isArchived: Boolean(participant.isArchived),
-                    createdAt: timestamp,
-                    updatedAt: timestamp
-                  }
-                ],
-                updatedAt: timestamp
-              }
-            : project
-        )
+
+      const nextParticipant = normalizeExternalParticipant(
+        {
+          ...participant,
+          isArchived: Boolean(participant.isArchived),
+          archivedAt: participant.archivedAt,
+          createdAt: nowStamp(),
+          updatedAt: nowStamp()
+        },
+        `ep-${projectId}-${currentProject.externalParticipants.length}`
       );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "PROJECT",
-        entityId: projectId,
-        action: "UPDATED",
-        summary: currentProject.title
+
+      if (!nextParticipant) {
+        return false;
+      }
+
+      return updateProject(projectId, {
+        externalParticipants: [...currentProject.externalParticipants, nextParticipant]
       });
-      return true;
     },
-    [actor, logEvent, projects]
+    [actor, projects, updateProject]
   );
 
   const updateExternalParticipant = useCallback(
-    (projectId: string, participantId: string, input: Partial<ExternalParticipant>) => {
+    async (projectId: string, participantId: string, input: Partial<ExternalParticipant>) => {
       const currentProject = projects.find((project) => project.id === projectId);
       if (!currentProject || isProjectArchived(currentProject)) {
         return false;
@@ -622,40 +617,23 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       if (!ProjectPolicy.update(actor, currentProject)) {
         return false;
       }
-      const timestamp = nowStamp();
-      setProjects((prev) =>
-        prev.map((project) =>
-          project.id === projectId
+
+      return updateProject(projectId, {
+        externalParticipants: currentProject.externalParticipants.map((participant) =>
+          participant.id === participantId
             ? {
-                ...project,
-                externalParticipants: project.externalParticipants.map((participant) =>
-                  participant.id === participantId
-                    ? {
-                        ...participant,
-                        ...input,
-                        updatedAt: timestamp
-                      }
-                    : participant
-                ),
-                updatedAt: timestamp
+                ...participant,
+                ...input
               }
-            : project
+            : participant
         )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "PROJECT",
-        entityId: projectId,
-        action: "UPDATED",
-        summary: currentProject.title
       });
-      return true;
     },
-    [actor, logEvent, projects]
+    [actor, projects, updateProject]
   );
 
   const archiveExternalParticipant = useCallback(
-    (projectId: string, participantId: string) => {
+    async (projectId: string, participantId: string) => {
       const currentProject = projects.find((project) => project.id === projectId);
       if (!currentProject || isProjectArchived(currentProject)) {
         return false;
@@ -663,41 +641,24 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       if (!ProjectPolicy.update(actor, currentProject)) {
         return false;
       }
-      const timestamp = nowStamp();
-      setProjects((prev) =>
-        prev.map((project) =>
-          project.id === projectId
+
+      return updateProject(projectId, {
+        externalParticipants: currentProject.externalParticipants.map((participant) =>
+          participant.id === participantId
             ? {
-                ...project,
-                externalParticipants: project.externalParticipants.map((participant) =>
-                  participant.id === participantId
-                    ? {
-                        ...participant,
-                        archivedAt: timestamp,
-                        isArchived: true,
-                        updatedAt: timestamp
-                      }
-                    : participant
-                ),
-                updatedAt: timestamp
+                ...participant,
+                archivedAt: nowStamp(),
+                isArchived: true
               }
-            : project
+            : participant
         )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "PROJECT",
-        entityId: projectId,
-        action: "UPDATED",
-        summary: currentProject.title
       });
-      return true;
     },
-    [actor, logEvent, projects]
+    [actor, projects, updateProject]
   );
 
   const restoreExternalParticipant = useCallback(
-    (projectId: string, participantId: string) => {
+    async (projectId: string, participantId: string) => {
       const currentProject = projects.find((project) => project.id === projectId);
       if (!currentProject || isProjectArchived(currentProject)) {
         return false;
@@ -705,46 +666,32 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       if (!ProjectPolicy.update(actor, currentProject)) {
         return false;
       }
-      const timestamp = nowStamp();
-      setProjects((prev) =>
-        prev.map((project) =>
-          project.id === projectId
+
+      return updateProject(projectId, {
+        externalParticipants: currentProject.externalParticipants.map((participant) =>
+          participant.id === participantId
             ? {
-                ...project,
-                externalParticipants: project.externalParticipants.map((participant) =>
-                  participant.id === participantId
-                    ? {
-                        ...participant,
-                        archivedAt: undefined,
-                        isArchived: false,
-                        updatedAt: timestamp
-                      }
-                    : participant
-                ),
-                updatedAt: timestamp
+                ...participant,
+                archivedAt: undefined,
+                isArchived: false
               }
-            : project
+            : participant
         )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "PROJECT",
-        entityId: projectId,
-        action: "UPDATED",
-        summary: currentProject.title
       });
-      return true;
     },
-    [actor, logEvent, projects]
+    [actor, projects, updateProject]
   );
 
-  const replaceProjects = useCallback((value: Project[]) => {
-    const normalized = normalizeProjects(value);
-    setProjects(normalized.length ? normalized : normalizedInitialProjects);
+  const replaceProjects = useCallback(async (value: Project[]) => {
+    const replaced = normalizeProjects(await bulkReplaceProjects(normalizeProjects(value)));
+    setProjects(replaced);
+    clearPersistedValue(PROJECTS_STORAGE_KEY);
   }, []);
 
-  const resetProjects = useCallback(() => {
-    setProjects(normalizedInitialProjects);
+  const resetProjects = useCallback(async () => {
+    const replaced = normalizeProjects(await bulkReplaceProjects(normalizedInitialProjects));
+    setProjects(replaced);
+    clearPersistedValue(PROJECTS_STORAGE_KEY);
   }, []);
 
   const value = useMemo(
@@ -765,7 +712,8 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       restoreExternalParticipant,
       validateDependencyCandidate,
       replaceProjects,
-      resetProjects
+      resetProjects,
+      reloadProjects
     }),
     [
       addExternalParticipant,
@@ -774,6 +722,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       archiveExternalParticipant,
       archiveProject,
       projects,
+      reloadProjects,
       removeProjectAttachment,
       replaceProjects,
       resetProjects,

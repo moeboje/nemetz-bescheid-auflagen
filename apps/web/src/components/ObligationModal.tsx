@@ -91,7 +91,7 @@ export default function ObligationModal({
     (requiresFirstDue && !form.firstDueDate) ||
     (requiresInterval && (!form.intervalUnit || !form.intervalValue));
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const intervalValue = form.intervalValue ? Number(form.intervalValue) : undefined;
     const reminderDays = form.emailReminderEnabled
       ? Number(form.emailReminderDaysBefore || "7")
@@ -118,12 +118,13 @@ export default function ObligationModal({
       }
     };
 
-    if (obligation) {
-      updateObligation(obligation.id, payload);
-    } else {
-      addObligation(payload);
+    const saved = obligation
+      ? await updateObligation(obligation.id, payload)
+      : await addObligation(payload);
+
+    if (saved) {
+      onClose();
     }
-    onClose();
   };
 
   return (
@@ -137,7 +138,7 @@ export default function ObligationModal({
           <Button variant="secondary" onClick={onClose}>
             {t("modal.cancel")}
           </Button>
-          <Button onClick={handleSave} disabled={isSaveDisabled}>
+          <Button onClick={() => void handleSave()} disabled={isSaveDisabled}>
             {t("modal.save")}
           </Button>
         </div>

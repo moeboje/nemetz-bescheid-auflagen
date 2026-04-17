@@ -13,6 +13,97 @@ type SeedUser = {
   externalOrgName?: string;
 };
 
+const domainSeedTimestamp = new Date("2026-02-01T09:00:00.000Z");
+
+const seedCompanies = [
+  {
+    id: "c-001",
+    name: "Nemetz AG",
+    shortName: ""
+  },
+  {
+    id: "c-002",
+    name: "Nemetz Muehlendorf GmbH",
+    shortName: ""
+  }
+] as const;
+
+const seedSites = [
+  {
+    id: "s-001",
+    companyId: "c-001",
+    name: "Wien 1150"
+  },
+  {
+    id: "s-002",
+    companyId: "c-001",
+    name: "Leopoldsdorf"
+  },
+  {
+    id: "s-003",
+    companyId: "c-002",
+    name: "Muehlendorf"
+  }
+] as const;
+
+const seedFacilities = [
+  {
+    id: "f-001",
+    companyId: "c-001",
+    siteId: "s-002",
+    name: "Sortieranlage Leopoldsdorf",
+    type: ""
+  },
+  {
+    id: "f-002",
+    companyId: "c-001",
+    siteId: "s-002",
+    name: "Umladestation",
+    type: ""
+  },
+  {
+    id: "f-005",
+    companyId: "c-002",
+    siteId: "s-003",
+    name: "Zwischenlager",
+    type: ""
+  },
+  {
+    id: "f-006",
+    companyId: "c-002",
+    siteId: "s-003",
+    name: "Containerplatz",
+    type: ""
+  }
+] as const;
+
+const seedAuthorities = [
+  {
+    id: "auth-001",
+    name: "Bezirkshauptmannschaft",
+    shortName: "BH"
+  },
+  {
+    id: "auth-002",
+    name: "Magistrat",
+    shortName: "MAG"
+  },
+  {
+    id: "auth-003",
+    name: "Landesregierung (Umwelt)",
+    shortName: "LRU"
+  }
+] as const;
+
+const seedAuthorityContacts: Array<{
+  id: string;
+  authorityId: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  roleTitle?: string;
+}> = [];
+
 async function run() {
   loadProjectEnvFile();
   const adminEmail = (process.env.ADMIN_EMAIL || "admin@example.com").trim().toLowerCase();
@@ -112,6 +203,71 @@ async function run() {
       }
     });
     externalOrgByName.set(upserted.name, upserted.id);
+  }
+
+  for (const company of seedCompanies) {
+    await prisma.$executeRaw`
+      INSERT INTO "Company" ("id", "name", "shortName", "isArchived", "createdAt", "updatedAt")
+      VALUES (${company.id}, ${company.name}, ${company.shortName || null}, ${false}, ${domainSeedTimestamp}, ${domainSeedTimestamp})
+      ON CONFLICT ("id") DO UPDATE
+      SET "name" = EXCLUDED."name",
+          "shortName" = EXCLUDED."shortName",
+          "isArchived" = EXCLUDED."isArchived",
+          "updatedAt" = EXCLUDED."updatedAt"
+    `;
+  }
+
+  for (const site of seedSites) {
+    await prisma.$executeRaw`
+      INSERT INTO "Site" ("id", "companyId", "name", "isArchived", "createdAt", "updatedAt")
+      VALUES (${site.id}, ${site.companyId}, ${site.name}, ${false}, ${domainSeedTimestamp}, ${domainSeedTimestamp})
+      ON CONFLICT ("id") DO UPDATE
+      SET "companyId" = EXCLUDED."companyId",
+          "name" = EXCLUDED."name",
+          "isArchived" = EXCLUDED."isArchived",
+          "updatedAt" = EXCLUDED."updatedAt"
+    `;
+  }
+
+  for (const facility of seedFacilities) {
+    await prisma.$executeRaw`
+      INSERT INTO "Facility" ("id", "companyId", "siteId", "name", "type", "isArchived", "createdAt", "updatedAt")
+      VALUES (${facility.id}, ${facility.companyId}, ${facility.siteId}, ${facility.name}, ${facility.type || null}, ${false}, ${domainSeedTimestamp}, ${domainSeedTimestamp})
+      ON CONFLICT ("id") DO UPDATE
+      SET "companyId" = EXCLUDED."companyId",
+          "siteId" = EXCLUDED."siteId",
+          "name" = EXCLUDED."name",
+          "type" = EXCLUDED."type",
+          "isArchived" = EXCLUDED."isArchived",
+          "updatedAt" = EXCLUDED."updatedAt"
+    `;
+  }
+
+  for (const authority of seedAuthorities) {
+    await prisma.$executeRaw`
+      INSERT INTO "Authority" ("id", "name", "shortName", "isArchived", "createdAt", "updatedAt")
+      VALUES (${authority.id}, ${authority.name}, ${authority.shortName || null}, ${false}, ${domainSeedTimestamp}, ${domainSeedTimestamp})
+      ON CONFLICT ("id") DO UPDATE
+      SET "name" = EXCLUDED."name",
+          "shortName" = EXCLUDED."shortName",
+          "isArchived" = EXCLUDED."isArchived",
+          "updatedAt" = EXCLUDED."updatedAt"
+    `;
+  }
+
+  for (const contact of seedAuthorityContacts) {
+    await prisma.$executeRaw`
+      INSERT INTO "AuthorityContact" ("id", "authorityId", "name", "email", "phone", "roleTitle", "isArchived", "createdAt", "updatedAt")
+      VALUES (${contact.id}, ${contact.authorityId}, ${contact.name}, ${contact.email || null}, ${contact.phone || null}, ${contact.roleTitle || null}, ${false}, ${domainSeedTimestamp}, ${domainSeedTimestamp})
+      ON CONFLICT ("id") DO UPDATE
+      SET "authorityId" = EXCLUDED."authorityId",
+          "name" = EXCLUDED."name",
+          "email" = EXCLUDED."email",
+          "phone" = EXCLUDED."phone",
+          "roleTitle" = EXCLUDED."roleTitle",
+          "isArchived" = EXCLUDED."isArchived",
+          "updatedAt" = EXCLUDED."updatedAt"
+    `;
   }
 
   const seedUsers: SeedUser[] = [

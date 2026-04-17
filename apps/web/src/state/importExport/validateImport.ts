@@ -316,6 +316,26 @@ function countEvidenceAttachmentsInTaskState(value: unknown) {
   }, 0);
 }
 
+function validateProjectReplaceDependencies(
+  data: ExportDataBundle,
+  errors: ImportValidationMessage[]
+) {
+  if (!hasValue(data.projects)) {
+    return;
+  }
+
+  const missingDependencies = [
+    !hasValue(data.legalDocs),
+    !hasValue(data.obligations),
+    !hasValue(data.deadlines),
+    !hasValue(data.taskState)
+  ].some(Boolean);
+
+  if (missingDependencies) {
+    pushMessage(errors, "import.validation.projectReplaceRequiresDependents", "data.projects");
+  }
+}
+
 export function validateImport(value: unknown): ImportValidationResult {
   const errors: ImportValidationMessage[] = [];
   const warnings: ImportValidationMessage[] = [];
@@ -359,6 +379,7 @@ export function validateImport(value: unknown): ImportValidationResult {
   validateOptionalArray(data.auditLog, "data.auditLog", errors);
   validateOptionalArray(data.notifications, "data.notifications", errors);
   validateTaskState(data.taskState, errors, warnings);
+  validateProjectReplaceDependencies(data, errors);
 
   const importedAttachmentCount =
     countEvidenceAttachmentsInEntityArray(data.deadlines) +

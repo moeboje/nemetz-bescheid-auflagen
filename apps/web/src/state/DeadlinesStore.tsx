@@ -1,13 +1,27 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   deadlines as initialDeadlines,
-  Deadline,
-  DeadlineStatus,
-  DeadlineStoredStatus
+  type Deadline,
+  type DeadlineStatus,
+  type DeadlineStoredStatus
 } from "../data/deadlines";
+import { useAuth } from "./AuthStore";
 import { useAuditLog } from "./AuditLogStore";
 import { useUsers } from "./UsersStore";
-import { loadJSON, saveJSON, STORAGE_KEYS } from "./persistence";
+import { clearPersistedValue, makeStorageKey } from "./persistence";
+import {
+  archiveDeadline as apiArchiveDeadline,
+  bulkDeleteDeadlines,
+  bulkReplaceDeadlines,
+  completeDeadline as apiCompleteDeadline,
+  createDeadline as apiCreateDeadline,
+  listDeadlines,
+  markDeadlineAttachmentUnavailable as apiMarkDeadlineAttachmentUnavailable,
+  reopenDeadline as apiReopenDeadline,
+  restoreDeadline as apiRestoreDeadline,
+  setDeadlineStatus as apiSetDeadlineStatus,
+  updateDeadline as apiUpdateDeadline
+} from "../api/deadlines";
 import {
   countAttachmentsByKind,
   createStableId,
@@ -24,42 +38,46 @@ type DeadlineEvidenceInput = {
   attachments: AttachmentMeta[];
 };
 
+type DeadlineCreateInput = Omit<
+  Deadline,
+  | "id"
+  | "status"
+  | "createdAt"
+  | "updatedAt"
+  | "isArchived"
+  | "archivedAt"
+  | "completedAt"
+  | "completedByUserId"
+  | "evidence"
+> & {
+  id?: string;
+  status?: DeadlineStatusInput;
+};
+
 export type DeadlinesContextValue = {
   deadlines: Deadline[];
   addDeadline: (
-    input: Omit<
-      Deadline,
-      | "id"
-      | "status"
-      | "createdAt"
-      | "updatedAt"
-      | "isArchived"
-      | "archivedAt"
-      | "completedAt"
-      | "completedByUserId"
-      | "evidence"
-    > & { status?: DeadlineStatusInput }
-  ) => void;
-  updateDeadline: (id: string, input: Partial<Deadline>) => void;
-  setDeadlineStatus: (id: string, status: DeadlineStatusInput) => void;
-  markDeadlineDone: (id: string) => void;
-  markDeadlineDoneWithEvidence: (id: string, input: DeadlineEvidenceInput) => void;
-  markDeadlineAttachmentUnavailable: (id: string, attachmentId: string) => void;
-  reopenDeadline: (id: string) => void;
-  archiveDeadline: (id: string) => void;
-  restoreDeadline: (id: string) => void;
+    input: DeadlineCreateInput
+  ) => Promise<Deadline | null>;
+  updateDeadline: (id: string, input: Partial<Deadline>) => Promise<Deadline | null>;
+  setDeadlineStatus: (id: string, status: DeadlineStatusInput) => Promise<Deadline | null>;
+  markDeadlineDone: (id: string) => Promise<Deadline | null>;
+  markDeadlineDoneWithEvidence: (id: string, input: DeadlineEvidenceInput) => Promise<Deadline | null>;
+  markDeadlineAttachmentUnavailable: (id: string, attachmentId: string) => Promise<boolean>;
+  reopenDeadline: (id: string) => Promise<Deadline | null>;
+  archiveDeadline: (id: string) => Promise<Deadline | null>;
+  restoreDeadline: (id: string) => Promise<Deadline | null>;
   getDeadlinesForLegalDoc: (legalDocId: string) => Deadline[];
   getDeadlinesForProject: (projectId: string) => Deadline[];
   getDeadlineStatus: (deadline: Deadline) => DeadlineStatus;
-  replaceDeadlines: (value: Deadline[]) => void;
-  resetDeadlines: () => void;
+  replaceDeadlines: (value: Deadline[]) => Promise<void>;
+  resetDeadlines: () => Promise<void>;
+  reloadDeadlines: () => Promise<Deadline[]>;
 };
 
 const DeadlinesContext = createContext<DeadlinesContextValue | undefined>(undefined);
 
-function createId() {
-  return `dl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-}
+export const DEADLINES_STORAGE_KEY = makeStorageKey("deadlines");
 
 function nowStamp() {
   return new Date().toISOString();
@@ -227,220 +245,251 @@ function resolveDeadlineStatus(deadline: Deadline): DeadlineStatus {
   return "OPEN";
 }
 
+const normalizedInitialDeadlines = normalizeDeadlines(initialDeadlines);
+
+function mergeDeadline(existing: Deadline, incoming: Deadline) {
+  return {
+    ...existing,
+    ...incoming,
+    description: incoming.description ?? existing.description ?? "",
+    evidence: incoming.evidence ?? existing.evidence ?? []
+  };
+}
+
 export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
+  const { user: authUser } = useAuth();
   const { logEvent } = useAuditLog();
   const { currentUser, getUserLabel } = useUsers();
-  const [deadlines, setDeadlines] = useState<Deadline[]>(() =>
-    loadJSON<Deadline[]>(STORAGE_KEYS.deadlines, {
-      fallback: initialDeadlines,
-      migrate: (value) => {
-        const normalized = normalizeDeadlines(value);
-        return normalized.length ? normalized : initialDeadlines;
-      }
-    }) ?? initialDeadlines
-  );
+  const [deadlines, setDeadlines] = useState<Deadline[]>([]);
 
-  React.useEffect(() => {
-    saveJSON(STORAGE_KEYS.deadlines, deadlines);
-  }, [deadlines]);
+  const reloadDeadlines = useCallback(async () => {
+    if (!authUser || authUser.type === "EXTERNAL") {
+      setDeadlines([]);
+      clearPersistedValue(DEADLINES_STORAGE_KEY);
+      return [];
+    }
+
+    const next = normalizeDeadlines(await listDeadlines());
+    setDeadlines(next);
+    clearPersistedValue(DEADLINES_STORAGE_KEY);
+    return next;
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser || authUser.type === "EXTERNAL") {
+      setDeadlines([]);
+      clearPersistedValue(DEADLINES_STORAGE_KEY);
+      return;
+    }
+
+    void reloadDeadlines().catch(() => {
+      setDeadlines([]);
+      clearPersistedValue(DEADLINES_STORAGE_KEY);
+    });
+  }, [authUser, reloadDeadlines]);
 
   const addDeadline = useCallback(
-    (
-      input: Omit<
-        Deadline,
-        | "id"
-        | "status"
-        | "createdAt"
-        | "updatedAt"
-        | "isArchived"
-        | "archivedAt"
-        | "completedAt"
-        | "completedByUserId"
-        | "evidence"
-      > & { status?: DeadlineStatusInput }
-    ) => {
-      const timestamp = nowStamp();
-      const normalizedReminder = normalizeReminder(input);
-      const newDeadline: Deadline = {
-        ...normalizedReminder,
-        id: createId(),
-        status: input.status ?? "OPEN",
-        completedAt: undefined,
-        completedByUserId: undefined,
-        evidence: [],
-        archivedAt: undefined,
-        isArchived: false,
-        createdAt: timestamp,
-        updatedAt: timestamp
-      };
-      setDeadlines((prev) => [newDeadline, ...prev]);
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "DEADLINE",
-        entityId: newDeadline.id,
-        action: "CREATED",
-        summary: newDeadline.title
-      });
+    async (input: DeadlineCreateInput) => {
+      try {
+        const createdDeadline = normalizeDeadlines([
+          await apiCreateDeadline({
+            id: input.id,
+            title: input.title,
+            description: input.description ?? "",
+            dueDate: input.dueDate,
+            status: input.status ?? "OPEN",
+            projectId: input.projectId,
+            legalDocId: input.legalDocId,
+            authorityId: input.authorityId,
+            ownerUserId: input.ownerUserId,
+            deputyUserId: input.deputyUserId,
+            emailReminderEnabled: Boolean(input.emailReminderEnabled),
+            emailReminderDaysBefore: input.emailReminderDaysBefore
+          })
+        ])[0];
+
+        if (!createdDeadline) {
+          return null;
+        }
+
+        setDeadlines((prev) => [createdDeadline, ...prev]);
+        clearPersistedValue(DEADLINES_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "DEADLINE",
+          entityId: createdDeadline.id,
+          action: "CREATED",
+          summary: createdDeadline.title
+        });
+        return createdDeadline;
+      } catch {
+        return null;
+      }
     },
     [logEvent]
   );
 
   const updateDeadline = useCallback(
-    (id: string, input: Partial<Deadline>) => {
-      const current = deadlines.find((deadline) => deadline.id === id);
-      if (!current) {
-        return;
+    async (id: string, input: Partial<Deadline>) => {
+      const existing = deadlines.find((deadline) => deadline.id === id);
+      if (!existing) {
+        return null;
       }
-      const timestamp = nowStamp();
-      setDeadlines((prev) =>
-        prev.map((deadline) => {
-          if (deadline.id !== id) {
-            return deadline;
-          }
-          const merged = normalizeReminder({
-            ...deadline,
-            ...input
-          });
 
-          return {
-            ...merged,
-            status: normalizeStatus(merged.status),
-            id: deadline.id,
-            createdAt: deadline.createdAt,
-            evidence: Array.isArray(merged.evidence) ? merged.evidence : deadline.evidence ?? [],
-            updatedAt: timestamp
-          };
-        })
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "DEADLINE",
-        entityId: id,
-        action: "UPDATED",
-        summary: current.title
-      });
+      try {
+        const updatedDeadline = normalizeDeadlines([
+          await apiUpdateDeadline(id, {
+            title: input.title !== undefined ? input.title : existing.title,
+            description:
+              input.description !== undefined ? input.description : existing.description ?? "",
+            dueDate: input.dueDate !== undefined ? input.dueDate : existing.dueDate,
+            status: input.status !== undefined ? normalizeStatus(input.status) : existing.status,
+            projectId:
+              input.projectId !== undefined ? input.projectId : existing.projectId,
+            legalDocId:
+              input.legalDocId !== undefined ? input.legalDocId : existing.legalDocId,
+            authorityId:
+              input.authorityId !== undefined ? input.authorityId : existing.authorityId,
+            ownerUserId:
+              input.ownerUserId !== undefined ? input.ownerUserId : existing.ownerUserId,
+            deputyUserId:
+              input.deputyUserId !== undefined ? input.deputyUserId : existing.deputyUserId,
+            emailReminderEnabled:
+              input.emailReminderEnabled !== undefined
+                ? input.emailReminderEnabled
+                : existing.emailReminderEnabled,
+            emailReminderDaysBefore:
+              input.emailReminderDaysBefore !== undefined
+                ? input.emailReminderDaysBefore
+                : existing.emailReminderDaysBefore,
+            completedAt:
+              input.completedAt !== undefined ? input.completedAt : existing.completedAt,
+            completedByUserId:
+              input.completedByUserId !== undefined
+                ? input.completedByUserId
+                : existing.completedByUserId,
+            evidence:
+              input.evidence !== undefined ? input.evidence : existing.evidence,
+            archivedAt:
+              input.archivedAt !== undefined ? input.archivedAt : existing.archivedAt,
+            isArchived: input.isArchived !== undefined ? input.isArchived : existing.isArchived
+          })
+        ])[0];
+
+        if (!updatedDeadline) {
+          return null;
+        }
+
+        setDeadlines((prev) =>
+          prev.map((deadline) =>
+            deadline.id === id ? mergeDeadline(deadline, updatedDeadline) : deadline
+          )
+        );
+        clearPersistedValue(DEADLINES_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "DEADLINE",
+          entityId: id,
+          action: "UPDATED",
+          summary: existing.title
+        });
+        return updatedDeadline;
+      } catch {
+        return null;
+      }
     },
     [deadlines, logEvent]
   );
 
   const setDeadlineStatus = useCallback(
-    (id: string, status: DeadlineStatusInput) => {
-      const current = deadlines.find((deadline) => deadline.id === id);
-      if (!current) {
-        return;
+    async (id: string, status: DeadlineStatusInput) => {
+      const existing = deadlines.find((deadline) => deadline.id === id);
+      if (!existing) {
+        return null;
       }
-      const timestamp = nowStamp();
-      setDeadlines((prev) =>
-        prev.map((deadline) =>
-          deadline.id === id
-            ? {
-                ...deadline,
-                status,
-                completedAt: status === "DONE" ? timestamp : undefined,
-                completedByUserId: status === "DONE" ? currentUser?.id : undefined,
-                updatedAt: timestamp
-              }
-            : deadline
-        )
-      );
-      logEvent({
-        actorLabel: getUserLabel(currentUser?.id) || "Demo User",
-        entityType: "DEADLINE",
-        entityId: id,
-        action: "STATUS_CHANGED",
-        summary: `Deadline status set to ${status}`
-      });
+
+      try {
+        const updatedDeadline = normalizeDeadlines([await apiSetDeadlineStatus(id, status)])[0];
+        if (!updatedDeadline) {
+          return null;
+        }
+
+        setDeadlines((prev) =>
+          prev.map((deadline) =>
+            deadline.id === id ? mergeDeadline(deadline, updatedDeadline) : deadline
+          )
+        );
+        clearPersistedValue(DEADLINES_STORAGE_KEY);
+        logEvent({
+          actorLabel: getUserLabel(currentUser?.id) || "Demo User",
+          entityType: "DEADLINE",
+          entityId: id,
+          action: "STATUS_CHANGED",
+          summary: `Deadline status set to ${status}`
+        });
+        return updatedDeadline;
+      } catch {
+        return null;
+      }
     },
     [currentUser?.id, deadlines, getUserLabel, logEvent]
   );
 
   const markDeadlineDone = useCallback(
-    (id: string) => {
-      setDeadlineStatus(id, "DONE");
-    },
+    async (id: string) => setDeadlineStatus(id, "DONE"),
     [setDeadlineStatus]
   );
 
   const markDeadlineDoneWithEvidence = useCallback(
-    (id: string, input: DeadlineEvidenceInput) => {
-      const timestamp = nowStamp();
-      const evidenceEntry: Evidence = {
-        id: createStableId("ev"),
-        note: input.note,
-        outcome: input.outcome,
-        attachments: input.attachments ?? [],
-        createdAt: timestamp,
-        createdByUserId: currentUser?.id,
-        createdByLabel: getUserLabel(currentUser?.id)
-      };
+    async (id: string, input: DeadlineEvidenceInput) => {
+      try {
+        const updatedDeadline = normalizeDeadlines([await apiCompleteDeadline(id, input)])[0];
+        if (!updatedDeadline) {
+          return null;
+        }
 
-      setDeadlines((prev) =>
-        prev.map((deadline) =>
-          deadline.id === id
-            ? {
-                ...deadline,
-                status: "DONE",
-                completedAt: timestamp,
-                completedByUserId: currentUser?.id,
-                evidence: [evidenceEntry, ...(deadline.evidence ?? [])],
-                updatedAt: timestamp
-              }
-            : deadline
-        )
-      );
-
-      logEvent({
-        actorLabel: getUserLabel(currentUser?.id) || "Demo User",
-        entityType: "DEADLINE",
-        entityId: id,
-        action: "TASK_COMPLETED",
-        summary: buildTaskCompletedAuditSummary(input)
-      });
+        setDeadlines((prev) =>
+          prev.map((deadline) =>
+            deadline.id === id ? mergeDeadline(deadline, updatedDeadline) : deadline
+          )
+        );
+        clearPersistedValue(DEADLINES_STORAGE_KEY);
+        logEvent({
+          actorLabel: getUserLabel(currentUser?.id) || "Demo User",
+          entityType: "DEADLINE",
+          entityId: id,
+          action: "TASK_COMPLETED",
+          summary: buildTaskCompletedAuditSummary(input)
+        });
+        return updatedDeadline;
+      } catch {
+        return null;
+      }
     },
     [currentUser?.id, getUserLabel, logEvent]
   );
 
   const markDeadlineAttachmentUnavailable = useCallback(
-    (id: string, attachmentId: string) => {
+    async (id: string, attachmentId: string) => {
       if (!attachmentId) {
-        return;
+        return false;
       }
 
-      let changed = false;
-      const timestamp = nowStamp();
-      setDeadlines((prev) =>
-        prev.map((deadline) => {
-          if (deadline.id !== id || !deadline.evidence?.length) {
-            return deadline;
-          }
+      try {
+        const updatedDeadline = normalizeDeadlines([
+          await apiMarkDeadlineAttachmentUnavailable(id, attachmentId)
+        ])[0];
 
-          const nextEvidence = deadline.evidence.map((entry) => ({
-            ...entry,
-            attachments: entry.attachments.map((attachment) => {
-              if (attachment.id !== attachmentId || attachment.storage === "none") {
-                return attachment;
-              }
-              changed = true;
-              return {
-                ...attachment,
-                storage: "none"
-              };
-            })
-          }));
+        if (!updatedDeadline) {
+          return false;
+        }
 
-          if (!changed) {
-            return deadline;
-          }
-
-          return {
-            ...deadline,
-            evidence: nextEvidence,
-            updatedAt: timestamp
-          };
-        })
-      );
-
-      if (changed) {
+        setDeadlines((prev) =>
+          prev.map((deadline) =>
+            deadline.id === id ? mergeDeadline(deadline, updatedDeadline) : deadline
+          )
+        );
+        clearPersistedValue(DEADLINES_STORAGE_KEY);
         logEvent({
           actorLabel: "Demo User",
           entityType: "DEADLINE",
@@ -448,74 +497,112 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
           action: "CLEANUP",
           summary: `Attachment marked unavailable (${attachmentId})`
         });
+        return true;
+      } catch {
+        return false;
       }
     },
     [logEvent]
   );
 
   const reopenDeadline = useCallback(
-    (id: string) => {
-      setDeadlineStatus(id, "OPEN");
+    async (id: string) => {
+      const existing = deadlines.find((deadline) => deadline.id === id);
+      if (!existing) {
+        return null;
+      }
+
+      try {
+        const updatedDeadline = normalizeDeadlines([await apiReopenDeadline(id)])[0];
+        if (!updatedDeadline) {
+          return null;
+        }
+
+        setDeadlines((prev) =>
+          prev.map((deadline) =>
+            deadline.id === id ? mergeDeadline(deadline, updatedDeadline) : deadline
+          )
+        );
+        clearPersistedValue(DEADLINES_STORAGE_KEY);
+        logEvent({
+          actorLabel: getUserLabel(currentUser?.id) || "Demo User",
+          entityType: "DEADLINE",
+          entityId: id,
+          action: "STATUS_CHANGED",
+          summary: "Deadline status set to OPEN"
+        });
+        return updatedDeadline;
+      } catch {
+        return null;
+      }
     },
-    [setDeadlineStatus]
+    [currentUser?.id, deadlines, getUserLabel, logEvent]
   );
 
   const archiveDeadline = useCallback(
-    (id: string) => {
-      const current = deadlines.find((deadline) => deadline.id === id);
-      if (!current) {
-        return;
+    async (id: string) => {
+      const existing = deadlines.find((deadline) => deadline.id === id);
+      if (!existing) {
+        return null;
       }
-      const timestamp = nowStamp();
-      setDeadlines((prev) =>
-        prev.map((deadline) =>
-          deadline.id === id
-            ? {
-                ...deadline,
-                archivedAt: timestamp,
-                isArchived: true,
-                updatedAt: timestamp
-              }
-            : deadline
-        )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "DEADLINE",
-        entityId: id,
-        action: "ARCHIVED",
-        summary: current.title
-      });
+
+      try {
+        const updatedDeadline = normalizeDeadlines([await apiArchiveDeadline(id)])[0];
+        if (!updatedDeadline) {
+          return null;
+        }
+
+        setDeadlines((prev) =>
+          prev.map((deadline) =>
+            deadline.id === id ? mergeDeadline(deadline, updatedDeadline) : deadline
+          )
+        );
+        clearPersistedValue(DEADLINES_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "DEADLINE",
+          entityId: id,
+          action: "ARCHIVED",
+          summary: existing.title
+        });
+        return updatedDeadline;
+      } catch {
+        return null;
+      }
     },
     [deadlines, logEvent]
   );
 
   const restoreDeadline = useCallback(
-    (id: string) => {
-      const current = deadlines.find((deadline) => deadline.id === id);
-      if (!current) {
-        return;
+    async (id: string) => {
+      const existing = deadlines.find((deadline) => deadline.id === id);
+      if (!existing) {
+        return null;
       }
-      const timestamp = nowStamp();
-      setDeadlines((prev) =>
-        prev.map((deadline) =>
-          deadline.id === id
-            ? {
-                ...deadline,
-                archivedAt: undefined,
-                isArchived: false,
-                updatedAt: timestamp
-              }
-            : deadline
-        )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "DEADLINE",
-        entityId: id,
-        action: "RESTORED",
-        summary: current.title
-      });
+
+      try {
+        const updatedDeadline = normalizeDeadlines([await apiRestoreDeadline(id)])[0];
+        if (!updatedDeadline) {
+          return null;
+        }
+
+        setDeadlines((prev) =>
+          prev.map((deadline) =>
+            deadline.id === id ? mergeDeadline(deadline, updatedDeadline) : deadline
+          )
+        );
+        clearPersistedValue(DEADLINES_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "DEADLINE",
+          entityId: id,
+          action: "RESTORED",
+          summary: existing.title
+        });
+        return updatedDeadline;
+      } catch {
+        return null;
+      }
     },
     [deadlines, logEvent]
   );
@@ -533,13 +620,23 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
 
   const getDeadlineStatus = useCallback((deadline: Deadline) => resolveDeadlineStatus(deadline), []);
 
-  const replaceDeadlines = useCallback((value: Deadline[]) => {
-    const normalized = normalizeDeadlines(value);
-    setDeadlines(normalized.length ? normalized : initialDeadlines);
+  const replaceDeadlines = useCallback(async (value: Deadline[]) => {
+    const replaced = normalizeDeadlines(await bulkReplaceDeadlines(value));
+    setDeadlines(replaced);
+    clearPersistedValue(DEADLINES_STORAGE_KEY);
   }, []);
 
-  const resetDeadlines = useCallback(() => {
-    setDeadlines(initialDeadlines);
+  const resetDeadlines = useCallback(async () => {
+    if (normalizedInitialDeadlines.length === 0) {
+      await bulkDeleteDeadlines();
+      setDeadlines([]);
+      clearPersistedValue(DEADLINES_STORAGE_KEY);
+      return;
+    }
+
+    const replaced = normalizeDeadlines(await bulkReplaceDeadlines(normalizedInitialDeadlines));
+    setDeadlines(replaced);
+    clearPersistedValue(DEADLINES_STORAGE_KEY);
   }, []);
 
   const value = useMemo(
@@ -558,7 +655,8 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
       getDeadlinesForProject,
       getDeadlineStatus,
       replaceDeadlines,
-      resetDeadlines
+      resetDeadlines,
+      reloadDeadlines
     }),
     [
       addDeadline,
@@ -571,6 +669,7 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
       markDeadlineDoneWithEvidence,
       markDeadlineAttachmentUnavailable,
       reopenDeadline,
+      reloadDeadlines,
       replaceDeadlines,
       resetDeadlines,
       restoreDeadline,

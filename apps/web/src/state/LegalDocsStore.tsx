@@ -1,31 +1,42 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   LegalDoc,
   LegalDocAiExtraction,
   LegalDocAttachment,
   legalDocs as initialLegalDocs
 } from "../data/legalDocs";
+import { useAuth } from "./AuthStore";
 import { useAuditLog } from "./AuditLogStore";
 import { useProjects } from "./ProjectsStore";
-import { loadJSON, saveJSON, STORAGE_KEYS } from "./persistence";
+import { clearPersistedValue, makeStorageKey } from "./persistence";
 import { useScopes } from "./ScopesStore";
 import { normalizeAiAnalysisResult } from "../services/aiResultValidation";
+import {
+  archiveLegalDoc as apiArchiveLegalDoc,
+  bulkDeleteLegalDocs,
+  bulkReplaceLegalDocs,
+  createLegalDoc as apiCreateLegalDoc,
+  listLegalDocs,
+  restoreLegalDoc as apiRestoreLegalDoc,
+  updateLegalDoc as apiUpdateLegalDoc
+} from "../api/legalDocs";
 
 type LegalDocCreateInput = Omit<
   LegalDoc,
   "id" | "createdAt" | "updatedAt" | "isArchived" | "archivedAt" | "attachments"
 > & {
+  id?: string;
   attachments?: LegalDocAttachment[];
 };
 
 export type LegalDocsContextValue = {
   legalDocs: LegalDoc[];
-  addLegalDoc: (input: LegalDocCreateInput) => LegalDoc;
-  updateLegalDoc: (id: string, input: Partial<LegalDoc>) => void;
-  archiveLegalDoc: (id: string) => void;
-  restoreLegalDoc: (id: string) => void;
-  addLegalDocAttachment: (legalDocId: string, attachment: LegalDocAttachment) => void;
-  removeLegalDocAttachment: (legalDocId: string, attachmentId: string) => void;
+  addLegalDoc: (input: LegalDocCreateInput) => Promise<LegalDoc | null>;
+  updateLegalDoc: (id: string, input: Partial<LegalDoc>) => Promise<LegalDoc | null>;
+  archiveLegalDoc: (id: string) => Promise<LegalDoc | null>;
+  restoreLegalDoc: (id: string) => Promise<LegalDoc | null>;
+  addLegalDocAttachment: (legalDocId: string, attachment: LegalDocAttachment) => Promise<boolean>;
+  removeLegalDocAttachment: (legalDocId: string, attachmentId: string) => Promise<boolean>;
   getEffectiveScope: (legalDoc: LegalDoc) =>
     | { companyId: string; siteId?: string; facilityId?: string }
     | undefined;
@@ -34,15 +45,14 @@ export type LegalDocsContextValue = {
     | undefined;
   getEffectiveScopeLabel: (legalDoc: LegalDoc) => string;
   getLegalDocsForProject: (projectId: string) => LegalDoc[];
-  replaceLegalDocs: (value: LegalDoc[]) => void;
-  resetLegalDocs: () => void;
+  replaceLegalDocs: (value: LegalDoc[]) => Promise<void>;
+  resetLegalDocs: () => Promise<void>;
+  reloadLegalDocs: () => Promise<LegalDoc[]>;
 };
 
 const LegalDocsContext = createContext<LegalDocsContextValue | undefined>(undefined);
 
-function createId(prefix: "ld" | "lda") {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-}
+export const LEGAL_DOCS_STORAGE_KEY = makeStorageKey("legalDocs");
 
 function nowStamp() {
   return new Date().toISOString();
@@ -136,206 +146,256 @@ function normalizeLegalDocs(value: unknown): LegalDoc[] {
     .filter((doc): doc is LegalDoc => Boolean(doc));
 }
 
+const normalizedInitialLegalDocs = normalizeLegalDocs(initialLegalDocs);
+
+function mergeLegalDoc(existing: LegalDoc, incoming: LegalDoc) {
+  return {
+    ...existing,
+    ...incoming,
+    shortDescription: incoming.shortDescription ?? existing.shortDescription ?? "",
+    reference: incoming.reference ?? existing.reference ?? "",
+    issuedAt: incoming.issuedAt ?? existing.issuedAt ?? "",
+    attachments: incoming.attachments ?? existing.attachments,
+    aiExtraction: incoming.aiExtraction ?? existing.aiExtraction,
+    scopeOverride: incoming.scopeOverride ?? existing.scopeOverride
+  };
+}
+
 export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
+  const { user: authUser } = useAuth();
   const { logEvent } = useAuditLog();
-  const [legalDocs, setLegalDocs] = useState<LegalDoc[]>(() =>
-    loadJSON<LegalDoc[]>(STORAGE_KEYS.legalDocs, {
-      fallback: initialLegalDocs,
-      migrate: (value) => {
-        const normalized = normalizeLegalDocs(value);
-        return normalized.length ? normalized : initialLegalDocs;
-      }
-    }) ?? initialLegalDocs
-  );
   const { projects } = useProjects();
   const { getScopeLabel } = useScopes();
+  const [legalDocs, setLegalDocs] = useState<LegalDoc[]>([]);
 
-  React.useEffect(() => {
-    saveJSON(STORAGE_KEYS.legalDocs, legalDocs);
-  }, [legalDocs]);
+  const reloadLegalDocs = useCallback(async () => {
+    if (!authUser || authUser.type === "EXTERNAL") {
+      setLegalDocs([]);
+      clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
+      return [];
+    }
+
+    const next = normalizeLegalDocs(await listLegalDocs());
+    setLegalDocs(next);
+    clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
+    return next;
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser || authUser.type === "EXTERNAL") {
+      setLegalDocs([]);
+      clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
+      return;
+    }
+
+    void reloadLegalDocs().catch(() => {
+      setLegalDocs([]);
+      clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
+    });
+  }, [authUser, reloadLegalDocs]);
 
   const addLegalDoc = useCallback(
-    (input: LegalDocCreateInput) => {
-      const timestamp = nowStamp();
-      const newDoc: LegalDoc = {
-        ...input,
-        id: createId("ld"),
-        attachments: (input.attachments ?? []).map((attachment, index) =>
-          normalizeAttachment(attachment, `lda-${timestamp}-${index}`)
-        ),
-        aiExtraction: normalizeAiExtraction(input.aiExtraction),
-        archivedAt: undefined,
-        isArchived: false,
-        createdAt: timestamp,
-        updatedAt: timestamp
-      };
-      setLegalDocs((prev) => [newDoc, ...prev]);
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "LEGAL_DOC",
-        entityId: newDoc.id,
-        action: "CREATED",
-        summary: newDoc.title
-      });
-      return newDoc;
+    async (input: LegalDocCreateInput) => {
+      try {
+        const createdLegalDoc = normalizeLegalDocs([
+          await apiCreateLegalDoc({
+            id: input.id,
+            projectId: input.projectId,
+            type: input.type,
+            title: input.title,
+            shortDescription: input.shortDescription ?? "",
+            reference: input.reference ?? "",
+            issuedAt: input.issuedAt ?? "",
+            authorityId: input.authorityId,
+            authorityContactId: input.authorityContactId,
+            attachments: (input.attachments ?? []).map((attachment, index) =>
+              normalizeAttachment(attachment, `lda-create-${index}`)
+            ),
+            aiExtraction: input.aiExtraction,
+            scopeOverride: input.scopeOverride
+          })
+        ])[0];
+
+        if (!createdLegalDoc) {
+          return null;
+        }
+
+        setLegalDocs((prev) => [createdLegalDoc, ...prev]);
+        clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "LEGAL_DOC",
+          entityId: createdLegalDoc.id,
+          action: "CREATED",
+          summary: createdLegalDoc.title
+        });
+        return createdLegalDoc;
+      } catch {
+        return null;
+      }
     },
     [logEvent]
   );
 
   const updateLegalDoc = useCallback(
-    (id: string, input: Partial<LegalDoc>) => {
-      const current = legalDocs.find((doc) => doc.id === id);
-      if (!current) {
-        return;
+    async (id: string, input: Partial<LegalDoc>) => {
+      const existing = legalDocs.find((doc) => doc.id === id);
+      if (!existing) {
+        return null;
       }
-      const timestamp = nowStamp();
-      setLegalDocs((prev) =>
-        prev.map((doc) =>
-          doc.id === id
-            ? {
-                ...doc,
-                ...input,
-                attachments: Array.isArray(input.attachments)
-                  ? input.attachments.map((attachment, index) =>
-                      normalizeAttachment(attachment, `lda-${id}-${index}`)
-                    )
-                  : doc.attachments,
-                aiExtraction:
-                  input.aiExtraction !== undefined
-                    ? normalizeAiExtraction(input.aiExtraction)
-                    : doc.aiExtraction,
-                updatedAt: timestamp
-              }
-            : doc
-        )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "LEGAL_DOC",
-        entityId: id,
-        action: "UPDATED",
-        summary: current.title
-      });
+
+      try {
+        const updatedLegalDoc = normalizeLegalDocs([
+          await apiUpdateLegalDoc(id, {
+            projectId: input.projectId ?? existing.projectId,
+            type: input.type ?? existing.type,
+            title: input.title ?? existing.title,
+            shortDescription:
+              input.shortDescription !== undefined
+                ? input.shortDescription
+                : existing.shortDescription ?? "",
+            reference:
+              input.reference !== undefined ? input.reference : existing.reference ?? "",
+            issuedAt: input.issuedAt !== undefined ? input.issuedAt : existing.issuedAt ?? "",
+            authorityId:
+              input.authorityId !== undefined ? input.authorityId : existing.authorityId,
+            authorityContactId:
+              input.authorityContactId !== undefined
+                ? input.authorityContactId
+                : existing.authorityContactId,
+            attachments: Array.isArray(input.attachments)
+              ? input.attachments.map((attachment, index) =>
+                  normalizeAttachment(attachment, `lda-${id}-${index}`)
+                )
+              : existing.attachments,
+            aiExtraction:
+              input.aiExtraction !== undefined ? input.aiExtraction : existing.aiExtraction,
+            scopeOverride:
+              input.scopeOverride !== undefined ? input.scopeOverride : existing.scopeOverride,
+            archivedAt:
+              input.archivedAt !== undefined ? input.archivedAt : existing.archivedAt,
+            isArchived: input.isArchived !== undefined ? input.isArchived : existing.isArchived
+          })
+        ])[0];
+
+        if (!updatedLegalDoc) {
+          return null;
+        }
+
+        setLegalDocs((prev) =>
+          prev.map((doc) => (doc.id === id ? mergeLegalDoc(doc, updatedLegalDoc) : doc))
+        );
+        clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "LEGAL_DOC",
+          entityId: id,
+          action: "UPDATED",
+          summary: existing.title
+        });
+        return updatedLegalDoc;
+      } catch {
+        return null;
+      }
     },
     [legalDocs, logEvent]
   );
 
   const archiveLegalDoc = useCallback(
-    (id: string) => {
-      const current = legalDocs.find((doc) => doc.id === id);
-      if (!current) {
-        return;
+    async (id: string) => {
+      const existing = legalDocs.find((doc) => doc.id === id);
+      if (!existing) {
+        return null;
       }
-      const timestamp = nowStamp();
-      setLegalDocs((prev) =>
-        prev.map((doc) =>
-          doc.id === id
-            ? {
-                ...doc,
-                archivedAt: timestamp,
-                isArchived: true,
-                updatedAt: timestamp
-              }
-            : doc
-        )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "LEGAL_DOC",
-        entityId: id,
-        action: "ARCHIVED",
-        summary: current.title
-      });
+
+      try {
+        const updatedLegalDoc = normalizeLegalDocs([await apiArchiveLegalDoc(id)])[0];
+        if (!updatedLegalDoc) {
+          return null;
+        }
+
+        setLegalDocs((prev) =>
+          prev.map((doc) => (doc.id === id ? mergeLegalDoc(doc, updatedLegalDoc) : doc))
+        );
+        clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "LEGAL_DOC",
+          entityId: id,
+          action: "ARCHIVED",
+          summary: existing.title
+        });
+        return updatedLegalDoc;
+      } catch {
+        return null;
+      }
     },
     [legalDocs, logEvent]
   );
 
   const restoreLegalDoc = useCallback(
-    (id: string) => {
-      const current = legalDocs.find((doc) => doc.id === id);
-      if (!current) {
-        return;
+    async (id: string) => {
+      const existing = legalDocs.find((doc) => doc.id === id);
+      if (!existing) {
+        return null;
       }
-      const timestamp = nowStamp();
-      setLegalDocs((prev) =>
-        prev.map((doc) =>
-          doc.id === id
-            ? {
-                ...doc,
-                archivedAt: undefined,
-                isArchived: false,
-                updatedAt: timestamp
-              }
-            : doc
-        )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "LEGAL_DOC",
-        entityId: id,
-        action: "RESTORED",
-        summary: current.title
-      });
+
+      try {
+        const updatedLegalDoc = normalizeLegalDocs([await apiRestoreLegalDoc(id)])[0];
+        if (!updatedLegalDoc) {
+          return null;
+        }
+
+        setLegalDocs((prev) =>
+          prev.map((doc) => (doc.id === id ? mergeLegalDoc(doc, updatedLegalDoc) : doc))
+        );
+        clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "LEGAL_DOC",
+          entityId: id,
+          action: "RESTORED",
+          summary: existing.title
+        });
+        return updatedLegalDoc;
+      } catch {
+        return null;
+      }
     },
     [legalDocs, logEvent]
   );
 
   const addLegalDocAttachment = useCallback(
-    (legalDocId: string, attachment: LegalDocAttachment) => {
-      const current = legalDocs.find((doc) => doc.id === legalDocId);
-      if (!current) {
-        return;
+    async (legalDocId: string, attachment: LegalDocAttachment) => {
+      const existing = legalDocs.find((doc) => doc.id === legalDocId);
+      if (!existing) {
+        return false;
       }
-      const timestamp = nowStamp();
-      setLegalDocs((prev) =>
-        prev.map((doc) =>
-          doc.id === legalDocId
-            ? {
-                ...doc,
-                attachments: [...doc.attachments, normalizeAttachment(attachment, createId("lda"))],
-                updatedAt: timestamp
-              }
-            : doc
-        )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "LEGAL_DOC",
-        entityId: legalDocId,
-        action: "UPDATED",
-        summary: current.title
-      });
+
+      const nextAttachments = [
+        ...existing.attachments,
+        normalizeAttachment(attachment, `lda-${legalDocId}-${existing.attachments.length}`)
+      ];
+
+      const updated = await updateLegalDoc(legalDocId, { attachments: nextAttachments });
+      return Boolean(updated);
     },
-    [legalDocs, logEvent]
+    [legalDocs, updateLegalDoc]
   );
 
   const removeLegalDocAttachment = useCallback(
-    (legalDocId: string, attachmentId: string) => {
-      const current = legalDocs.find((doc) => doc.id === legalDocId);
-      if (!current) {
-        return;
+    async (legalDocId: string, attachmentId: string) => {
+      const existing = legalDocs.find((doc) => doc.id === legalDocId);
+      if (!existing) {
+        return false;
       }
-      const timestamp = nowStamp();
-      setLegalDocs((prev) =>
-        prev.map((doc) =>
-          doc.id === legalDocId
-            ? {
-                ...doc,
-                attachments: doc.attachments.filter((item) => item.id !== attachmentId),
-                updatedAt: timestamp
-              }
-            : doc
-        )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "LEGAL_DOC",
-        entityId: legalDocId,
-        action: "UPDATED",
-        summary: current.title
+
+      const updated = await updateLegalDoc(legalDocId, {
+        attachments: existing.attachments.filter((item) => item.id !== attachmentId)
       });
+      return Boolean(updated);
     },
-    [legalDocs, logEvent]
+    [legalDocs, updateLegalDoc]
   );
 
   const getEffectiveScope = useCallback(
@@ -372,13 +432,23 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
     [legalDocs]
   );
 
-  const replaceLegalDocs = useCallback((value: LegalDoc[]) => {
-    const normalized = normalizeLegalDocs(value);
-    setLegalDocs(normalized.length ? normalized : initialLegalDocs);
+  const replaceLegalDocs = useCallback(async (value: LegalDoc[]) => {
+    const replaced = normalizeLegalDocs(await bulkReplaceLegalDocs(value));
+    setLegalDocs(replaced);
+    clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
   }, []);
 
-  const resetLegalDocs = useCallback(() => {
-    setLegalDocs(initialLegalDocs);
+  const resetLegalDocs = useCallback(async () => {
+    if (normalizedInitialLegalDocs.length === 0) {
+      await bulkDeleteLegalDocs();
+      setLegalDocs([]);
+      clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
+      return;
+    }
+
+    const replaced = normalizeLegalDocs(await bulkReplaceLegalDocs(normalizedInitialLegalDocs));
+    setLegalDocs(replaced);
+    clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
   }, []);
 
   const value = useMemo(
@@ -395,21 +465,23 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
       getEffectiveScopeLabel,
       getLegalDocsForProject,
       replaceLegalDocs,
-      resetLegalDocs
+      resetLegalDocs,
+      reloadLegalDocs
     }),
     [
+      legalDocs,
       addLegalDoc,
-      addLegalDocAttachment,
+      updateLegalDoc,
       archiveLegalDoc,
+      restoreLegalDoc,
+      addLegalDocAttachment,
+      removeLegalDocAttachment,
       getEffectiveScope,
       getEffectiveScopeLabel,
       getLegalDocsForProject,
-      legalDocs,
-      removeLegalDocAttachment,
       replaceLegalDocs,
       resetLegalDocs,
-      restoreLegalDoc,
-      updateLegalDoc
+      reloadLegalDocs
     ]
   );
 

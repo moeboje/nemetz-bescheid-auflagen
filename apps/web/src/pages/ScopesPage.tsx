@@ -386,13 +386,13 @@ export default function ScopesPage() {
     });
   };
 
-  const handleConfirmArchive = () => {
+  const handleConfirmArchive = async () => {
     if (!archiveTarget) {
       return;
     }
 
     if (archiveTarget.level === "company") {
-      archiveCompany(archiveTarget.id);
+      await archiveCompany(archiveTarget.id);
       if (
         activeScope?.level === "company" &&
         activeScope.id === archiveTarget.id
@@ -416,7 +416,7 @@ export default function ScopesPage() {
     }
 
     if (archiveTarget.level === "site") {
-      archiveSite(archiveTarget.id);
+      await archiveSite(archiveTarget.id);
       if (activeScope?.level === "site" && activeScope.id === archiveTarget.id) {
         setActiveScope(null);
       }
@@ -431,7 +431,7 @@ export default function ScopesPage() {
     }
 
     if (archiveTarget.level === "facility") {
-      archiveFacility(archiveTarget.id);
+      await archiveFacility(archiveTarget.id);
       if (activeScope?.level === "facility" && activeScope.id === archiveTarget.id) {
         setActiveScope(null);
       }
@@ -440,33 +440,33 @@ export default function ScopesPage() {
     setArchiveTarget(null);
   };
 
-  const handleRestoreCompany = (id: string) => {
-    restoreCompany(id);
+  const handleRestoreCompany = async (id: string) => {
+    await restoreCompany(id);
     setActiveScope({ level: "company", id });
   };
 
-  const handleRestoreSite = (id: string) => {
-    restoreSite(id);
+  const handleRestoreSite = async (id: string) => {
+    await restoreSite(id);
     setActiveScope({ level: "site", id });
   };
 
-  const handleRestoreFacility = (id: string) => {
-    restoreFacility(id);
+  const handleRestoreFacility = async (id: string) => {
+    await restoreFacility(id);
     setActiveScope({ level: "facility", id });
   };
 
-  const handleSaveCompany = () => {
+  const handleSaveCompany = async () => {
     const name = companyForm.name.trim();
     if (!name) {
       return;
     }
     if (editingCompanyId) {
-      updateCompany(editingCompanyId, {
+      await updateCompany(editingCompanyId, {
         name,
         shortName: companyForm.shortName.trim()
       });
     } else {
-      addCompany({
+      await addCompany({
         name,
         shortName: companyForm.shortName.trim()
       });
@@ -476,18 +476,18 @@ export default function ScopesPage() {
     setEditingCompanyId(null);
   };
 
-  const handleSaveSite = () => {
+  const handleSaveSite = async () => {
     const name = siteForm.name.trim();
     if (!siteForm.companyId || !name) {
       return;
     }
     if (editingSiteId) {
-      updateSite(editingSiteId, {
+      await updateSite(editingSiteId, {
         companyId: siteForm.companyId,
         name
       });
     } else {
-      addSite({
+      await addSite({
         companyId: siteForm.companyId,
         name
       });
@@ -497,20 +497,20 @@ export default function ScopesPage() {
     setEditingSiteId(null);
   };
 
-  const handleSaveFacility = () => {
+  const handleSaveFacility = async () => {
     const name = facilityForm.name.trim();
     if (!facilityForm.companyId || !facilityForm.siteId || !name) {
       return;
     }
     if (editingFacilityId) {
-      updateFacility(editingFacilityId, {
+      await updateFacility(editingFacilityId, {
         companyId: facilityForm.companyId,
         siteId: facilityForm.siteId,
         name,
         type: facilityForm.type.trim()
       });
     } else {
-      addFacility({
+      await addFacility({
         companyId: facilityForm.companyId,
         siteId: facilityForm.siteId,
         name,

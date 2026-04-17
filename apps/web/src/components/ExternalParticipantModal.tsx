@@ -16,7 +16,7 @@ type ExternalParticipantModalProps = {
   open: boolean;
   onClose: () => void;
   participant?: ExternalParticipant;
-  onSave: (input: Omit<ExternalParticipant, "id" | "createdAt" | "updatedAt">) => void;
+  onSave: (input: Omit<ExternalParticipant, "id" | "createdAt" | "updatedAt">) => void | Promise<void>;
 };
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -50,11 +50,11 @@ export default function ExternalParticipantModal({
   const hasEmailError = form.email ? !emailPattern.test(form.email) : false;
   const isSaveDisabled = !form.type || !form.name || hasEmailError;
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (isSaveDisabled) {
       return;
     }
-    onSave({
+    await onSave({
       type: form.type,
       organization: form.organization || undefined,
       name: form.name,
@@ -78,7 +78,7 @@ export default function ExternalParticipantModal({
           <Button variant="secondary" onClick={onClose}>
             {t("common.cancel")}
           </Button>
-          <Button onClick={handleSave} disabled={isSaveDisabled}>
+          <Button onClick={() => void handleSave()} disabled={isSaveDisabled}>
             {t("common.save")}
           </Button>
         </div>
