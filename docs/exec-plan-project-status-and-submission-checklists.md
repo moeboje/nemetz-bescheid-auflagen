@@ -1,621 +1,241 @@
-# Umsetzungsplan: Projektstatus und einreichphasenbezogene Checklisten
+# Umsetzungsplan: Projektstatus, Einreichtyp und projektbezogene Checklisten
 
-## 1. Zielbild
-- Die Funktion wird als additive Erweiterung des bereits serverseitig persistierten Projektbereichs umgesetzt, nicht als neue Persistenzphase.
-- Jedes neue Projekt erhaelt einen fachlichen Projektstatus und eine konfigurierbare Einreichlogik, damit das Team den Reifegrad des Projekts und die naechsten fachlichen Arbeitspunkte sofort erkennen kann.
-- Eine "Einreichphase-Checkliste" ist im Portal keine starre Dateiliste, sondern eine projektbezogene, versionierte interne Arbeitsliste aus Themen, Pruefungen, Unterlagen, Zustaendigkeiten und Fristen.
-- Der praktische Nutzen fuer Projektteams:
-  - Sichtbarkeit von fehlenden Unterlagen
-  - Sichtbarkeit offener Pruefthemen
-  - Zuweisung verantwortlicher Personen
-  - Nachverfolgung von Zielterminen
-  - Ueberblick ueber bereits hinterlegte Dokumente
-  - nachvollziehbare Dokumentation des Einreichstands
-- Die Funktion ist teamorientiert: Sie soll Arbeitsvorbereitung, Vollstaendigkeitskontrolle und Koordination unterstuetzen, nicht juristische Freigaben automatisieren.
-- Das Modell unterscheidet nicht mehr nur binar zwischen `AWG` und `UVP/UVE`, sondern unterstuetzt mindestens drei fachliche Einreichprofile:
-  - `Gewerbe`
-  - `Gewerbe + AWG`
-  - `Gewerbe + AWG + UVP/UVE`
-- Fachlich wird dafuer ein flexibles Profil-/Modul-Modell empfohlen:
-  - `Gewerbe` als Basisprofil
-  - `AWG` als Zusatzmodul auf einer gewerbeaehnlichen Basis
-  - `UVP/UVE` als weiteres Zusatzmodul
-- Mischfaelle wie `Gewerbe + AWG` oder `Gewerbe + AWG + UVP/UVE` muessen konzeptionell sauber moeglich sein.
-- Die Funktion bleibt in bestehenden Projekt-Workflows verankert, insbesondere im Projektdetail und in bestehenden Dokument-/LegalDoc-Bezuegen.
-
-## 2. Nicht-Ziele
-- Keine automatische Rechtspruefung.
-- Keine vollstaendige juristische Expertensoftware.
-- Keine automatische Genehmigungsentscheidung.
-- Keine sofortige Vollpflicht fuer alle historischen Projekte.
-- Keine direkte Implementierung in diesem Lauf.
-- Keine neue native App, keine neue Backend-Architektur, keine unnoetigen Dependencies.
-- Keine Destabilisierung der bereits umgesetzten serverseitigen Persistenz.
-- Keine neue Aufgaben- oder Dokumentenarchitektur nur fuer diese Funktion.
-
-## 3. Fachliches Datenmodell (konzeptionell)
-- `ProjectStatus`: kontrollierter fachlicher Status des Projekts; fachlich auf Projektebene verankert, mit manuellen Statuswechseln und Historisierung ueber Audit oder Statushistorie.
-- `ProjectSubmissionBaseProfile`: empfohlen zunaechst `GEWERBE` als Basisprofil; spaetere weitere Basisprofile bleiben theoretisch moeglich, sind aber nicht Teil des MVP.
-- `ProjectSubmissionModule`: additive Fachmodule, initial mindestens:
+## Kurzfassung
+- C1a `Project.status` ist bereits umgesetzt und bleibt unveraendert das fachliche Prozessstatus-Konzept auf Projektebene.
+- Die fruehere Idee eines flexiblen Basisprofil-/Add-on-/Mehrprofil-Modells wird verworfen.
+- Fuer die erste Version gilt stattdessen ein klares Single-Select-Modell: Ein Projekt hat genau einen Einreichtyp.
+- Zulaessige Werte sind ausschliesslich:
+  - `GEWERBE`
   - `AWG`
   - `UVP_UVE`
-- `ProjectSubmissionProfile` bzw. `ProjectType`: fuer UI und Reporting kann zusaetzlich ein abgeleitetes Preset oder Label angeboten werden, z. B.:
-  - `GEWERBE`
-  - `GEWERBE_AWG`
-  - `GEWERBE_AWG_UVP_UVE`
-  - optional spaeter `GEWERBE_UVP_UVE`, falls fachlich noetig
-- Empfohlene fachliche Source of Truth ist nicht eine starre Enum, sondern:
-  - `baseProfile = GEWERBE`
-  - `enabledModules = [] | [AWG] | [UVP_UVE] | [AWG, UVP_UVE]`
-- `ChecklistTemplate`, `ChecklistTemplateSection`, `ChecklistTemplateItem`: versionierte fachliche Vorlagen; initial nicht als frei editierbare Admin-Baukaesten geplant, sondern kuratiert und freigegeben.
-- `ChecklistTemplateModule`: fachlicher Template-Baustein, aus dem eine Projektcheckliste zusammengesetzt wird; initial:
-  - `GEWERBE_CORE`
-  - `AWG_ADDON`
-  - `UVP_UVE_ADDON`
-- `ProjectChecklist`: projektbezogene materialisierte Instanz einer Template-Version; enthaelt Basisprofil, Modulzusammenstellung, Aktivierungsstatus, Zusammenfassung und Historienbezug.
-- `ProjectChecklistItem`: projektbezogene Kopie eines Template-Items mit eigenem Bearbeitungsstatus, Verantwortlichem, Faelligkeit, Prioritaet, Kommentar und Dokumentverknuepfung.
-- `ProjectChecklistDocumentLink`: konzeptionelle Verknuepfung eines Checklistenpunkts zu bestehenden `Document`-Eintraegen und optional zu bestehenden `LegalDocument`-Eintraegen; kein neues Dateisilo im MVP.
-- `ResponsiblePerson`: im MVP nur interner `User`; externe Beteiligte, Behoerdenkontakte und Sachverstaendige bleiben zunaechst als Hinweis- oder Freitextfelder am Item.
-- `DueDate`, `Priority`, `ItemStatus`, `Comment`, `Fachbereich / Sachverstaendiger / Pruefthema`: eigenstaendige fachliche Felder am Projekt-Checklistenpunkt.
-- Additive Schnittstellenaenderungen fuer eine spaetere Umsetzung:
-  - `Project` erhaelt fachlich `status`
-  - `Project` erhaelt `submissionBaseProfile`
-  - `Project` erhaelt `submissionModules`
-  - optional zusaetzlich ein abgeleitetes `submissionPreset` fuer UI und Reporting
-  - ergaenzend braucht es projektbezogene Status-/Checklisten-Endpunkte
-  - ergaenzend braucht es Web-API-Clients analog zu bestehenden Domaenenstores
+- C2 fuehrt danach eine einfache, generische Checklisten-Engine pro Projekt ein, noch ohne fachliche AWG- oder UVP-Templates.
+- C3 und C4 koppeln spaetere fachliche Vorlagen und Zusatzmodule an genau diesen einen Einreichtyp.
+
+## 1. Zielbild
+- Die Funktion wird als additive Erweiterung der bereits serverseitig persistierten Projekt-Domaene umgesetzt und ist keine neue Persistenzphase.
+- Ein Projekt soll fachlich ueber drei getrennte Konzepte verfuegen:
+  - `Project.status` fuer den Bearbeitungs- und Verfahrensstand
+  - `Project.submissionType` fuer den fachlichen Einreichkontext
+  - `isArchived` bzw. `archivedAt` fuer Sichtbarkeit und Lebenszyklus
+- `Project.status` beantwortet die Frage: In welcher Phase befindet sich das Projekt derzeit?
+- `Project.submissionType` beantwortet die Frage: Welche fachliche Einreichart gilt fuer dieses Projekt?
+- Archivierung beantwortet die Frage: Ist das Projekt aktiv sichtbar oder archiviert?
+- Diese Trennung ist notwendig, weil sich:
+  - der Status mehrfach aendern kann, ohne dass sich der fachliche Typ aendert
+  - der Einreichtyp fachlich stabil bleibt, auch wenn das Projekt von `DRAFT` zu `SUBMITTED` oder `APPROVED` wechselt
+  - Archivierung weder Prozessstatus noch Fachtyp ersetzt
+- C2 und spaetere Phasen bauen auf dieser Trennung auf, ohne sie zu vermischen.
+
+## 2. Nicht-Ziele
+- Kein Mehrfachprofil-System.
+- Kein Basisprofil plus Add-ons.
+- Keine Kombinationen wie `GEWERBE + AWG` oder `AWG + UVP_UVE`.
+- Keine Checklisten-Engine in C1b.
+- Keine Dokumentpflichtlogik in C1b.
+- Keine automatische Genehmigungs- oder Rechtslogik.
+- Keine Verantwortlichen-, Faelligkeits- oder Eskalationslogik in C1b.
+- Keine direkte Implementierung fachlicher AWG- oder UVP-Template-Inhalte in C1b.
+
+## 3. Fachliches Datenmodell
+- `ProjectStatus`
+  - bereits in C1a eingefuehrt
+  - beschreibt den fachlichen Fortschritt bzw. den Verfahrensstand
+  - bleibt unabhaengig vom Einreichtyp
+- `ProjectSubmissionType`
+  - neues fachliches Konzept fuer C1b
+  - genau ein Wert pro Projekt in Version 1
+  - zulaessige Werte:
+    - `GEWERBE`
+    - `AWG`
+    - `UVP_UVE`
+- `ProjectChecklist`
+  - kommt erst in C2
+  - ist eine projektbezogene generische Checkliste
+  - wird spaeter typkompatibel, aber nicht bereits in C1b vom Typ abgeleitet
+- Spaetere fachliche Vorlagen
+  - werden nicht mehr aus einer Mehrprofil-Kombination zusammengesteckt
+  - werden spaeter an genau einen Einreichtyp gekoppelt
+- Erweiterbarkeit
+  - weitere Einreichtypen koennen spaeter als zusaetzliche kontrollierte Werte ergaenzt werden
+  - dies ist ausdruecklich nicht Teil des MVP
 
 ## 4. Statusmodell
-- Empfohlene Statusliste:
-  - `ENTWURF`
-  - `INTERNE_PRUEFUNG`
-  - `EINREICHPHASE`
-  - `UVP_UVE_IN_AUSARBEITUNG`
-  - `BEI_BEHOERDE_EINGEREICHT`
-  - `ERGAENZUNGSAUFTRAG_OFFEN`
-  - `GENEHMIGT`
-  - `IN_UMSETZUNG`
-  - `ARCHIVIERT`
-- Checklisten aktiv:
-  - `INTERNE_PRUEFUNG`
-  - `EINREICHPHASE`
-  - `UVP_UVE_IN_AUSARBEITUNG`
-  - `ERGAENZUNGSAUFTRAG_OFFEN`
-- Checklisten nicht mehr als offene Pflichtliste aktiv:
-  - `BEI_BEHOERDE_EINGEREICHT`
-  - `GENEHMIGT`
-  - `IN_UMSETZUNG`
-  - `ARCHIVIERT`
-  - in diesen Status nur Read-only-Historie und Dokumentation
-- Rein informativ:
-  - `ENTWURF` als Default-Startstatus ohne aktive Pflichtbearbeitung
-- `UVP_UVE_IN_AUSARBEITUNG` ist nur fuer Projekte mit aktivem Modul `UVP_UVE` fachlich auswaehlbar.
-- Fuer reine `Gewerbe`- oder `Gewerbe + AWG`-Projekte bleibt `UVP_UVE_IN_AUSARBEITUNG` verborgen.
-- Statuswechsel funktionieren manuell durch Nutzer mit bestehenden Projekt-Bearbeitungsrechten; Admin hat Override, es gibt keine automatische Statusaenderung aufgrund von Checklistenfortschritt.
-- Empfohlene Standardpfade:
-  - `Gewerbe`:
-    `ENTWURF -> INTERNE_PRUEFUNG -> EINREICHPHASE -> BEI_BEHOERDE_EINGEREICHT -> ERGAENZUNGSAUFTRAG_OFFEN -> BEI_BEHOERDE_EINGEREICHT -> GENEHMIGT -> IN_UMSETZUNG -> ARCHIVIERT`
-  - `Gewerbe + AWG`:
-    gleicher Kernpfad, aber mit aktiven AWG-Modulen in `INTERNE_PRUEFUNG`, `EINREICHPHASE` und ggf. `ERGAENZUNGSAUFTRAG_OFFEN`
-  - `Gewerbe + AWG + UVP/UVE`:
-    `ENTWURF -> INTERNE_PRUEFUNG -> UVP_UVE_IN_AUSARBEITUNG -> BEI_BEHOERDE_EINGEREICHT -> ERGAENZUNGSAUFTRAG_OFFEN -> ...`
+- Das bestehende C1a-Statusmodell bleibt die alleinige fachliche Status-Quelle.
+- Status und Einreichtyp beeinflussen sich im MVP nicht automatisch.
+- Es gibt keine automatische Aktivierung von Statuspfaden aus dem Einreichtyp.
+- Es gibt keine automatische Einreichtyp-Ableitung aus Status, Dokumenten oder Projektnamen.
+- Status bleibt weiterhin fuer Listen, Header, Detailansichten und Prozesskommunikation der primaere Fortschrittsindikator.
 
-## 5. Template-Konzept
-- Es gibt keine Einheits-Checkliste fuer alle Projekte.
-- Die bisherige binare Sicht `STANDARD_AWG` vs. `UVP_UVE` wird ersetzt durch ein flexibles Modulmodell.
-- `Gewerbe` liefert die Basisthemen eines typischen genehmigungsnahen Einreichprojekts.
-- `AWG` erweitert die gewerbliche Basis um abfallrechtliche Zusatzthemen.
-- `UVP/UVE` erweitert die vorhandene Basis und vorhandene Zusatzmodule um formale UVP-Unterlagen, Verzeichnisse, Fachbeitraege und Gutachtenmodule.
-- Jedes Template-Item traegt fachliche Metadaten:
-  - Pflichtgrad
-  - Item-Typ
-  - relevante Phase
-  - Modulzugehoerigkeit
-  - Nachforderungsflag
-  - optionale Fachbereich- oder Pruefthema-Hinweise
-- Empfohlene Struktur:
-  - `Basisprofil`: bestimmt die Grundarchitektur des Projekts
-  - `Module`: aktivieren Zusatzbloecke
-  - `Preset`: dient nur als Benutzerhilfe im UI
-- Vorlagen werden versioniert und nach Veroeffentlichung als unveraenderlich behandelt.
-- Ein Projekt materialisiert beim Aktivieren eine feste Kopie der gewaehlten Template-Version und Modulzusammenstellung; spaetere Template-Aenderungen veraendern bestehende Projekte nicht rueckwirkend.
-- Ein Profil- oder Modulwechsel nach Aktivierung erfolgt nur explizit ueber Reset oder Neuinitialisierung, damit keine stillen Massenaenderungen an laufenden Projektchecklisten entstehen.
-- Weitere Vorlagetypen sollen spaeter ueber neue Modulpakete ergaenzt werden, nicht ueber neue technische Grundarchitektur.
+## 5. Beziehung zwischen Status, Einreichtyp und Archivierung
+- Status, Einreichtyp und Archivierung bleiben bewusst drei getrennte Konzepte.
+- Status ist dynamisch und prozessual.
+- Einreichtyp ist fachlich klassifizierend.
+- Archivierung ist technisch-organisatorisch und steuert Sichtbarkeit, nicht Fachlogik.
+- Beispiele:
+  - Ein `AWG`-Projekt kann nacheinander `DRAFT`, `SUBMISSION_PREPARATION`, `SUBMITTED` und `APPROVED` sein.
+  - Ein `GEWERBE`-Projekt kann archiviert werden, ohne seinen fachlichen Typ zu verlieren.
+  - Ein archiviertes `UVP_UVE`-Projekt bleibt fachlich `UVP_UVE`, aber ist nicht mehr Teil der aktiven Arbeitsliste.
 
-## 6. Vorschlag fuer erste Template-Struktur
+## 6. Template-Konzept
+- Die fruehere Idee einer Template-Komposition aus Basisprofil plus Add-ons wird verworfen.
+- Neues Zielmodell:
+  - genau ein Einreichtyp pro Projekt
+  - spaetere Vorlagen und Zusatzpakete werden 1:1 an diesen Typ gekoppelt
+- C2
+  - fuehrt nur die generische technische und fachliche Grundlage fuer projektbezogene Checklisten ein
+  - noch keine AWG- oder UVP-Fachvorlagen
+- C3
+  - fuehrt die erste kuratierte Standard-AWG-Vorlage ein
+  - gilt fuer Projekte mit `submissionType = AWG`
+- C4
+  - fuehrt UVP-/UVE-Zusatzmodule oder UVP-/UVE-spezifische Vorlagen ein
+  - gilt fuer Projekte mit `submissionType = UVP_UVE`
+- `GEWERBE`
+  - kann spaeter eine eigene Standardvorlage erhalten
+  - ist fuer C1b und C2 zunaechst nur ein fachlicher Typ, nicht schon eine materialisierte Vorlagenstruktur
 
-### 6A. Gewerbe-Basisprofil
+## 7. UI-/UX-Konzept
+- Der bestehende Projekt-Modal-Flow bleibt der primaere Pflegeort fuer Projektstatus und Einreichtyp.
+- Im Projektdetail wird der Einreichtyp additiv sichtbar, nahe beim Status oder im gleichen Meta-Bereich.
+- Es gibt keine neue Projektseite und keinen neuen Navigationspfad.
+- Die Projektliste kann spaeter ein kompaktes Badge oder einen Filter erhalten, ist aber nicht Kern des kleinsten MVP.
+- Legacy-Projekte ohne gesetzten Einreichtyp sollen klar als "nicht gesetzt" oder aequivalent erkennbar sein, statt implizit falsch klassifiziert zu werden.
 
-#### Projekt- und Verfahrensgrundlagen
-- Zweck: Verfahrensrahmen, Genehmigungsweg und Rollen klaeren.
-- Typische Punkte:
-  - Projektziel
-  - Verfahrensart
-  - Genehmigungstatbestand
-  - Behoerdenbezug
-  - Profil- und Modulkombination
-- Pflichtgrad: immer pruefen
-- Typ: Dokument, Fachpruefung, Abstimmung
-
-#### Standort / Grundstueck / Eigentum / Zustimmung
-- Zweck: Standortsicherheit und Verfuegbarkeiten absichern.
-- Typische Punkte:
-  - Grundstuecksdaten
-  - Eigentum
-  - Miet- oder Pachtlage
-  - Zustimmungen
-  - Grundbuchbezug
-- Pflichtgrad: haeufig pruefen
-- Typ: Dokument, Abstimmung
-
-#### Betriebsbeschreibung / Logistik / Personal / Verkehr
-- Zweck: Betriebsablauf verstaendlich und belastbar darstellen.
-- Typische Punkte:
-  - Betriebszeiten
-  - Logistik
-  - Materialfluss
-  - Personal
-  - Verkehrsaufkommen
-- Pflichtgrad: haeufig pruefen
-- Typ: Dokument, Fachpruefung
-
-#### Maschinen / Verfahren / Arbeitsmittel
-- Zweck: technische Ausruestung und Prozesslogik belegen.
-- Typische Punkte:
-  - Anlagenliste
-  - Leistungsdaten
-  - Datenblaetter
-  - Verfahrensbeschreibung
-  - Arbeitsmittel
-- Pflichtgrad: haeufig pruefen
-- Typ: Dokument, Fachpruefung
-
-#### Bau / Gebaeude / Infrastruktur
-- Zweck: bauliche und infrastrukturelle Voraussetzungen vollstaendig dokumentieren.
-- Typische Punkte:
-  - Hallen
-  - Lagerflaechen
-  - Gebaeude
-  - Medienanschluesse
-  - Erschliessung
-- Pflichtgrad: haeufig pruefen
-- Typ: Dokument, Abstimmung
-
-#### Wasser / Entwaesserung / Emissionen
-- Zweck: umweltrelevante Ausleitungen und Belastungen sauber abdecken.
-- Typische Punkte:
-  - Wasserbedarf
-  - Entwaesserung
-  - Abwasser
-  - Luft-, Geruch- und Laermpunkte
-  - Emissionen
-- Pflichtgrad: haeufig pruefen
-- Typ: Fachpruefung, Gutachten
-
-#### Brandschutz / Explosionsschutz / ArbeitnehmerInnenschutz
-- Zweck: Sicherheits- und Schutzkonzepte absichern.
-- Typische Punkte:
-  - Brandschutzkonzept
-  - Ex-Schutz
-  - ArbeitnehmerInnenschutz
-  - Notfallthemen
-- Pflichtgrad: haeufig bis fallabhaengig pruefen
-- Typ: Fachpruefung, Gutachten, Massnahmenpunkt
-
-#### Plaene / Einlagen / Anhaenge
-- Zweck: formale Vollstaendigkeit der Einreichunterlagen sichern.
-- Typische Punkte:
-  - Lageplaene
-  - Grundrisse
-  - Schnitte
-  - Verfahrensschemata
-  - Verzeichnisse
-  - Anhaenge
-- Pflichtgrad: immer pruefen
-- Typ: Dokument
-
-### 6B. AWG-Zusatzmodule
-
-#### AWG-/Abfall-Fachteil
-- Zweck: den abfallrechtlichen Kernfachteil strukturiert abbilden.
-- Typische Punkte:
-  - Abfallarten
-  - Stoffstroeme
-  - Mengenansaetze
-  - Annahmekriterien
-  - Entsorgungs- und Verwertungswege
-- Pflichtgrad: immer pruefen
-- Typ: Fachpruefung, Dokument
-
-#### Lagerung / Behandlung / Entsorgungswege
-- Zweck: die operative Abfalllogik, Zwischenlagerung und Behandlung nachvollziehbar dokumentieren.
-- Typische Punkte:
-  - Lagerkonzept
-  - Behandlungsablaeufe
-  - Zwischenlagerung
-  - Ausbringungs- oder Entsorgungswege
-  - Sicherheits- und Trennlogik
-- Pflichtgrad: immer bis haeufig pruefen
-- Typ: Fachpruefung, Dokument
-
-#### Abfallrechtliche Nachweise / Zustimmungen
-- Zweck: AWG-spezifische Nachweise, Abstimmungen und Spezialzustimmungen sichtbar machen.
-- Typische Punkte:
-  - Nachweislogik
-  - Vertragsanbindungen
-  - Spezialzustimmungen
-  - abfallrechtliche Abstimmungsthemen
-- Pflichtgrad: haeufig bis fallabhaengig pruefen
-- Typ: Dokument, Abstimmung
-
-### 6C. UVP-/UVE-Zusatzmodule
-
-#### Formale UVP-Unterlagen
-- Zweck: formale UVP-Verfahrensunterlagen komplett machen.
-- Typische Punkte:
-  - Antragsstruktur
-  - Verfahrensbezeichnungen
-  - formale Einreichsets
-  - Verfahrensbezuege
-- Pflichtgrad: immer pruefen
-- Typ: Dokument, Abstimmung
-
-#### Gesamteinlagenverzeichnis
-- Zweck: ein vollstaendiges, versionssicheres Gesamtverzeichnis aller Einlagen fuehren.
-- Typische Punkte:
-  - Register
-  - Version und Datum
-  - Zuordnung
-  - Vollstaendigkeitskontrolle
-- Pflichtgrad: immer pruefen
-- Typ: Dokument, Kontrolle
-
-#### Allgemein verstaendliche Zusammenfassung
-- Zweck: die nichttechnische Darstellung fuer Oeffentlichkeit und Verfahren sichern.
-- Typische Punkte:
-  - Projektbeschreibung
-  - wesentliche Wirkungen
-  - Massnahmen
-  - Kernaussagen
-- Pflichtgrad: immer pruefen
-- Typ: Dokument
-
-#### Synthesebericht
-- Zweck: Fachbeitraege zusammenfuehren und Abwaegungslinien sichtbar machen.
-- Typische Punkte:
-  - Gesamtbewertung
-  - Konflikte
-  - Wechselwirkungen
-  - Alternativen
-  - Restwirkungen
-- Pflichtgrad: immer pruefen
-- Typ: Fachpruefung, Gutachten
-
-#### Massnahmenplanung
-- Zweck: Vermeidungs-, Minderungs-, Ausgleichs- und Monitoringmassnahmen buendeln.
-- Typische Punkte:
-  - Massnahmenliste
-  - Verantwortungen
-  - Umsetzungslogik
-  - Nachverfolgung
-- Pflichtgrad: immer pruefen
-- Typ: Massnahmenpunkt, Abstimmung
-
-#### Wirkfaktorberichte
-- Zweck: auswirkungsbezogene Spezialgutachten abdecken.
-- Typische Punkte:
-  - Laerm
-  - Luft / Geruch
-  - Erschuetterungen
-- Pflichtgrad: fallabhaengig bis haeufig pruefen
-- Typ: Gutachten
-
-#### Schutzgueter-Fachbeitraege
-- Zweck: schutzgutbezogene Fachpruefung strukturieren.
-- Typische Punkte:
-  - Mensch / Humanmedizin
-  - Mensch / Siedlungsraum / Freizeit
-  - Biologische Vielfalt
-  - Wasser / Grundwasser / Altlasten
-  - Luft und Klima
-  - Flaeche und Boden
-  - Sachgueter / Stadtbild
-- Pflichtgrad: haeufig pruefen
-- Typ: Fachpruefung, Gutachten
-
-#### Zusaetzliche Fachthemen
-- Zweck: projektspezifische Zusatzthemen modular ergaenzen.
-- Typische Punkte:
-  - Verkehr
-  - Geotechnik
-  - Grundbuch / Zustimmung
-  - Baumschutz
-  - Bodenschutz
-  - Klima- und Energiekonzept
-  - Blendgutachten
-  - Bahn / Anschlussbahn
-- Pflichtgrad: fallabhaengig pruefen
-- Typ: Gutachten, Abstimmung
-
-## 7. Vorschlag fuer Checklistenpunkt-Felder
-- `title`
-- `description`
-- `sectionKey`
-- `sectionLabel`
-- `moduleKey`
-- `templateItemKey`
-- `templateVersion`
-- `itemType`: `DOCUMENT`, `FACHPRUEFUNG`, `ABSTIMMUNG`, `GUTACHTEN`, `MASSNAHME`
-- `priority`: `IMMER_PRUEFEN`, `HAEUFIG_PRUEFEN`, `FALLABHAENGIG_PRUEFEN`
-- `itemStatus`: empfohlen `OPEN`, `IN_PROGRESS`, `BLOCKED`, `DONE`, `NOT_APPLICABLE`
-- `responsibleUserId`
-- `responsibleDisplayName`
-- `dueDate`
-- `documentLinks`: Verknuepfungen zu bestehenden `Document.id` und optional zu bestehenden `LegalDocument.id`
-- `comment` bzw. `internalNote`
-- `disciplineKey`
-- `disciplineLabel`
-- `expertHint`
-- `authorityHint`
-- `reviewTopic`
-- `isRelevantInSubmissionPhase`
-- `requiresModuleAwg`
-- `requiresModuleUvpUve`
-- `isSupplementRequestItem`
-- `becomesHistoryAfterSubmission`
-- `updatedAt`
-- `updatedBy`
-- optional `completedAt`
-- optional `completedBy`
-
-## 8. UI-/UX-Konzept
-- Primaerer Einstiegspunkt ist das Projektdetail in `apps/web/src/pages/ProjectDetailPage.tsx`; dort kommt additiv ein Status-Badge im Header und ein neuer Tab `Einreichung & Checkliste` hinzu.
-- Das Projekterstellen und Projektbearbeiten nutzt weiterhin den bestehenden Modal-Flow; dort werden additiv `Projektstatus`, `Basisprofil` und eine einfache Modulauswahl oder ein Preset aufgenommen statt eine neue Seite einzufuehren.
-- Der neue Tab zeigt Sektionen gruppiert, mit Filtern fuer `offen`, `ueberfaellig`, `erledigt`, `nicht relevant`, plus Summen je Sektion und Modul.
-- Jedes Item zeigt:
-  - Titel
-  - Pflichtgrad
-  - Status
-  - Verantwortlich
-  - Faelligkeit
-  - Fachbereich oder Gutachterhinweis
-  - Dokumentlinks
-  - Kommentar
-- Die Projektliste in `apps/web/src/pages/ProjectsPage.tsx` erhaelt spaeter additiv Status-Badge, optionalen Statusfilter und eine kleine Zusammenfassung offener Checklistenpunkte.
-- Dokumentverknuepfungen nutzen den bestehenden serverseitigen Dokumentfluss ueber `apps/web/src/api/documents.ts` und bestehende `LegalDoc`-Bezuege; im MVP kein neuer Upload-Owner-Typ.
-- In passiven Status zeigt der Tab dieselben Inhalte read-only als Historie, nicht als aktive Pflichtliste.
-- Die Darstellung bleibt kompatibel mit dem bestehenden Mobile-Usability-Plan: kein neuer Navigationspfad, keine neue App, keine separate mobile Architektur.
-
-## 9. Migrations-/Einfuehrungsstrategie
-- Die Funktion ist eine additive Projekterweiterung, kein neuer Migrationsblock der alten Snapshot-zu-Postgres-Roadmap.
-- Einfuehrung per bestehendem Feature-Flag- oder Runtime-Config-Muster oder vergleichbarer kontrollierter Freischaltung.
-- Neue Projekte:
-  - Default `ENTWURF`
-  - Default `baseProfile = GEWERBE`
-  - Default `submissionModules = []`
-- Fuer einfache Bedienbarkeit koennen im UI kuratierte Startoptionen angeboten werden:
-  - `Gewerbe`
-  - `Gewerbe + AWG`
-  - spaeter `Gewerbe + AWG + UVP/UVE`
+## 8. Migrations- und Einfuehrungsstrategie
+- C1b ist keine neue Persistenzphase, sondern eine additive Projekterweiterung innerhalb der bestehenden serverseitigen Projektpersistenz.
 - Bestehende Projekte:
-  - `opt-in`
-  - sie bekommen hoechstens einen neutralen Default-Status
-  - keine aktive Checkliste ohne explizite Initialisierung
-- Checklisten werden erst bei Aktivierung materialisiert; dadurch bleiben historische Projekte ohne implizite Pflichtlisten stabil.
-- Pilotbetrieb:
-  - zuerst nur internes Kernteam
-  - dann ausgewaehlte neue Gewerbe- oder Gewerbe+AWG-Projekte
-  - danach gezielt AWG-Pilot
-  - UVP/UVE erst in einer zweiten fachlichen Welle
-- Keine automatische Massenmigration von Altprojekten in aktive Checklisten.
-- Keine automatische Task-Erzeugung im MVP.
+  - bleiben bevorzugt `submissionType = null`
+  - werden nicht automatisch einem Typ zugeordnet
+  - duerfen nicht aufgrund von Status, Dokumentenbestand oder alten Annahmen falsch umklassifiziert werden
+- Neue Projekte:
+  - sollen im UI den Einreichtyp aktiv waehlen
+  - sollen keinen stillen Default erhalten
+  - backend-seitig kann das Feld aus Kompatibilitaetsgruenden zunaechst nullable bleiben
+- Spaetere Rollout-Logik:
+  - zuerst rein additive Einfuehrung im Projektkontext
+  - danach generische Checklisten-Engine
+  - danach typspezifische Vorlagen
 
-## 10. Umsetzungsphasen
+## 9. Umsetzungsphasen
 
-### Phase C1: Projektstatus und Profilmodell einfuehren
-- Ziel: Status, Basisprofil und Module additiv auf Projektebene sichtbar und editierbar machen.
+### Phase C1a: Projektstatus
+- Bereits umgesetzt.
+- `Project.status` ist serverseitig persistiert und UI-seitig verankert.
+
+### Phase C1b: Einzelner Einreichtyp am Projekt
+- Ziel:
+  - genau einen fachlichen Einreichtyp pro Projekt einfuehren
+  - Status und Archivierung unveraendert daneben bestehen lassen
 - Betroffene Bereiche:
   - Projektmodell
   - Projekt-API
   - Projektmodal
-  - Projektliste
   - Projektdetail
+  - Import/Export/Admin
 - Risiken:
-  - Statusinflation
-  - unklare Begrifflichkeit zwischen Profil, Modul und Preset
+  - Verwechslung von Status und Einreichtyp
+  - zu fruehe Pflichtlogik im UI
 - Abnahmekriterien:
-  - neue Projekte starten mit Default-Status
-  - Profil oder Preset ist in Modal und Detail sichtbar
-  - bestehende Workflows bleiben unveraendert
+  - genau ein Typ pro Projekt
+  - keine Kombinationen
+  - Altprojekte bleiben ohne erzwungene Umklassifizierung nutzbar
 
-### Phase C2: einfache modulare Checklisten-Engine
-- Ziel: Template-Version, Projekt-Checkliste, Modulkomposition, Item-Status, Aktivierungslogik und Read-only-Historie einfuehren.
+### Phase C2: einfache generische Checklisten-Engine
+- Ziel:
+  - projektbezogene Checkliste mit Sektionen und Punkten
+  - noch ohne AWG-/UVP-Fachinhalte
 - Betroffene Bereiche:
-  - neue Projekt-Checklisten-Domaene
+  - Projekt-Checklisten-Domaene
   - API
-  - Web-Store
   - Projektdetail-Tab
 - Risiken:
-  - Template- oder Projektkopie driftet
-  - passive Status zeigen faelschlich offene Pflichtliste
+  - Checkliste wird zu frueh mit Fachlogik ueberladen
 - Abnahmekriterien:
-  - manuelle Aktivierung funktioniert
-  - aktive und passive Status schalten korrekt
-  - bestehende Projekte bleiben ohne Auto-Aktivierung unberuehrt
+  - Checkliste existiert pro Projekt optional
+  - Sektionen und Punkte sind einfach bearbeitbar
+  - keine automatische Ableitung aus dem Einreichtyp im MVP
 
-### Phase C3: Gewerbe-Basisvorlage
-- Ziel: praxistaugliche gewerbliche Basisvorlage ausrollen.
+### Phase C3: AWG-Standardvorlage
+- Ziel:
+  - erste kuratierte AWG-Checkliste oder AWG-Template-Schicht einfuehren
 - Betroffene Bereiche:
-  - kuratierte Template-Daten
-  - Projektdetail-Ansicht
+  - Template-Daten
+  - Projekt-Initialisierung aus `submissionType = AWG`
 - Risiken:
-  - zu generisch
-  - zu formal
-  - zu unkonkret
+  - zu fruehe Fachueberladung
 - Abnahmekriterien:
-  - ein Gewerbeprojekt kann mit der Vorlage sinnvoll vorbereitet werden
-  - Sektionen und Punkte sind fuer Projektteams handhabbar
+  - AWG-Projekte koennen mit einer standardisierten Vorlage initialisiert werden
 
-### Phase C4: AWG-Zusatzmodule
-- Ziel: AWG als Add-on zur gewerblichen Basis ausrollen.
+### Phase C4: UVP-/UVE-Zusatzmodule
+- Ziel:
+  - UVP-/UVE-spezifische Vorlagen oder Module einfuehren
 - Betroffene Bereiche:
-  - Template-Komposition
-  - Profilpreset `Gewerbe + AWG`
-  - Projektdetail
+  - Template-Logik
+  - Projekt-Initialisierung aus `submissionType = UVP_UVE`
 - Risiken:
-  - Duplikate zum Basistemplate
-  - AWG-Inhalte rutschen faelschlich in reine Gewerbeprojekte
+  - falsche Kopplung an AWG oder fruehere Mehrprofil-Logik
 - Abnahmekriterien:
-  - AWG-Projekte laden Basis plus AWG-Module
-  - reine Gewerbeprojekte bleiben frei von AWG-Last
+  - UVP-/UVE-Projekte erhalten gezielt ihre spaeteren Fachinhalte
 
-### Phase C5: UVP-/UVE-Zusatzmodule
-- Ziel: UVP/UVE als weiteres Erweiterungsprofil ergaenzen.
+### Phase C5: Verantwortliche, Faelligkeiten, Dokumentverknuepfung
+- Ziel:
+  - Checklistenpunkte spaeter um Team- und Dokumentbezug erweitern
 - Betroffene Bereiche:
-  - Template-Komposition
-  - Statuspfad
-  - Projektdetail
+  - User-Referenzen
+  - Dokumentverknuepfungen
+  - Item-Metadaten
 - Risiken:
-  - Ueberkomplexitaet
-  - unklare Abgrenzung zu AWG-Modulen
+  - zu breite fachliche Ausweitung
 - Abnahmekriterien:
-  - UVP-Projekte laden passende Zusatzmodule
-  - Gewerbe- und AWG-Projekte bleiben unveraendert
+  - Verantwortliche, Termine und Dokumentbezug funktionieren, ohne C1b oder C2 zu destabilisieren
 
-### Phase C6: Verantwortliche / Faelligkeiten / Dokumentverknuepfung
-- Ziel: Teamsteuerung je Punkt nutzbar machen.
-- Betroffene Bereiche:
-  - User-Selector
-  - Dokumentlinks zu bestehenden Dokumenten und LegalDocs
-  - Item-Details
-- Risiken:
-  - Dokumentreferenzen werden uneindeutig
-  - UI wird ueberfrachtet
-- Abnahmekriterien:
-  - interne Verantwortliche, Faelligkeit und Dokumentbezug pro Punkt funktionieren ohne neue Upload-Architektur
+## 10. Risiken und offene Fragen
+- Fachliches Risiko:
+  - reale Mischfaelle werden im MVP nicht abgebildet
+- UX-Risiko:
+  - wenn Status und Einreichtyp im UI zu aehnlich dargestellt werden, entsteht Interpretationsfehler
+- Datenmodell-Risiko:
+  - bestehende Mehrprofil-Annahmen in Code und Doku muessen spaeter konsistent entfernt werden
+- Migrationsrisiko:
+  - eine automatische Altklassifizierung waere fachlich riskant und ist zu vermeiden
+- Technisches Risiko:
+  - Import/Export/Admin muessen das neue skalare Feld konsistent fuehren
+- Offene Fragen:
+  - Soll der Einreichtyp fuer neue Projekte UI-seitig hart verpflichtend sein?
+  - Reicht in C1b Modal plus Detail oder soll die Projektliste bereits Badge/Filter erhalten?
+  - Welche exakte Legacy-Darstellung soll fuer `null` verwendet werden?
 
-### Phase C7: Reporting / Uebersicht / mobile Optimierung
-- Ziel: Uebersicht ueber offene und ueberfaellige Checklistenpunkte und mobile Nutzbarkeit absichern.
-- Betroffene Bereiche:
-  - Projektliste
-  - Projektdetail
-  - responsive Darstellung
-- Risiken:
-  - zusaetzliche UI-Komplexitaet
-  - Detailseiten-Regressions
-- Abnahmekriterien:
-  - Status- und Offenheitsuebersicht ist in Projektliste verstaendlich
-  - Projektdetail-Tab bleibt auf kleinen Screens nutzbar
-
-### Phase C8: Cleanup / Rollout
-- Ziel: Pilot, Feedback, Template-Haertung, Hilfetexte und Rolloutabsicherung abschliessen.
-- Betroffene Bereiche:
-  - Runtime-Flags
-  - Hilfe- und Dokumentation
-  - gegebenenfalls Audit- oder Recovery-Anschluss
-- Risiken:
-  - halbfertige Bestandsprojekte
-  - ungeklaerte Template-Verantwortung
-- Abnahmekriterien:
-  - Pilotteam kann die Funktion produktiv testen
-  - Rollout kann kontrolliert und reversibel aktiviert werden
-
-## 11. Risiken / offene Fragen
-- Fachliches Risiko: Die Checkliste kippt in eine ueberjuristische Vollstaendigkeitsmaschine statt in ein praxistaugliches Teamwerkzeug.
-- Datenmodell-Risiko: Zu fruehe Uebermodellierung macht die erste Version unnoetig schwer; zu grobe Modellierung erschwert spaetere Auswertungen.
-- UX-Risiko: Zu viele Pflichtchips, Status und Sektionen koennen das Projektdetail ueberladen.
-- Einfuehrungsrisiko: Historische Projekte koennten faelschlich als "unvollstaendig" erscheinen, wenn Aktivierung und Historienmodus nicht sauber getrennt sind.
-- Offene Abstimmung vor echter Umsetzung:
-  - Wer gibt fachlich Template-Versionen frei?
-  - Wie werden Ergaenzungsauftraege als Delta versus Reopen modelliert?
-  - Wird spaeter ein Admin-Template-Editor gewuenscht?
-  - Soll `UVP/UVE` fachlich immer auf `AWG` aufsetzen oder auch ohne AWG als Sonderfall moeglich sein?
-  - Welche Gewerbe-Basisbloecke sind wirklich standardmaessig aktiv und welche nur `fallabhaengig`?
-- Repo- und Fachreferenz-Hinweis:
-  - Die in der Anfrage erwaehnten Beispiel-Einreichunterlagen waren im Workspace nicht sichtbar.
-  - Vor Umsetzung sollten Template-Tiefe, Benennung und Pflichtgrad noch gegen reale Gewerbe-, AWG- und UVP-Beispiele gegengeprueft werden.
-- Festgelegte Defaults dieses Plans:
-  - Bestandsprojekte opt-in
-  - Verantwortliche im MVP nur interne User
-  - Checklisten im MVP getrennt vom bestehenden Task-System
-  - Statuswechsel manuell statt automatisch
-  - `Gewerbe` ist die Basis, `AWG` und `UVP/UVE` sind Zusatzmodule
-
-## 12. Empfehlung fuer MVP
-- Kleinste sinnvolle erste Version: `C1 + C2 + C3 + C4` mit minimalem Ausschnitt aus `C6`.
-- Unbedingt in Version 1:
-  - Projektstatus
-  - Basisprofil `Gewerbe`
-  - Modul `AWG`
-  - kuratierte Presets `Gewerbe` und `Gewerbe + AWG`
-  - Aktivierungslogik
-  - Sektionen
-  - Item-Status
-  - interner Verantwortlicher
-  - Faelligkeit
-  - Kommentar oder Hinweis
-  - Dokumentverknuepfung auf bestehende Dokumente
-  - Read-only-Historie in passiven Status
+## 11. MVP-Empfehlung
+- Kleinste sinnvolle C1b-Version:
+  - ein einzelnes Feld `submissionType` am Projekt
+  - Werte `GEWERBE`, `AWG`, `UVP_UVE`
+  - Pflege im bestehenden Projekt-Modal
+  - Anzeige im Projektdetail
+  - serverseitige Persistenz ueber die bestehende Projektarchitektur
+- Empfehlung fuer neue Projekte:
+  - aktive Auswahl im UI
+  - kein stiller Default
+- Empfehlung fuer Altprojekte:
+  - `null`/nicht gesetzt erlauben
+  - keine automatische Umklassifizierung
 - Bewusst spaeter:
-  - `UVP/UVE`
-  - automatische Task-Kopplung
-  - externer Verantwortlichen-Workflow
-  - freier Template-Editor im Admin
-  - komplexe Dashboards und Reports
-  - automatische Statusvorschlaege
-  - rechtliche Regelmaschinen
-- Empfehlung zu UVP im MVP:
-  - nein
-  - `UVP/UVE` sollte Welle 2 sein
-  - der Datenrahmen und das Profil muessen von Tag 1 vorbereitet werden
-  - die fachliche Aktivierung aber erst nach Stabilisierung von `Gewerbe` und `Gewerbe + AWG`
+  - Checklisten-Engine
+  - typspezifische Vorlagen
+  - Dokumentpflichtlogik
+  - Verantwortliche/Faelligkeiten
+  - Reports, Reminder oder Aufgabenableitungen aus Checklisten
 
-## 13. Test- und Abnahmeszenarien
-- Neues Gewerbeprojekt anlegen:
-  - Default `ENTWURF`
-  - Basisprofil `GEWERBE`
-  - noch keine aktive Pflichtliste bis zur Aktivierung oder bis zum Statuswechsel
-- Neues `Gewerbe + AWG`-Projekt anlegen:
-  - gleiche Basis
-  - zusaetzlich aktivierte AWG-Module nach Initialisierung
-- Statuswechsel auf `INTERNE_PRUEFUNG` oder `EINREICHPHASE`:
-  - die passende Checkliste materialisiert sich mit korrekter Template-Version und korrekter Modulzusammenstellung
-- Statuswechsel auf `BEI_BEHOERDE_EINGEREICHT`:
-  - gleiche Liste bleibt sichtbar, aber read-only und ohne offene Pflichtdarstellung
-- Ergaenzungsauftrag:
-  - Projekt wechselt auf `ERGAENZUNGSAUFTRAG_OFFEN`
-  - relevante Punkte werden wieder aktiv bearbeitbar
-- Dokumentbezug:
-  - Projekt- oder LegalDoc-Dokumente koennen mit einem Checklistenpunkt verknuepft werden, ohne neuen Uploadpfad
-- Bestandsprojekt:
-  - bleibt ohne aktive Checkliste, bis ein Benutzer die Funktion explizit initialisiert
-- Template-Versionierung:
-  - neue Template-Version wirkt nur auf neu initialisierte Projekte, nicht rueckwirkend auf bestehende Projektchecklisten
-- UVP-Welle 2:
-  - Profil `Gewerbe + AWG + UVP/UVE` laedt Basis plus Zusatzmodule
-  - Gewerbe- und AWG-Projekte bleiben unveraendert
-
-## 14. Erweiterungszusammenfassung
-- Erweiterte Kapitel:
-  - `1. Zielbild`
-  - `3. Fachliches Datenmodell`
-  - `5. Template-Konzept`
-  - `6. Vorschlag fuer erste Template-Struktur`
-  - `10. Umsetzungsphasen`
-  - `11. Risiken / offene Fragen`
-  - `12. Empfehlung fuer MVP`
-- Neues Profil-Modell:
-  - `Gewerbe` als Basisprofil
-  - `AWG` als Zusatzprofil auf gewerbeaehnlicher Basis
-  - `UVP/UVE` als zusaetzliches Erweiterungsprofil
-  - Mischfaelle werden ueber `Basisprofil + Module` abgebildet, nicht ueber eine starre binare Auswahl
-- Empfohlene MVP-Profile:
-  - `Gewerbe`
-  - `Gewerbe + AWG`
-  - `Gewerbe + AWG + UVP/UVE` erst Welle 2
-- Vor Implementierung noch fachlich zu klaeren:
-  - ob `UVP/UVE` fachlich immer auf `AWG` aufsetzt
-  - welche Basismodule fuer `Gewerbe` wirklich standardmaessig aktiv sein sollen
-  - wer Templates fachlich freigibt und pflegt
-  - wie Ergaenzungsauftraege modelliert werden
-  - wie die Modulstruktur gegen reale Referenzunterlagen gespiegelt wird
+## 12. Lokale Test- und Rollout-Hinweise fuer die spaetere Umsetzung
+- Lokale Pflichtchecks:
+  - `cd apps/api && npx prisma generate`
+  - `cd apps/api && npm run build`
+  - `cd apps/web && npm run build`
+- Manuelle Pflichtpruefungen:
+  - neues Projekt mit aktiv gewaehltem Einreichtyp anlegen
+  - Altprojekt ohne Einreichtyp laden
+  - Reload, Inkognito und Zweitsitzung pruefen
+  - Import/Export mit und ohne `submissionType` pruefen
+- Rollout-Grundsatz:
+  - additive Einfuehrung
+  - keine Destabilisierung bereits serverseitig migrierter Domaenen
+  - keine Rueckkehr zu Snapshot- oder Browser-Only-Persistenz
