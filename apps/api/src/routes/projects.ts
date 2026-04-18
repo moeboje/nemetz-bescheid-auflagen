@@ -1,11 +1,31 @@
 import { randomUUID } from "node:crypto";
-import { Prisma, type PrismaClient, type Project as DbProject } from "@prisma/client";
+import {
+  Prisma,
+  type PrismaClient,
+  type Project as DbProject
+} from "@prisma/client";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import {
   applyNoStoreHeaders,
   requireAdminRouteUser,
   requireInternalRouteUser
 } from "./routeAuth.js";
+
+const PROJECT_STATUS_VALUES = [
+  "DRAFT",
+  "INTERNAL_REVIEW",
+  "SUBMISSION_PREPARATION",
+  "UVP_PREPARATION",
+  "SUBMITTED",
+  "ADDITIONAL_INFORMATION_REQUEST",
+  "APPROVED",
+  "IN_IMPLEMENTATION"
+] as const;
+
+type ProjectStatus = (typeof PROJECT_STATUS_VALUES)[number];
+
+const DEFAULT_PROJECT_STATUS: ProjectStatus = "DRAFT";
+const INVALID_PROJECT_STATUS_MESSAGE = `Invalid project status. Allowed values: ${PROJECT_STATUS_VALUES.join(", ")}.`;
 
 type ProjectAttachmentDto = {
   id: string;
@@ -38,6 +58,7 @@ type ExternalParticipantDto = {
 type ProjectDto = {
   id: string;
   title: string;
+  status?: ProjectStatus;
   shortDescription?: string;
   authorityRef?: string;
   companyId: string;
@@ -81,6 +102,10 @@ type SanitizeProjectRelationsResult = {
 };
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
+type ProjectStatusRow = {
+  id: string;
+  status: string | null;
+};
 
 type ProjectRelationValidationResult =
   | {
@@ -118,6 +143,23 @@ function toOptionalTrimmedString(value: unknown) {
 
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function normalizeProjectStatus(value: unknown) {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (PROJECT_STATUS_VALUES.includes(trimmed as ProjectStatus)) {
+    return trimmed as ProjectStatus;
+  }
+
+  throw new Error(INVALID_PROJECT_STATUS_MESSAGE);
 }
 
 function toDateValue(value?: string) {
@@ -437,6 +479,7 @@ function normalizeProjectDto(value: unknown, index: number): ProjectDto | null {
     typeof row.createdAt === "string" && row.createdAt.trim() ? row.createdAt : nowStamp();
   const updatedAt =
     typeof row.updatedAt === "string" && row.updatedAt.trim() ? row.updatedAt : createdAt;
+  const status = normalizeProjectStatus(row.status);
 
   const participantUserIds = normalizeParticipantUserIds({
     internalParticipants: row.internalParticipants,
@@ -471,6 +514,7 @@ function normalizeProjectDto(value: unknown, index: number): ProjectDto | null {
   return {
     id: row.id,
     title: row.title,
+    status,
     shortDescription: row.shortDescription ?? "",
     authorityRef: row.authorityRef ?? "",
     companyId: row.companyId,
@@ -508,7 +552,7 @@ function normalizeProjectsSnapshot(value: unknown): ProjectDto[] {
   return sanitizeProjectRelations(normalized).projects;
 }
 
-function toProjectDto(project: DbProject): ProjectDto {
+function toProjectDto(project: DbProject, status?: ProjectStatus): ProjectDto {
   const participantUserIds = normalizeParticipantUserIds({
     participantUserIds: project.participantUserIds,
     internalParticipants: project.internalParticipants
@@ -542,6 +586,7 @@ function toProjectDto(project: DbProject): ProjectDto {
   return {
     id: project.id,
     title: project.title,
+    status,
     shortDescription: project.shortDescription ?? "",
     authorityRef: project.authorityRef ?? "",
     companyId: project.companyId,
@@ -614,12 +659,51 @@ function toProjectUpdateInput(project: ProjectDto): Prisma.ProjectUncheckedUpdat
   };
 }
 
+async function readProjectStatusMap(db: DbClient, projectIds: string[]) {
+  if (projectIds.length === 0) {
+    return new Map<string, ProjectStatus | undefined>();
+  }
+
+  const rows = await db.$queryRaw<ProjectStatusRow[]>(
+    Prisma.sql`SELECT "id", "status"::text AS "status" FROM "Project" WHERE "id" IN (${Prisma.join(projectIds)})`
+  );
+
+  const statusByProjectId = new Map<string, ProjectStatus | undefined>();
+  rows.forEach((row) => {
+    statusByProjectId.set(row.id, normalizeProjectStatus(row.status));
+  });
+
+  return statusByProjectId;
+}
+
+async function readProjectStatus(db: DbClient, projectId: string) {
+  const statusByProjectId = await readProjectStatusMap(db, [projectId]);
+  return statusByProjectId.get(projectId);
+}
+
+async function updateProjectStatus(
+  db: DbClient,
+  projectId: string,
+  status?: ProjectStatus
+) {
+  await db.$executeRaw(
+    Prisma.sql`UPDATE "Project" SET "status" = ${status ?? null}::"ProjectStatus" WHERE "id" = ${projectId}`
+  );
+}
+
 async function listProjectsSnapshot(db: DbClient): Promise<ProjectDto[]> {
   const projects = await db.project.findMany({
     orderBy: [{ createdAt: "desc" }, { id: "desc" }]
   });
 
-  return sanitizeProjectRelations(projects.map((project) => toProjectDto(project))).projects;
+  const statusByProjectId = await readProjectStatusMap(
+    db,
+    projects.map((project) => project.id)
+  );
+
+  return sanitizeProjectRelations(
+    projects.map((project) => toProjectDto(project, statusByProjectId.get(project.id)))
+  ).projects;
 }
 
 async function findProjectById(db: DbClient, id: string) {
@@ -628,6 +712,16 @@ async function findProjectById(db: DbClient, id: string) {
       id
     }
   });
+}
+
+async function findProjectSnapshotById(db: DbClient, id: string) {
+  const project = await findProjectById(db, id);
+  if (!project) {
+    return null;
+  }
+
+  const status = await readProjectStatus(db, id);
+  return toProjectDto(project, status);
 }
 
 async function listProjectIds(db: DbClient) {
@@ -695,6 +789,7 @@ async function replaceProjectsSnapshot(prisma: PrismaClient, snapshot: ProjectDt
         create: toProjectCreateInput(project),
         update: toProjectUpdateInput(project)
       });
+      await updateProjectStatus(tx, project.id, project.status);
     }
   });
 }
@@ -959,6 +1054,7 @@ async function normalizeProjectForWrite(
     ok: true as const,
     project: {
       ...input,
+      status: input.status,
       companyId: relationValidation.companyId,
       siteId: relationValidation.siteId,
       facilityId: relationValidation.facilityId,
@@ -997,6 +1093,10 @@ export function createProjectsRouter(prisma: PrismaClient) {
 
       res.json(await listProjectsSnapshot(prisma));
     } catch (error) {
+      if (error instanceof Error && error.message === INVALID_PROJECT_STATUS_MESSAGE) {
+        res.status(400).json({ ok: false, message: error.message });
+        return;
+      }
       next(error);
     }
   });
@@ -1010,7 +1110,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
         return;
       }
 
-      const project = await findProjectById(prisma, req.params.id);
+      const project = await findProjectSnapshotById(prisma, req.params.id);
       if (!project) {
         res.status(404).json({ ok: false, message: "Project not found." });
         return;
@@ -1018,9 +1118,13 @@ export function createProjectsRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        project: toProjectDto(project)
+        project
       });
     } catch (error) {
+      if (error instanceof Error && error.message === INVALID_PROJECT_STATUS_MESSAGE) {
+        res.status(400).json({ ok: false, message: error.message });
+        return;
+      }
       next(error);
     }
   });
@@ -1038,6 +1142,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
       const projectId = requestedId ?? createServerId("p");
       const title = ensureStringField(req.body?.title);
       const companyId = ensureStringField(req.body?.companyId);
+      const status = normalizeProjectStatus(req.body?.status) ?? DEFAULT_PROJECT_STATUS;
 
       if (!title || !companyId) {
         res.status(400).json({ ok: false, message: "title and companyId are required." });
@@ -1050,6 +1155,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
         {
           id: projectId,
           title,
+          status,
           shortDescription: ensureStringField(req.body?.shortDescription),
           authorityRef: ensureStringField(req.body?.authorityRef),
           companyId,
@@ -1103,15 +1209,23 @@ export function createProjectsRouter(prisma: PrismaClient) {
         return;
       }
 
-      const project = await prisma.project.create({
-        data: toProjectCreateInput(normalized.project)
+      const project = await prisma.$transaction(async (tx) => {
+        const created = await tx.project.create({
+          data: toProjectCreateInput(normalized.project)
+        });
+        await updateProjectStatus(tx, created.id, normalized.project.status);
+        return created;
       });
 
       res.status(201).json({
         ok: true,
-        project: toProjectDto(project)
+        project: toProjectDto(project, normalized.project.status)
       });
     } catch (error) {
+      if (error instanceof Error && error.message === INVALID_PROJECT_STATUS_MESSAGE) {
+        res.status(400).json({ ok: false, message: error.message });
+        return;
+      }
       next(error);
     }
   });
@@ -1125,13 +1239,11 @@ export function createProjectsRouter(prisma: PrismaClient) {
         return;
       }
 
-      const existingRecord = await findProjectById(prisma, req.params.id);
-      if (!existingRecord) {
+      const existing = await findProjectSnapshotById(prisma, req.params.id);
+      if (!existing) {
         res.status(404).json({ ok: false, message: "Project not found." });
         return;
       }
-
-      const existing = toProjectDto(existingRecord);
       const participantUserIds = hasOwn(req.body, "internalParticipants") || hasOwn(req.body, "participantUserIds")
         ? normalizeParticipantUserIds({
             internalParticipants: req.body?.internalParticipants,
@@ -1142,6 +1254,9 @@ export function createProjectsRouter(prisma: PrismaClient) {
       const merged: ProjectDto = {
         ...existing,
         title: hasOwn(req.body, "title") ? ensureStringField(req.body?.title) : existing.title,
+        status: hasOwn(req.body, "status")
+          ? normalizeProjectStatus(req.body?.status)
+          : existing.status,
         shortDescription: hasOwn(req.body, "shortDescription")
           ? ensureStringField(req.body?.shortDescription)
           : existing.shortDescription ?? "",
@@ -1220,18 +1335,26 @@ export function createProjectsRouter(prisma: PrismaClient) {
         return;
       }
 
-      const updated = await prisma.project.update({
-        where: {
-          id: existing.id
-        },
-        data: toProjectUpdateInput(normalized.project)
+      const updated = await prisma.$transaction(async (tx) => {
+        const nextProject = await tx.project.update({
+          where: {
+            id: existing.id
+          },
+          data: toProjectUpdateInput(normalized.project)
+        });
+        await updateProjectStatus(tx, existing.id, normalized.project.status);
+        return nextProject;
       });
 
       res.json({
         ok: true,
-        project: toProjectDto(updated)
+        project: toProjectDto(updated, normalized.project.status)
       });
     } catch (error) {
+      if (error instanceof Error && error.message === INVALID_PROJECT_STATUS_MESSAGE) {
+        res.status(400).json({ ok: false, message: error.message });
+        return;
+      }
       next(error);
     }
   });
@@ -1250,6 +1373,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
         res.status(404).json({ ok: false, message: "Project not found." });
         return;
       }
+      const status = await readProjectStatus(prisma, existing.id);
 
       const updated = existing.isArchived
         ? existing
@@ -1265,7 +1389,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        project: toProjectDto(updated)
+        project: toProjectDto(updated, status)
       });
     } catch (error) {
       next(error);
@@ -1286,6 +1410,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
         res.status(404).json({ ok: false, message: "Project not found." });
         return;
       }
+      const status = await readProjectStatus(prisma, existing.id);
 
       const updated = !existing.isArchived && !existing.archivedAt
         ? existing
@@ -1301,7 +1426,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        project: toProjectDto(updated)
+        project: toProjectDto(updated, status)
       });
     } catch (error) {
       next(error);
@@ -1317,7 +1442,16 @@ export function createProjectsRouter(prisma: PrismaClient) {
         return;
       }
 
-      const snapshot = normalizeProjectsSnapshot(req.body);
+      let snapshot: ProjectDto[];
+      try {
+        snapshot = normalizeProjectsSnapshot(req.body);
+      } catch (error) {
+        if (error instanceof Error && error.message === INVALID_PROJECT_STATUS_MESSAGE) {
+          res.status(400).json({ ok: false, message: error.message });
+          return;
+        }
+        throw error;
+      }
       const normalizedProjects: ProjectDto[] = [];
 
       for (const project of snapshot) {
@@ -1384,7 +1518,16 @@ export function createProjectsRouter(prisma: PrismaClient) {
         return;
       }
 
-      const snapshot = await readProjectsSnapshotFromPortal(prisma);
+      let snapshot: ProjectDto[] | null;
+      try {
+        snapshot = await readProjectsSnapshotFromPortal(prisma);
+      } catch (error) {
+        if (error instanceof Error && error.message === INVALID_PROJECT_STATUS_MESSAGE) {
+          res.status(400).json({ ok: false, message: error.message });
+          return;
+        }
+        throw error;
+      }
       if (!snapshot) {
         res.status(404).json({ ok: false, message: "Snapshot projects not found." });
         return;

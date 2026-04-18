@@ -26,6 +26,7 @@ import {
   validateProjectDependencyCandidate,
   type ProjectDependencyValidationResult
 } from "./projectRelations";
+import { normalizeProjectStatus } from "../projectStatus";
 
 type ProjectCreateInput = Omit<
   Project,
@@ -210,6 +211,7 @@ function normalizeProject(value: Partial<Project>, index: number): Project | nul
   return {
     id: value.id,
     title: value.title,
+    status: normalizeProjectStatus(value.status),
     shortDescription: value.shortDescription ?? "",
     authorityRef: value.authorityRef ?? "",
     companyId: value.companyId,

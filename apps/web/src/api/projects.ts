@@ -4,6 +4,7 @@ import type { Project } from "../data/projects";
 type ProjectInput = {
   id?: string;
   title: string;
+  status?: Project["status"];
   shortDescription?: string;
   authorityRef?: string;
   companyId: string;

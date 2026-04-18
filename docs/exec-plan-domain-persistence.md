@@ -212,6 +212,89 @@
 - Bestehende Listen, Selektoren und Referenzen auf `contact.name` bleiben stabil; alte Datensätze mit nur `name` bleiben gültig und editierbar.
 - Quelle der Wahrheit bleibt unverändert API + PostgreSQL; es gibt keine Rückkehr zu `localStorage` oder Snapshot für diese Domäne.
 
+## 2i. Stabilisierungslauf 2026-04-17 zu den aktuellen Review-Blockern
+- Dies ist keine neue Persistenzphase.
+- Ziel dieses Laufs ist ausschließlich die Behebung der drei aktuellen Rollout-Blocker aus dem Review.
+- Zulässiger Umfang:
+- lokale/testnahe Startpfade, Compose und API-Defaults auf PostgreSQL harmonisieren; keine SQLite- oder `file:`-Fallbacks als implizite Standardpfade belassen.
+- den API-Container gegen leere PostgreSQL-Datenbanken wieder selbst bootstrap-fähig machen, mit dem bestehenden Repo-Übergangsworkflow `prisma generate` + `prisma db push` + idempotentem Seed; kein blindes Erzwingen von `prisma migrate deploy`.
+- Scope-/Authority-Bulk-Replace- und Bulk-Delete-Pfade sowie den Admin-Import so absichern, dass partielle Imports bei bereits vorhandenen abhängigen Projekten/Downstream-Daten sauber blockiert werden statt FK-Fehler oder stille Löschungen auszulösen.
+- Nicht-Ziele dieses Laufs:
+- keine neue Domain-Migration beginnen.
+- keine zusätzliche Snapshot-Bereinigung außerhalb dieser drei Blocker.
+- keine UX-Neugestaltung, keine neuen Dependencies, keine Rückkehr zu Browser- oder Snapshot-Persistenz für bereits migrierte Domänen.
+
+## 2j. Pre-Go-Live Admin-Ausbau 2026-04-17 fuer Behoerden
+- Dies ist keine neue Persistenzphase.
+- Ziel dieses Laufs ist ausschließlich ein klarer, sichtbarer Admin-Einstieg fuer die bereits serverseitig persistierte Domäne `authorities`.
+- Verifizierter Ist-Stand vor Umsetzung:
+- `Authority` und `AuthorityContact` sind bereits in PostgreSQL + API + `AuthoritiesStore` serverseitig verdrahtet.
+- `AuthorityContact` enthaelt bereits `name`, `firstName`, `lastName`, `roleTitle`, `department`, `email`, `phone`, `mobile`, `notes` und `isPrimary`.
+- `name` bleibt im API-Shape und Frontend erhalten und wird in Route + Store bereits kompatibel aus `firstName`/`lastName` abgeleitet, wenn diese gepflegt sind.
+- Zulässiger Umfang:
+- Admin-Subnavigation um einen Tab `Behoerden` ergaenzen, direkt neben `Externe Firmen`.
+- dedizierte Admin-Seite fuer Behoerden + Ansprechpartner anlegen, ohne zweite Hauptnavigation fuer Ansprechpartner.
+- bestehende API-/Store-/Auth-Strukturen wiederverwenden; keine Rueckkehr zu `localStorage` oder Snapshot.
+- Nicht-Ziele:
+- kein neuer Persistenzlayer, kein neuer Store, kein Routing- oder UI-Redesign ausserhalb des Admin-Bereichs.
+- keine Aenderungen an Projekten, Rechtsdokumenten oder anderen Domänen ausser minimaler Rueckwaertskompatibilitaetswahrung.
+
+## 2k. Stabilisierungslauf 2026-04-18 vor dem Live-Rollout
+- Dies ist keine neue Persistenz- oder Mobile-Phase.
+- Ziel dieses Laufs ist ausschließlich die Behebung von zwei aktuellen Review-Befunden:
+- `apps/api/src/bootstrap.ts` gegen parallele Container-Starts auf leerer PostgreSQL-DB idempotent und race-sicher machen, ohne bestehende mutable Admin-/User-Daten zu überschreiben.
+- Scope-Bulk-Replace und Scope-Bulk-Delete in `apps/api/src/routes/scopes.ts` nur noch bei echten Scope-Abhängigkeiten blockieren, nicht wegen isolierter `Deadline`- oder `TaskStateEntry`-Reste.
+- Zulässiger Umfang:
+- minimale Anpassungen in Bootstrap, Container-Startskript und Scope-Blockerlogik.
+- keine neue Bootstrap-Architektur, keine neuen Dependencies, keine neuen Persistenzpfade.
+- Mobile-Welle-1-Änderungen bleiben unangetastet; dieser Lauf darf dort keine Regression einführen.
+- Nicht-Ziele:
+- keine neue Domain-Migration beginnen.
+- keine weitere Snapshot-Bereinigung außerhalb dieser beiden Review-Punkte.
+- keine UX-Änderungen, keine zusätzlichen Admin- oder Import-Features.
+
+## 2l. Obligation-Intervallfix 2026-04-18 vor dem Live-Rollout
+- Dies ist keine neue Persistenzphase.
+- Ziel dieses Laufs ist ausschließlich ein kleiner fachlicher/UI-Fix für die bereits serverseitig migrierte Domäne `obligations`.
+- Verifizierter Ist-Stand vor Umsetzung:
+- `intervalUnit` ist in PostgreSQL bereits als freies `String?` modelliert; die technische Einschränkung liegt aktuell in API-Normalisierung, Frontend-Typen, Modal-Auswahl, Detailanzeige und der obligation-basierten Task-Ableitung.
+- In der UI für `Auflage erstellen` / `Auflage bearbeiten` sind aktuell nur `MONTH` und `YEAR` auswählbar.
+- Zulässiger Umfang:
+- erlaubte Intervall-Einheiten additiv auf `DAY`, `WEEK`, `MONTH`, `QUARTER`, `YEAR` erweitern.
+- bestehende Semantik für `MONTH` und `YEAR` unverändert beibehalten.
+- obligation-basierte Termin-/Task-Ableitung additiv für `DAY`, `WEEK` und `QUARTER` erweitern.
+- minimale Label-Ergänzungen für `Tag`, `Woche` und `Quartal`.
+- Nicht-Ziele:
+- keine Änderung an `scheduleType`.
+- keine neue Persistenz- oder Snapshot-Logik.
+- keine Änderungen an `deadlines`, Auth, Permissions, Admin-Import/Reset oder anderer Fach-UX außerhalb der betroffenen Auflagenfelder und Anzeigen.
+
+## 2m. Review-Fixlauf 2026-04-18 vor dem Live-Rollout
+- Dies ist keine neue Persistenzphase.
+- Ziel dieses Laufs ist ausschließlich die Behebung der aktuellen Review-Findings ohne UX-Neugestaltung.
+- Zulässiger Umfang:
+- die Legacy-Admin-Werkzeuge in `AdminPage` wieder erreichbar machen, ohne die neuen Admin-Unterseiten für Benutzer, Rollen, Externe Firmen und Behörden zurückzubauen.
+- UI-Vorabblocker für Scope-Importe von Authority-/Downstream-Blockern trennen und exakt an die bestehenden API-Regeln angleichen.
+- Container-Startup auf migrations-first umstellen und für bereits ad hoc synchronisierte Umgebungen einen sauberen Baseline-/History-Pfad herstellen, damit künftige `prisma migrate deploy`-Rollouts nicht an fehlender `_prisma_migrations`-Historie scheitern.
+- Nicht-Ziele:
+- keine Änderung an Fach-Workflows außerhalb von Admin-Routing, Admin-Importvalidierung und API-Startup.
+- keine neue Domain-Migration, keine neuen Dependencies, keine Umgestaltung der Admin-UX.
+
+## 2n. Facherweiterung 2026-04-18 Phase C1a Projektstatus
+- Dies ist keine neue Persistenzphase.
+- Ziel dieses Laufs ist ausschließlich die additive Einführung eines fachlichen Projektstatus auf der bereits serverseitig persistierten Domäne `projects`.
+- Verbindliche Produktregel:
+- `isArchived` und `archivedAt` bleiben unverändert die einzige Archivierungslogik.
+- `Archiviert` wird nicht als Projektstatus eingeführt.
+- Zulässiger Umfang:
+- `Project` in Prisma, API, Store, Import/Export und bestehender Projekt-UI minimal-invasiv um ein fachliches Statusfeld erweitern.
+- erlaubte Statuswerte in C1a: `DRAFT`, `INTERNAL_REVIEW`, `SUBMISSION_PREPARATION`, `UVP_PREPARATION`, `SUBMITTED`, `ADDITIONAL_INFORMATION_REQUEST`, `APPROVED`, `IN_IMPLEMENTATION`.
+- Legacy-Bestände ohne Status bleiben fachlich neutral und werden als "nicht gesetzt" behandelt; neue Projekte erhalten `DRAFT`.
+- Projektliste, Projektdetail und Projekt-Modal zeigen den Status; optionale Status-Filter sind nur zulässig, wenn sie ohne UX-Umbau additiv bleiben.
+- Import/Export, Demo- und Reset-Flows für Projekte bleiben kompatibel und führen das Feld mit.
+- Nicht-Ziele:
+- keine Checklisten-Engine, keine Profil-/Modul-Logik, keine UVP-Speziallogik, keine Dokumentpflichtlogik, keine Aufgaben-/Fristen-Automatik, keine neue API-Architektur.
+
 ## 3. Ist-Zustand
 - Browser-persistiert fachlich aktiv ist aktuell nur noch `taskState`; zusätzliche UI-/Recovery-Daten liegen weiterhin via `apps/web/src/state/persistence.ts` lokal.
 - `ScopesStore`, `AuthoritiesStore`, `ProjectsStore`, `LegalDocsStore`, `ObligationsStore` und `DeadlinesStore` sind bereits API-backed und löschen ihre alten Domänen-Storage-Keys aktiv.
@@ -570,3 +653,23 @@
 - Berechtigungen sollen fachlich gleich bleiben. Die API spiegelt die heutigen UI-Aktionen statt neue Rollenlogik einzuführen.
 - Safe Mode und Demo-/Seed-Daten bleiben als Entwicklungs-/Recovery-Werkzeuge erhalten, aber nicht als reguläre Persistenzquelle für migrierte Domänen.
 - Falls die bestehende API-Test-Harness wegen SQLite/PostgreSQL-Mismatch nicht tragfähig ist, wird sie in Phase 1 vor den eigentlichen Domänen-Tests auf lokale PostgreSQL-Nutzung umgestellt.
+
+## 11. Runtime-Fixlauf 2026-04-18 fuer lokalen Portalstart
+- Dies ist keine neue Persistenzphase, keine neue Mobile-Phase und kein neues Feature.
+- Ziel dieses Laufs ist ausschliesslich die minimal-invasive Behebung eines aktuellen Frontend-Laufzeitfehlers, durch den das Portal lokal in die ErrorBoundary faellt.
+- Verifizierter Ist-Zustand vor Umsetzung:
+- Das Portal startet lokal nicht stabil; mindestens `/compliance/projects` faellt im Browser in die ErrorBoundary.
+- In der juengeren Vergangenheit gab es Aenderungen an `apps/web/src/App.tsx`, Admin-Routen, `packages/ui/src/components/AppShell.tsx`, `packages/ui/src/components/DataTable.tsx`, `packages/ui/src/components/Modal.tsx` sowie an globalen responsiven Styles.
+- Bereits migrierte serverseitige Domänen duerfen durch diesen Lauf weder fachlich noch in ihrer Source-of-Truth-Regel destabilisiert werden.
+- Zulaessiger Umfang:
+- echte Runtime-Reproduktion lokal gegen laufende API/Web-App.
+- gezielte Analyse von `App.tsx`, `ProjectsPage`, `ProjectModal`, `DataTable`, `AppShell`, `Modal`, `app.css` sowie direkt beteiligten Stores/Hooks.
+- minimaler Fix genau der absturzverursachenden Stelle, einschliesslich kleiner Anschlusskorrekturen nur soweit noetig, damit das Portal wieder normal laedt.
+- Nicht-Ziele:
+- keine neue Persistenzarbeit, kein Snapshot- oder localStorage-Rueckfall fuer migrierte Domänen.
+- keine neue Mobile-Welle, keine UX-Neugestaltung, keine neuen Dependencies.
+- keine dauerhaften Debug-Logs oder sonstiger Cleanup ausserhalb des benoetigten Fixbereichs.
+- Pflicht-Verifikation:
+- `cd apps/web && npm run build`
+- falls der Fix API-bezogen anschlaegt zusaetzlich `cd apps/api && npm run build`
+- manueller lokaler Browser-Smoke fuer `/compliance/dashboard`, `/compliance/projects`, `/compliance/legal-docs`, `/compliance/tasks`, `/compliance/deadlines` und `/admin` oder `/compliance/admin`.

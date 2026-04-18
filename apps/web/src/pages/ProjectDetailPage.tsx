@@ -31,6 +31,10 @@ import { useScopes } from "../state/ScopesStore";
 import { useUsers } from "../state/UsersStore";
 import UserMultiSelect from "../components/UserMultiSelect";
 import UserSelect from "../components/UserSelect";
+import {
+  getProjectStatusBadgeVariant,
+  getProjectStatusLabel
+} from "../projectStatus";
 
 function getExternalTypeLabel(type: ExternalParticipant["type"]) {
   if (type === "LAWYER") {
@@ -377,6 +381,9 @@ export default function ProjectDetailPage() {
           />
           <h1 className="pageTitle">{project.title}</h1>
           <div className="inlineMeta">
+            <Badge variant={getProjectStatusBadgeVariant(project.status)}>
+              {getProjectStatusLabel(project.status)}
+            </Badge>
             <span>{scopeLabel}</span>
             <span>{authorityName || t("common.notAvailable")}</span>
             <span>{contactName || t("common.notAvailable")}</span>
@@ -458,6 +465,14 @@ export default function ProjectDetailPage() {
         <>
           <Card>
             <div className="detailGrid">
+              <div>
+                <div className="metaLabel">{t("projects.detail.status")}</div>
+                <div className="metaValue">
+                  <Badge variant={getProjectStatusBadgeVariant(project.status)}>
+                    {getProjectStatusLabel(project.status)}
+                  </Badge>
+                </div>
+              </div>
               <div>
                 <div className="metaLabel">{t("projects.detail.shortDescription")}</div>
                 <div className="metaValue">{project.shortDescription || t("common.notAvailable")}</div>

@@ -12,9 +12,13 @@ import type { Project } from "../data/projects";
 import UserSelect from "./UserSelect";
 import UserMultiSelect from "./UserMultiSelect";
 import ScopeInlineCreateModal, { ScopeInlineCreateMode } from "./ScopeInlineCreateModal";
+import { getProjectStatusOptions } from "../projectStatus";
+
+type ProjectFormStatus = Project["status"] | "";
 
 const emptyForm = {
   title: "",
+  status: "DRAFT" as ProjectFormStatus,
   shortDescription: "",
   companyId: "",
   siteId: "",
@@ -89,6 +93,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     if (project) {
       setForm({
         title: project.title,
+        status: project.status ?? "",
         shortDescription: project.shortDescription ?? "",
         companyId: project.companyId,
         siteId: project.siteId ?? "",
@@ -231,6 +236,10 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     ? ProjectPolicy.update(actor, project)
     : ProjectPolicy.create(actor);
   const isSaveDisabled = !canSave || !form.title.trim() || !form.companyId;
+  const statusOptions = useMemo(
+    () => getProjectStatusOptions({ includeUnset: Boolean(project && !project.status) }),
+    [project]
+  );
   const projectById = useMemo(
     () => new Map(projects.map((item) => [item.id, item] as const)),
     [projects]
@@ -422,6 +431,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     if (project) {
       saveSucceeded = await updateProject(project.id, {
         title: form.title,
+        status: form.status || undefined,
         shortDescription: form.shortDescription,
         companyId: form.companyId,
         siteId: form.siteId || undefined,
@@ -440,6 +450,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     } else {
       saveSucceeded = await addProject({
         title: form.title,
+        status: form.status || undefined,
         shortDescription: form.shortDescription,
         companyId: form.companyId,
         siteId: form.siteId || undefined,
@@ -518,6 +529,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
       open={open}
       onClose={onClose}
       closeAriaLabel={t("modal.close")}
+      mobileFullscreen
       header={project ? t("projects.modal.editTitle") : t("projects.modal.title")}
       footer={
         <div className="modalFooter">
@@ -538,6 +550,19 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
             value={form.title}
             onChange={(event) =>
               setForm((prev) => ({ ...prev, title: event.target.value }))
+            }
+          />
+        </div>
+        <div className="formField">
+          <span className="fieldLabel">{t("projects.form.status")}</span>
+          <Select
+            options={statusOptions}
+            value={form.status}
+            onChange={(event) =>
+              setForm((prev) => ({
+                ...prev,
+                status: event.target.value as ProjectFormStatus
+              }))
             }
           />
         </div>

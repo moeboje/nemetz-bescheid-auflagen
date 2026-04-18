@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  Badge,
   Breadcrumbs,
   Button,
   Card,
@@ -22,6 +23,12 @@ import { useTasks } from "../state/TasksStore";
 import { useAuthorization } from "../state/AuthorizationStore";
 import { ProjectPolicy } from "../policies/ProjectPolicy";
 import ProjectModal from "../components/ProjectModal";
+import {
+  PROJECT_STATUS_FILTER_UNSET,
+  getProjectStatusBadgeVariant,
+  getProjectStatusLabel,
+  getProjectStatusOptions
+} from "../projectStatus";
 
 export default function ProjectsPage() {
   const navigate = useNavigate();
@@ -40,6 +47,7 @@ export default function ProjectsPage() {
     siteId: "",
     facilityId: "",
     authorityId: "",
+    status: "",
     showArchived: false
   });
 
@@ -98,6 +106,17 @@ export default function ProjectsPage() {
         .map((authority) => ({ value: authority.id, label: authority.name })),
     [authorities]
   );
+  const statusOptions = useMemo(
+    () => [
+      { value: "", label: t("projects.filters.status") },
+      {
+        value: PROJECT_STATUS_FILTER_UNSET,
+        label: getProjectStatusLabel()
+      },
+      ...getProjectStatusOptions()
+    ],
+    []
+  );
 
   const filteredProjects = useMemo(() => {
     return projects.filter((project) => {
@@ -118,7 +137,20 @@ export default function ProjectsPage() {
       const matchesAuthority = filters.authorityId
         ? project.authorityId === filters.authorityId
         : true;
-      return matchesSearch && matchesCompany && matchesSite && matchesFacility && matchesAuthority;
+      const matchesStatus =
+        filters.status === ""
+          ? true
+          : filters.status === PROJECT_STATUS_FILTER_UNSET
+          ? !project.status
+          : project.status === filters.status;
+      return (
+        matchesSearch &&
+        matchesCompany &&
+        matchesSite &&
+        matchesFacility &&
+        matchesAuthority &&
+        matchesStatus
+      );
     });
   }, [actor, filters, projects]);
 
@@ -133,6 +165,15 @@ export default function ProjectsPage() {
       header: t("projects.table.scope"),
       render: (project: (typeof projects)[number]) =>
         getScopeLabel(project.companyId, project.siteId, project.facilityId)
+    },
+    {
+      key: "status",
+      header: t("projects.table.status"),
+      render: (project: (typeof projects)[number]) => (
+        <Badge variant={getProjectStatusBadgeVariant(project.status)}>
+          {getProjectStatusLabel(project.status)}
+        </Badge>
+      )
     },
     {
       key: "authority",
@@ -217,7 +258,7 @@ export default function ProjectsPage() {
       ) : null}
 
       <Card>
-        <div className="filterRowFive">
+        <div className="filterRowSix">
           <Input
             placeholder={t("projects.filters.search")}
             value={filters.search}
@@ -263,6 +304,13 @@ export default function ProjectsPage() {
             value={filters.authorityId}
             onChange={(event) =>
               setFilters((prev) => ({ ...prev, authorityId: event.target.value }))
+            }
+          />
+          <Select
+            options={statusOptions}
+            value={filters.status}
+            onChange={(event) =>
+              setFilters((prev) => ({ ...prev, status: event.target.value }))
             }
           />
         </div>

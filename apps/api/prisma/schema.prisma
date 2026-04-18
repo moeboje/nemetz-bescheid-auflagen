@@ -7,6 +7,17 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum ProjectStatus {
+  DRAFT
+  INTERNAL_REVIEW
+  SUBMISSION_PREPARATION
+  UVP_PREPARATION
+  SUBMITTED
+  ADDITIONAL_INFORMATION_REQUEST
+  APPROVED
+  IN_IMPLEMENTATION
+}
+
 model User {
   id                       String                @id @default(cuid())
   firstName                String
@@ -231,6 +242,7 @@ model AuthorityContact {
 model Project {
   id                   String            @id
   title                String
+  status               ProjectStatus?
   shortDescription     String?
   authorityRef         String?
   companyId            String

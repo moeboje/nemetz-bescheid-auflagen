@@ -1,4 +1,5 @@
 import { getRuntimeConfigSnapshot } from "../../config/runtimeConfig";
+import { PROJECT_STATUS_VALUES } from "../../data/projects";
 import { STORAGE_VERSION } from "../persistence";
 import type { ExportDataBundle, ExportPayload } from "./types";
 
@@ -249,6 +250,34 @@ function validateUsers(
   });
 }
 
+function validateProjects(
+  value: unknown,
+  errors: ImportValidationMessage[]
+) {
+  if (!hasValue(value)) {
+    return;
+  }
+
+  const rows = ensureArray(value, "data.projects", errors);
+  validateArrayIds(rows, "data.projects", errors);
+
+  rows.forEach((row, index) => {
+    const path = `data.projects[${index}]`;
+    const object = ensureRecord(row, path, errors);
+    if (!object) {
+      return;
+    }
+
+    if (
+      hasValue(object.status) &&
+      (!isNonEmptyString(object.status) ||
+        !PROJECT_STATUS_VALUES.includes(object.status as (typeof PROJECT_STATUS_VALUES)[number]))
+    ) {
+      pushMessage(errors, "import.validation.invalidObject", `${path}.status`);
+    }
+  });
+}
+
 function validateTaskState(
   value: unknown,
   errors: ImportValidationMessage[],
@@ -372,7 +401,7 @@ export function validateImport(value: unknown): ImportValidationResult {
   validateAuthoritiesSnapshot(data.authorities, errors);
 
   validateUsers(data.users, errors);
-  validateOptionalArray(data.projects, "data.projects", errors);
+  validateProjects(data.projects, errors);
   validateOptionalArray(data.legalDocs, "data.legalDocs", errors);
   validateOptionalArray(data.obligations, "data.obligations", errors);
   validateOptionalArray(data.deadlines, "data.deadlines", errors);

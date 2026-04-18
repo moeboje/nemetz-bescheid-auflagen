@@ -1,5 +1,18 @@
 import type { Attachment, ExternalParticipantType } from "../types/models";
 
+export const PROJECT_STATUS_VALUES = [
+  "DRAFT",
+  "INTERNAL_REVIEW",
+  "SUBMISSION_PREPARATION",
+  "UVP_PREPARATION",
+  "SUBMITTED",
+  "ADDITIONAL_INFORMATION_REQUEST",
+  "APPROVED",
+  "IN_IMPLEMENTATION"
+] as const;
+
+export type ProjectStatus = (typeof PROJECT_STATUS_VALUES)[number];
+
 export type ProjectAttachment = Attachment;
 
 export type ProjectInternalParticipant = {
@@ -24,6 +37,7 @@ export type ExternalParticipant = {
 export type Project = {
   id: string;
   title: string;
+  status?: ProjectStatus;
   shortDescription?: string;
   authorityRef?: string;
   companyId: string;
