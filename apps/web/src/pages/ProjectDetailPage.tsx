@@ -35,6 +35,7 @@ import {
   getProjectStatusBadgeVariant,
   getProjectStatusLabel
 } from "../projectStatus";
+import { buildProjectSubmissionProfiles } from "../projectSubmissionProfiles";
 
 function getExternalTypeLabel(type: ExternalParticipant["type"]) {
   if (type === "LAWYER") {
@@ -217,6 +218,14 @@ export default function ProjectDetailPage() {
       return false;
     });
   }, [entries, project, projectDeadlines, projectDocs, projectObligations]);
+  const submissionProfiles = useMemo(
+    () =>
+      buildProjectSubmissionProfiles(
+        project?.submissionProfileKeys ?? [],
+        project?.submissionProfiles
+      ),
+    [project?.submissionProfileKeys, project?.submissionProfiles]
+  );
 
   if (!project) {
     return (
@@ -384,6 +393,14 @@ export default function ProjectDetailPage() {
             <Badge variant={getProjectStatusBadgeVariant(project.status)}>
               {getProjectStatusLabel(project.status)}
             </Badge>
+            {submissionProfiles.map((profile) => (
+              <Badge
+                key={profile.key}
+                variant={profile.profileType === "BASE" ? "neutral" : "warning"}
+              >
+                {profile.label}
+              </Badge>
+            ))}
             <span>{scopeLabel}</span>
             <span>{authorityName || t("common.notAvailable")}</span>
             <span>{contactName || t("common.notAvailable")}</span>
@@ -471,6 +488,25 @@ export default function ProjectDetailPage() {
                   <Badge variant={getProjectStatusBadgeVariant(project.status)}>
                     {getProjectStatusLabel(project.status)}
                   </Badge>
+                </div>
+              </div>
+              <div>
+                <div className="metaLabel">{t("projects.detail.submissionProfiles")}</div>
+                <div className="metaValue">
+                  {submissionProfiles.length ? (
+                    <span className="inlineMeta">
+                      {submissionProfiles.map((profile) => (
+                        <Badge
+                          key={profile.key}
+                          variant={profile.profileType === "BASE" ? "neutral" : "warning"}
+                        >
+                          {profile.label}
+                        </Badge>
+                      ))}
+                    </span>
+                  ) : (
+                    t("projects.submissionProfiles.unset")
+                  )}
                 </div>
               </div>
               <div>

@@ -18,6 +18,11 @@ enum ProjectStatus {
   IN_IMPLEMENTATION
 }
 
+enum SubmissionProfileType {
+  BASE
+  ADDON
+}
+
 model User {
   id                       String                @id @default(cuid())
   firstName                String
@@ -265,6 +270,7 @@ model Project {
   company              Company           @relation(fields: [companyId], references: [id])
   legalDocuments       LegalDocument[]
   deadlines            Deadline[]
+  submissionProfileAssignments ProjectSubmissionProfileAssignment[]
   site                 Site?             @relation(fields: [siteId], references: [id])
   facility             Facility?         @relation(fields: [facilityId], references: [id])
   authority            Authority?        @relation(fields: [authorityId], references: [id])
@@ -280,6 +286,32 @@ model Project {
   @@index([ownerUserId])
   @@index([deputyUserId])
   @@index([isArchived])
+}
+
+model SubmissionProfile {
+  key                String                           @id
+  label              String
+  profileType        SubmissionProfileType
+  isActive           Boolean                          @default(true)
+  sortOrder          Int                              @default(0)
+  createdAt          DateTime                         @default(now())
+  updatedAt          DateTime                         @updatedAt
+  projectAssignments ProjectSubmissionProfileAssignment[]
+
+  @@index([isActive])
+  @@index([profileType, sortOrder])
+}
+
+model ProjectSubmissionProfileAssignment {
+  projectId   String
+  profileKey  String
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  profile     SubmissionProfile @relation(fields: [profileKey], references: [key], onDelete: Restrict)
+
+  @@id([projectId, profileKey])
+  @@index([profileKey])
 }
 
 model LegalDocument {

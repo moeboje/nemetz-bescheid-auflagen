@@ -1,5 +1,5 @@
 import { getRuntimeConfigSnapshot } from "../../config/runtimeConfig";
-import { PROJECT_STATUS_VALUES } from "../../data/projects";
+import { PROJECT_STATUS_VALUES, SUBMISSION_PROFILE_KEYS } from "../../data/projects";
 import { STORAGE_VERSION } from "../persistence";
 import type { ExportDataBundle, ExportPayload } from "./types";
 
@@ -274,6 +274,20 @@ function validateProjects(
         !PROJECT_STATUS_VALUES.includes(object.status as (typeof PROJECT_STATUS_VALUES)[number]))
     ) {
       pushMessage(errors, "import.validation.invalidObject", `${path}.status`);
+    }
+
+    if (hasValue(object.submissionProfileKeys)) {
+      if (!Array.isArray(object.submissionProfileKeys)) {
+        pushMessage(errors, "import.validation.invalidArray", `${path}.submissionProfileKeys`);
+      } else if (
+        object.submissionProfileKeys.some(
+          (key) =>
+            !isNonEmptyString(key) ||
+            !SUBMISSION_PROFILE_KEYS.includes(key as (typeof SUBMISSION_PROFILE_KEYS)[number])
+        )
+      ) {
+        pushMessage(errors, "import.validation.invalidObject", `${path}.submissionProfileKeys`);
+      }
     }
   });
 }

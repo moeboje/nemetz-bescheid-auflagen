@@ -13,12 +13,21 @@ import UserSelect from "./UserSelect";
 import UserMultiSelect from "./UserMultiSelect";
 import ScopeInlineCreateModal, { ScopeInlineCreateMode } from "./ScopeInlineCreateModal";
 import { getProjectStatusOptions } from "../projectStatus";
+import {
+  DEFAULT_PROJECT_SUBMISSION_PROFILE_KEY,
+  getProjectSubmissionAddonOptions,
+  getProjectSubmissionBaseOptions,
+  splitSubmissionProfileKeys
+} from "../projectSubmissionProfiles";
 
 type ProjectFormStatus = Project["status"] | "";
+type ProjectFormBaseSubmissionProfile = Project["submissionProfileKeys"][number] | "";
 
 const emptyForm = {
   title: "",
   status: "DRAFT" as ProjectFormStatus,
+  baseSubmissionProfileKey: DEFAULT_PROJECT_SUBMISSION_PROFILE_KEY as ProjectFormBaseSubmissionProfile,
+  addonProfileKeys: [] as Project["submissionProfileKeys"],
   shortDescription: "",
   companyId: "",
   siteId: "",
@@ -94,6 +103,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
       setForm({
         title: project.title,
         status: project.status ?? "",
+        ...splitSubmissionProfileKeys(project.submissionProfileKeys),
         shortDescription: project.shortDescription ?? "",
         companyId: project.companyId,
         siteId: project.siteId ?? "",
@@ -240,6 +250,14 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     () => getProjectStatusOptions({ includeUnset: Boolean(project && !project.status) }),
     [project]
   );
+  const submissionBaseOptions = useMemo(
+    () =>
+      getProjectSubmissionBaseOptions({
+        includeUnset: Boolean(project && project.submissionProfileKeys.length === 0)
+      }),
+    [project]
+  );
+  const submissionAddonOptions = useMemo(() => getProjectSubmissionAddonOptions(), []);
   const projectById = useMemo(
     () => new Map(projects.map((item) => [item.id, item] as const)),
     [projects]
@@ -426,12 +444,16 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     }
 
     const internalParticipants = form.participantUserIds.map((userId) => ({ userId }));
+    const submissionProfileKeys = form.baseSubmissionProfileKey
+      ? [form.baseSubmissionProfileKey, ...form.addonProfileKeys]
+      : [];
     let saveSucceeded = false;
 
     if (project) {
       saveSucceeded = await updateProject(project.id, {
         title: form.title,
         status: form.status || undefined,
+        submissionProfileKeys,
         shortDescription: form.shortDescription,
         companyId: form.companyId,
         siteId: form.siteId || undefined,
@@ -451,6 +473,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
       saveSucceeded = await addProject({
         title: form.title,
         status: form.status || undefined,
+        submissionProfileKeys,
         shortDescription: form.shortDescription,
         companyId: form.companyId,
         siteId: form.siteId || undefined,
@@ -565,6 +588,55 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
               }))
             }
           />
+        </div>
+        <div className="formField">
+          <span className="fieldLabel">{t("projects.form.baseSubmissionProfile")}</span>
+          <Select
+            options={submissionBaseOptions}
+            value={form.baseSubmissionProfileKey}
+            onChange={(event) =>
+              setForm((prev) => ({
+                ...prev,
+                baseSubmissionProfileKey: event.target.value as ProjectFormBaseSubmissionProfile,
+                addonProfileKeys: event.target.value ? prev.addonProfileKeys : []
+              }))
+            }
+          />
+        </div>
+        <div className="formField">
+          <span className="fieldLabel">{t("projects.form.additionalSubmissionProfiles")}</span>
+          <div className="checkboxGroup">
+            {submissionAddonOptions.map((option) => {
+              const checked = form.addonProfileKeys.includes(
+                option.value as Project["submissionProfileKeys"][number]
+              );
+
+              return (
+                <label key={option.value} className="checkboxRow">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={!form.baseSubmissionProfileKey}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        addonProfileKeys: event.target.checked
+                          ? [
+                              ...prev.addonProfileKeys,
+                              option.value as Project["submissionProfileKeys"][number]
+                            ]
+                          : prev.addonProfileKeys.filter((key) => key !== option.value)
+                      }))
+                    }
+                  />
+                  <span>{option.label}</span>
+                </label>
+              );
+            })}
+          </div>
+          {!form.baseSubmissionProfileKey ? (
+            <span className="placeholderText">{t("projects.form.additionalSubmissionProfilesHint")}</span>
+          ) : null}
         </div>
         <div className="formField">
           <span className="fieldLabel">{t("projects.form.shortDescription")}</span>

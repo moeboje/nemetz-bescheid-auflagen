@@ -27,6 +27,11 @@ import {
   type ProjectDependencyValidationResult
 } from "./projectRelations";
 import { normalizeProjectStatus } from "../projectStatus";
+import {
+  buildProjectSubmissionProfiles,
+  normalizeSubmissionProfileKeys,
+  resolveSubmissionProfileKeysFromUnknown
+} from "../projectSubmissionProfiles";
 
 type ProjectCreateInput = Omit<
   Project,
@@ -39,6 +44,8 @@ type ProjectCreateInput = Omit<
   | "internalParticipants"
   | "dependsOnProjectIds"
   | "referenceLegalDocIds"
+  | "submissionProfileKeys"
+  | "submissionProfiles"
   | "isArchived"
   | "archivedAt"
 > & {
@@ -48,6 +55,7 @@ type ProjectCreateInput = Omit<
   participantUserIds?: string[];
   dependsOnProjectIds?: string[];
   referenceLegalDocIds?: string[];
+  submissionProfileKeys?: Project["submissionProfileKeys"];
 };
 
 export type ProjectsContextValue = {
@@ -207,11 +215,17 @@ function normalizeProject(value: Partial<Project>, index: number): Project | nul
         )
         .filter((participant): participant is ExternalParticipant => Boolean(participant))
     : [];
+  const submissionProfileKeys = resolveSubmissionProfileKeysFromUnknown({
+    submissionProfileKeys: value.submissionProfileKeys,
+    submissionProfiles: value.submissionProfiles
+  });
 
   return {
     id: value.id,
     title: value.title,
     status: normalizeProjectStatus(value.status),
+    submissionProfileKeys,
+    submissionProfiles: buildProjectSubmissionProfiles(submissionProfileKeys, value.submissionProfiles),
     shortDescription: value.shortDescription ?? "",
     authorityRef: value.authorityRef ?? "",
     companyId: value.companyId,
@@ -300,10 +314,15 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
           dependencyIds: input.dependsOnProjectIds ?? []
         }).dependencyIds;
         const referenceLegalDocIds = normalizeRelationIds(input.referenceLegalDocIds);
+        const submissionProfileKeys =
+          input.submissionProfileKeys !== undefined
+            ? normalizeSubmissionProfileKeys(input.submissionProfileKeys)
+            : undefined;
 
         const createdProject = normalizeProjects([
           await apiCreateProject({
             ...input,
+            submissionProfileKeys,
             shortDescription: input.shortDescription ?? "",
             authorityRef: input.authorityRef ?? "",
             internalParticipants,
@@ -378,10 +397,15 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
           input.referenceLegalDocIds !== undefined
             ? normalizeRelationIds(input.referenceLegalDocIds)
             : currentProject.referenceLegalDocIds;
+        const nextSubmissionProfileKeys =
+          input.submissionProfileKeys !== undefined
+            ? normalizeSubmissionProfileKeys(input.submissionProfileKeys)
+            : currentProject.submissionProfileKeys;
 
         const updatedProject = normalizeProjects([
           await apiUpdateProject(id, {
             ...input,
+            submissionProfileKeys: nextSubmissionProfileKeys,
             shortDescription:
               input.shortDescription !== undefined
                 ? input.shortDescription

@@ -13,6 +13,19 @@ export const PROJECT_STATUS_VALUES = [
 
 export type ProjectStatus = (typeof PROJECT_STATUS_VALUES)[number];
 
+export const SUBMISSION_PROFILE_KEYS = ["GEWERBE", "AWG", "UVP_UVE"] as const;
+export type SubmissionProfileKey = (typeof SUBMISSION_PROFILE_KEYS)[number];
+
+export const SUBMISSION_PROFILE_TYPE_VALUES = ["BASE", "ADDON"] as const;
+export type SubmissionProfileType = (typeof SUBMISSION_PROFILE_TYPE_VALUES)[number];
+
+export type ProjectSubmissionProfile = {
+  key: SubmissionProfileKey;
+  label: string;
+  profileType: SubmissionProfileType;
+  isActive: boolean;
+};
+
 export type ProjectAttachment = Attachment;
 
 export type ProjectInternalParticipant = {
@@ -38,6 +51,8 @@ export type Project = {
   id: string;
   title: string;
   status?: ProjectStatus;
+  submissionProfileKeys: SubmissionProfileKey[];
+  submissionProfiles: ProjectSubmissionProfile[];
   shortDescription?: string;
   authorityRef?: string;
   companyId: string;

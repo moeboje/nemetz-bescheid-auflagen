@@ -5,6 +5,7 @@ type ProjectInput = {
   id?: string;
   title: string;
   status?: Project["status"];
+  submissionProfileKeys?: Project["submissionProfileKeys"];
   shortDescription?: string;
   authorityRef?: string;
   companyId: string;
