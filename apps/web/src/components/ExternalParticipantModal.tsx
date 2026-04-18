@@ -72,6 +72,7 @@ export default function ExternalParticipantModal({
       open={open}
       onClose={onClose}
       closeAriaLabel={t("modal.close")}
+      mobileFullscreen
       header={participant ? t("projects.external.edit") : t("projects.external.add")}
       footer={
         <div className="modalFooter">

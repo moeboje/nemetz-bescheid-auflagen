@@ -14,6 +14,7 @@ import { t } from "../i18n";
 import { EyeIcon } from "../components/Icons";
 import HelpHintCard from "../components/HelpHintCard";
 import { useRuntimeConfig } from "../config/runtimeConfig";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
 import { useAuthorities } from "../state/AuthoritiesStore";
@@ -29,6 +30,12 @@ import {
   getProjectStatusLabel,
   getProjectStatusOptions
 } from "../projectStatus";
+import {
+  PROJECT_SUBMISSION_TYPE_FILTER_UNSET,
+  getProjectSubmissionTypeBadgeVariant,
+  getProjectSubmissionTypeLabel,
+  getProjectSubmissionTypeOptions
+} from "../projectSubmissionType";
 
 export default function ProjectsPage() {
   const navigate = useNavigate();
@@ -48,6 +55,7 @@ export default function ProjectsPage() {
     facilityId: "",
     authorityId: "",
     status: "",
+    submissionType: "",
     showArchived: false
   });
 
@@ -117,6 +125,17 @@ export default function ProjectsPage() {
     ],
     []
   );
+  const submissionTypeOptions = useMemo(
+    () => [
+      { value: "", label: t("projects.filters.submissionType") },
+      {
+        value: PROJECT_SUBMISSION_TYPE_FILTER_UNSET,
+        label: getProjectSubmissionTypeLabel()
+      },
+      ...getProjectSubmissionTypeOptions()
+    ],
+    []
+  );
 
   const filteredProjects = useMemo(() => {
     return projects.filter((project) => {
@@ -143,13 +162,20 @@ export default function ProjectsPage() {
           : filters.status === PROJECT_STATUS_FILTER_UNSET
           ? !project.status
           : project.status === filters.status;
+      const matchesSubmissionType =
+        filters.submissionType === ""
+          ? true
+          : filters.submissionType === PROJECT_SUBMISSION_TYPE_FILTER_UNSET
+          ? !project.submissionType
+          : project.submissionType === filters.submissionType;
       return (
         matchesSearch &&
         matchesCompany &&
         matchesSite &&
         matchesFacility &&
         matchesAuthority &&
-        matchesStatus
+        matchesStatus &&
+        matchesSubmissionType
       );
     });
   }, [actor, filters, projects]);
@@ -172,6 +198,15 @@ export default function ProjectsPage() {
       render: (project: (typeof projects)[number]) => (
         <Badge variant={getProjectStatusBadgeVariant(project.status)}>
           {getProjectStatusLabel(project.status)}
+        </Badge>
+      )
+    },
+    {
+      key: "submissionType",
+      header: t("projects.table.submissionType"),
+      render: (project: (typeof projects)[number]) => (
+        <Badge variant={getProjectSubmissionTypeBadgeVariant(project.submissionType)}>
+          {getProjectSubmissionTypeLabel(project.submissionType)}
         </Badge>
       )
     },
@@ -253,12 +288,12 @@ export default function ProjectsPage() {
             "helpHints.projects.bullets.2",
             "helpHints.projects.bullets.3"
           ]}
-          link={{ labelKey: "common.openHelp", to: "/help#workflows" }}
+          link={{ labelKey: "common.openHelp", to: getHelpHref(HELP_CONTEXT_SLUGS.projectsList) }}
         />
       ) : null}
 
       <Card>
-        <div className="filterRowSix">
+        <div className="filterRowSeven">
           <Input
             placeholder={t("projects.filters.search")}
             value={filters.search}
@@ -311,6 +346,13 @@ export default function ProjectsPage() {
             value={filters.status}
             onChange={(event) =>
               setFilters((prev) => ({ ...prev, status: event.target.value }))
+            }
+          />
+          <Select
+            options={submissionTypeOptions}
+            value={filters.submissionType}
+            onChange={(event) =>
+              setFilters((prev) => ({ ...prev, submissionType: event.target.value }))
             }
           />
         </div>

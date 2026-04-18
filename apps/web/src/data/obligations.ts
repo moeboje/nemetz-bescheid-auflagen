@@ -22,7 +22,7 @@ export type Obligation = {
   level: "MANDATORY" | "RECOMMENDED";
   scheduleType: "ONCE" | "RECURRING" | "ONCE_THEN_RECURRING";
   firstDueDate?: string;
-  intervalUnit?: "MONTH" | "YEAR";
+  intervalUnit?: "DAY" | "WEEK" | "MONTH" | "QUARTER" | "YEAR";
   intervalValue?: number;
   ownerUserId?: string;
   deputyUserId?: string;

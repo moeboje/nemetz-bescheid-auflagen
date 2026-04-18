@@ -103,6 +103,9 @@ export default function ResetPasswordPage() {
             <Link to="/login" className="authLink">
               {t("auth.backToLogin")}
             </Link>
+            <Link to="/help/auth#security-login-password-mfa" className="authLink">
+              Hilfe zu Passwort & MFA
+            </Link>
           </div>
         </form>
       </Card>

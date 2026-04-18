@@ -3,9 +3,9 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { t } from "../i18n";
 
 type AdminSubnavItem = {
-  key: "users" | "roles" | "externalOrgs";
+  key: "users" | "roles" | "externalOrgs" | "authorities";
   path: string;
-  labelKey: "admin.nav.users" | "admin.nav.roles" | "admin.nav.externalOrgs";
+  labelKey: "admin.nav.users" | "admin.nav.roles" | "admin.nav.externalOrgs" | "admin.nav.authorities";
 };
 
 const ITEMS: AdminSubnavItem[] = [
@@ -23,6 +23,11 @@ const ITEMS: AdminSubnavItem[] = [
     key: "externalOrgs",
     path: "/admin/external-orgs",
     labelKey: "admin.nav.externalOrgs"
+  },
+  {
+    key: "authorities",
+    path: "/admin/authorities",
+    labelKey: "admin.nav.authorities"
   }
 ];
 
@@ -36,6 +41,9 @@ function getActiveKey(pathname: string): AdminSubnavItem["key"] {
   }
   if (pathname.includes("/admin/external-orgs")) {
     return "externalOrgs";
+  }
+  if (pathname.includes("/admin/authorities")) {
+    return "authorities";
   }
   return "users";
 }

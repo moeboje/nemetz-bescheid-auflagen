@@ -4,6 +4,7 @@ import { listAuthorities } from "../../api/authorities";
 import { listDeadlines } from "../../api/deadlines";
 import { listLegalDocs } from "../../api/legalDocs";
 import { listObligations } from "../../api/obligations";
+import { listProjectChecklists } from "../../api/projectChecklists";
 import { listProjects } from "../../api/projects";
 import { listScopes } from "../../api/scopes";
 import { listTaskState } from "../../api/taskState";
@@ -21,6 +22,7 @@ type ServerDomainReaderResult = {
   deadlines: Awaited<ReturnType<typeof readDeadlinesForExport>>;
   legalDocs: Awaited<ReturnType<typeof readLegalDocsForExport>>;
   obligations: Awaited<ReturnType<typeof readObligationsForExport>>;
+  projectChecklists: Awaited<ReturnType<typeof readProjectChecklistsForExport>>;
   projects: Awaited<ReturnType<typeof readProjectsForExport>>;
   scopes: Awaited<ReturnType<typeof readScopesForExport>>;
   taskState: Awaited<ReturnType<typeof readTaskStateForExport>>;
@@ -88,6 +90,10 @@ async function readProjectsForExport() {
   return listProjects();
 }
 
+async function readProjectChecklistsForExport() {
+  return listProjectChecklists();
+}
+
 async function readLegalDocsForExport() {
   return listLegalDocs();
 }
@@ -109,6 +115,7 @@ async function readServerDomainsForExport(): Promise<ServerDomainReaderResult> {
     ["scopes", readScopesForExport],
     ["authorities", readAuthoritiesForExport],
     ["projects", readProjectsForExport],
+    ["projectChecklists", readProjectChecklistsForExport],
     ["legalDocs", readLegalDocsForExport],
     ["obligations", readObligationsForExport],
     ["deadlines", readDeadlinesForExport],
@@ -136,6 +143,7 @@ export async function buildStorageExportPayload() {
     authorities: serverDomains.authorities,
     users: readStorageValue(STORAGE_KEYS.users, []),
     projects: serverDomains.projects,
+    projectChecklists: serverDomains.projectChecklists,
     legalDocs: serverDomains.legalDocs,
     obligations: serverDomains.obligations,
     deadlines: serverDomains.deadlines,

@@ -5,10 +5,12 @@ import { t } from "../i18n";
 import { useRuntimeConfig } from "../config/runtimeConfig";
 import AuditTimeline from "../components/AuditTimeline";
 import DeadlineModal from "../components/DeadlineModal";
+import HelpHintCard from "../components/HelpHintCard";
 import { EyeIcon, EditIcon } from "../components/Icons";
 import DocumentsPanel from "../components/DocumentsPanel";
 import CommentsPanel from "../components/CommentsPanel";
 import ObligationModal from "../components/ObligationModal";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { useAuditLog } from "../state/AuditLogStore";
 import { useDeadlines } from "../state/DeadlinesStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
@@ -273,6 +275,22 @@ export default function LegalDocPage() {
           )}
         </div>
       </div>
+
+      {runtimeConfig.features.enableHelpHints ? (
+        <HelpHintCard
+          hintId="hint.legalDocDetail"
+          title="Rechtsdokument, Folgeobjekte und Anhaenge"
+          bullets={[
+            "Leiten Sie Auflagen und Fristen direkt vom konkreten Dokument ab.",
+            "Nutzen Sie Scope-Override und AI-Vorschlaege nur bewusst und fachlich geprueft.",
+            "Archivieren Sie das Dokument nicht vorschnell, solange darunter noch operative Folgeobjekte laufen."
+          ]}
+          link={{
+            label: "Passenden Hilfeartikel oeffnen",
+            to: getHelpHref(HELP_CONTEXT_SLUGS.legalDocDetail)
+          }}
+        />
+      ) : null}
 
       <div className="tabs">
         <button

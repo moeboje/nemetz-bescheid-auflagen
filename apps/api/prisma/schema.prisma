@@ -18,9 +18,17 @@ enum ProjectStatus {
   IN_IMPLEMENTATION
 }
 
-enum SubmissionProfileType {
-  BASE
-  ADDON
+enum ProjectSubmissionType {
+  GEWERBE
+  AWG
+  UVP_UVE
+}
+
+enum ChecklistItemStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  NOT_REQUIRED
 }
 
 model User {
@@ -248,6 +256,7 @@ model Project {
   id                   String            @id
   title                String
   status               ProjectStatus?
+  submissionType       ProjectSubmissionType?
   shortDescription     String?
   authorityRef         String?
   companyId            String
@@ -268,9 +277,9 @@ model Project {
   createdAt            DateTime          @default(now())
   updatedAt            DateTime          @updatedAt
   company              Company           @relation(fields: [companyId], references: [id])
+  checklist            ProjectChecklist?
   legalDocuments       LegalDocument[]
   deadlines            Deadline[]
-  submissionProfileAssignments ProjectSubmissionProfileAssignment[]
   site                 Site?             @relation(fields: [siteId], references: [id])
   facility             Facility?         @relation(fields: [facilityId], references: [id])
   authority            Authority?        @relation(fields: [authorityId], references: [id])
@@ -285,33 +294,45 @@ model Project {
   @@index([authorityContactId])
   @@index([ownerUserId])
   @@index([deputyUserId])
+  @@index([submissionType])
   @@index([isArchived])
 }
 
-model SubmissionProfile {
-  key                String                           @id
-  label              String
-  profileType        SubmissionProfileType
-  isActive           Boolean                          @default(true)
-  sortOrder          Int                              @default(0)
-  createdAt          DateTime                         @default(now())
-  updatedAt          DateTime                         @updatedAt
-  projectAssignments ProjectSubmissionProfileAssignment[]
-
-  @@index([isActive])
-  @@index([profileType, sortOrder])
+model ProjectChecklist {
+  id         String                    @id
+  projectId  String                    @unique
+  createdAt  DateTime                  @default(now())
+  updatedAt  DateTime                  @updatedAt
+  project    Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sections   ProjectChecklistSection[]
 }
 
-model ProjectSubmissionProfileAssignment {
-  projectId   String
-  profileKey  String
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
-  project     Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  profile     SubmissionProfile @relation(fields: [profileKey], references: [key], onDelete: Restrict)
+model ProjectChecklistSection {
+  id                 String                 @id
+  projectChecklistId String
+  title              String
+  description        String?
+  sortOrder          Int
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+  checklist          ProjectChecklist       @relation(fields: [projectChecklistId], references: [id], onDelete: Cascade)
+  items              ProjectChecklistItem[]
 
-  @@id([projectId, profileKey])
-  @@index([profileKey])
+  @@index([projectChecklistId, sortOrder])
+}
+
+model ProjectChecklistItem {
+  id                        String                  @id
+  projectChecklistSectionId String
+  title                     String
+  description               String?
+  status                    ChecklistItemStatus
+  sortOrder                 Int
+  createdAt                 DateTime                @default(now())
+  updatedAt                 DateTime                @updatedAt
+  section                   ProjectChecklistSection @relation(fields: [projectChecklistSectionId], references: [id], onDelete: Cascade)
+
+  @@index([projectChecklistSectionId, sortOrder])
 }
 
 model LegalDocument {

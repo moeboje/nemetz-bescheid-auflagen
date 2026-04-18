@@ -11,6 +11,7 @@ import { createAuthoritiesRouter } from "./routes/authorities.js";
 import { createDeadlinesRouter } from "./routes/deadlines.js";
 import { createLegalDocsRouter } from "./routes/legalDocs.js";
 import { createObligationsRouter } from "./routes/obligations.js";
+import { createProjectChecklistsRouter } from "./routes/projectChecklists.js";
 import { createProjectsRouter } from "./routes/projects.js";
 import { createScopesRouter } from "./routes/scopes.js";
 import { createTaskStateRouter } from "./routes/taskState.js";
@@ -1221,6 +1222,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.use(createDeadlinesRouter(prisma));
   router.use(createLegalDocsRouter(prisma));
   router.use(createObligationsRouter(prisma));
+  router.use(createProjectChecklistsRouter(prisma));
   router.use(createProjectsRouter(prisma));
   router.use(createScopesRouter(prisma));
   router.use(createTaskStateRouter(prisma));

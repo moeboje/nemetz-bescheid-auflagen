@@ -24,9 +24,11 @@ import HelpPage from "./pages/HelpPage";
 import LoginPage from "./pages/LoginPage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
+import AdminPage from "./pages/AdminPage";
 import AdminUsersPage from "./pages/AdminUsersPage";
 import AdminRolesPage from "./pages/AdminRolesPage";
 import AdminExternalOrgsPage from "./pages/AdminExternalOrgsPage";
+import AdminAuthoritiesPage from "./pages/AdminAuthoritiesPage";
 import MfaVerifyPage from "./pages/MfaVerifyPage";
 import SecuritySettingsPage from "./pages/SecuritySettingsPage";
 import {
@@ -129,6 +131,10 @@ function AppLayout() {
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState<boolean>(() =>
     loadFromStorage(SIDEBAR_COLLAPSED_STORAGE_KEY, false)
   );
+  const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false);
+  const [isMobileNavigation, setIsMobileNavigation] = React.useState<boolean>(() =>
+    typeof window !== "undefined" ? window.matchMedia("(max-width: 960px)").matches : false
+  );
   const [isLogoutPending, setIsLogoutPending] = React.useState(false);
   const safeMode = isSafeModeActive(location.search);
   const reportsEnabled = runtimeConfig.features.enableReports;
@@ -139,14 +145,44 @@ function AppLayout() {
   }, [sidebarCollapsed]);
 
   React.useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 960px)");
+    const handleChange = (event: MediaQueryListEvent | MediaQueryList) => {
+      setIsMobileNavigation(event.matches);
+    };
+
+    setIsMobileNavigation(mediaQuery.matches);
+    if (typeof mediaQuery.addEventListener === "function") {
+      mediaQuery.addEventListener("change", handleChange);
+      return () => mediaQuery.removeEventListener("change", handleChange);
+    }
+
+    mediaQuery.addListener(handleChange);
+    return () => mediaQuery.removeListener(handleChange);
+  }, []);
+
+  React.useEffect(() => {
+    setMobileSidebarOpen(false);
+  }, [location.pathname, location.search]);
+
+  React.useEffect(() => {
+    if (!isMobileNavigation) {
+      setMobileSidebarOpen(false);
+    }
+  }, [isMobileNavigation]);
+
+  React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !sidebarCollapsed) {
+      if (event.key === "Escape" && isMobileNavigation && mobileSidebarOpen) {
+        setMobileSidebarOpen(false);
+        return;
+      }
+      if (event.key === "Escape" && !isMobileNavigation && !sidebarCollapsed) {
         setSidebarCollapsed(true);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [sidebarCollapsed]);
+  }, [isMobileNavigation, mobileSidebarOpen, sidebarCollapsed]);
 
   const handleLogout = async () => {
     setIsLogoutPending(true);
@@ -249,21 +285,38 @@ function AppLayout() {
     return <TasksReportPrintPage />;
   }
 
-  const toggleSidebarLabel = sidebarCollapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar");
+  const sidebarNavCollapsed = isMobileNavigation ? false : sidebarCollapsed;
+  const toggleSidebarLabel = isMobileNavigation
+    ? mobileSidebarOpen
+      ? t("nav.collapseSidebar")
+      : t("nav.expandSidebar")
+    : sidebarCollapsed
+    ? t("nav.expandSidebar")
+    : t("nav.collapseSidebar");
+  const handleSidebarToggle = () => {
+    if (isMobileNavigation) {
+      setMobileSidebarOpen((value) => !value);
+      return;
+    }
+    setSidebarCollapsed((value) => !value);
+  };
 
   return (
     <AppShell
-      sidebarCollapsed={sidebarCollapsed}
+      sidebarCollapsed={sidebarNavCollapsed}
+      mobileSidebarOpen={mobileSidebarOpen}
+      onMobileSidebarClose={() => setMobileSidebarOpen(false)}
+      mobileOverlayAriaLabel={t("nav.collapseSidebar")}
       sidebar={
         <Sidebar>
-          {!sidebarCollapsed ? <div className="sidebarSectionTitle">{t("nav.module")}</div> : null}
+          {!sidebarNavCollapsed ? <div className="sidebarSectionTitle">{t("nav.module")}</div> : null}
           {navItems
             .filter((item) => item.visible)
             .map((item) => (
               <SidebarNavItem
                 key={item.key}
                 icon={item.icon}
-                collapsed={sidebarCollapsed}
+                collapsed={sidebarNavCollapsed}
                 tooltip={item.label}
                 active={location.pathname.startsWith(item.path)}
                 onClick={() => navigate(item.path)}
@@ -278,8 +331,8 @@ function AppLayout() {
           left={
             <IconButton
               ariaLabel={toggleSidebarLabel}
-              aria-expanded={!sidebarCollapsed}
-              onClick={() => setSidebarCollapsed((value) => !value)}
+              aria-expanded={isMobileNavigation ? mobileSidebarOpen : !sidebarCollapsed}
+              onClick={handleSidebarToggle}
             >
               <MenuIcon />
             </IconButton>
@@ -296,37 +349,41 @@ function AppLayout() {
                   </span>
                 ) : null}
               </div>
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => void handleLogout()}
-                disabled={isLogoutPending}
-              >
-                {isLogoutPending ? t("auth.logout.pending") : t("auth.logout")}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => navigate(`${MODULE_BASE_PATH}/settings/security`)}
-              >
-                Sicherheit
-              </Button>
-              {notificationsEnabled ? (
-                <IconButton
-                  ariaLabel={t("topbar.notifications")}
-                  onClick={() => navigate(`${MODULE_BASE_PATH}/notifications`)}
+              <div className="topbarActionGroup">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  className="topbarActionButton"
+                  onClick={() => void handleLogout()}
+                  disabled={isLogoutPending}
                 >
-                  <div className="topbarBellWrapper">
-                    <BellIcon />
-                    {activeCount > 0 ? (
-                      <span className="topbarBellBadge">{activeCount > 99 ? "99+" : activeCount}</span>
-                    ) : null}
-                  </div>
+                  {isLogoutPending ? t("auth.logout.pending") : t("auth.logout")}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="topbarActionButton"
+                  onClick={() => navigate(`${MODULE_BASE_PATH}/settings/security`)}
+                >
+                  Sicherheit
+                </Button>
+                {notificationsEnabled ? (
+                  <IconButton
+                    ariaLabel={t("topbar.notifications")}
+                    onClick={() => navigate(`${MODULE_BASE_PATH}/notifications`)}
+                  >
+                    <div className="topbarBellWrapper">
+                      <BellIcon />
+                      {activeCount > 0 ? (
+                        <span className="topbarBellBadge">{activeCount > 99 ? "99+" : activeCount}</span>
+                      ) : null}
+                    </div>
+                  </IconButton>
+                ) : null}
+                <IconButton ariaLabel={t("help.open")} onClick={() => navigate(`${MODULE_BASE_PATH}/help`)}>
+                  <span className="topbarHelpGlyph">?</span>
                 </IconButton>
-              ) : null}
-              <IconButton ariaLabel={t("help.open")} onClick={() => navigate(`${MODULE_BASE_PATH}/help`)}>
-                <span className="topbarHelpGlyph">?</span>
-              </IconButton>
+              </div>
             </div>
           }
         />
@@ -385,7 +442,7 @@ function AppLayout() {
           />
           <Route
             path="admin"
-            element={permissions.canViewAdmin ? <Navigate to="users" replace /> : <Navigate to={restrictedFallback} replace />}
+            element={permissions.canViewAdmin ? <AdminPage /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route
             path="admin/users"
@@ -398,6 +455,10 @@ function AppLayout() {
           <Route
             path="admin/external-orgs"
             element={permissions.canViewAdmin ? <AdminExternalOrgsPage /> : <Navigate to={restrictedFallback} replace />}
+          />
+          <Route
+            path="admin/authorities"
+            element={permissions.canViewAdmin ? <AdminAuthoritiesPage /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route path="compliance-summary" element={<ComplianceSummaryPage />} />
           <Route
@@ -454,7 +515,7 @@ function AppLayout() {
         />
         <Route
           path="/admin"
-          element={permissions.canViewAdmin ? <Navigate to="/admin/users" replace /> : <Navigate to={restrictedFallback} replace />}
+          element={permissions.canViewAdmin ? <AdminPage /> : <Navigate to={restrictedFallback} replace />}
         />
         <Route
           path="/admin/users"
@@ -467,6 +528,10 @@ function AppLayout() {
         <Route
           path="/admin/external-orgs"
           element={permissions.canViewAdmin ? <AdminExternalOrgsPage /> : <Navigate to={restrictedFallback} replace />}
+        />
+        <Route
+          path="/admin/authorities"
+          element={permissions.canViewAdmin ? <AdminAuthoritiesPage /> : <Navigate to={restrictedFallback} replace />}
         />
         <Route path="/compliance-summary" element={<ComplianceSummaryPage />} />
         <Route
@@ -489,6 +554,7 @@ function AppLayout() {
 function AppRouter() {
   return (
     <Routes>
+      <Route path="/help/auth" element={<HelpPage scope="publicAuth" standalone />} />
       <Route
         path="/login"
         element={

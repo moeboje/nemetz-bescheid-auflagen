@@ -1,5 +1,6 @@
 import { getRuntimeConfigSnapshot } from "../../config/runtimeConfig";
-import { PROJECT_STATUS_VALUES, SUBMISSION_PROFILE_KEYS } from "../../data/projects";
+import { CHECKLIST_ITEM_STATUS_VALUES } from "../../data/projectChecklists";
+import { PROJECT_STATUS_VALUES, PROJECT_SUBMISSION_TYPE_VALUES } from "../../data/projects";
 import { STORAGE_VERSION } from "../persistence";
 import type { ExportDataBundle, ExportPayload } from "./types";
 
@@ -144,6 +145,7 @@ function normalizePayloadShape(value: unknown): ExportPayload | null {
         authorities: source.authorities as ExportDataBundle["authorities"],
         users: source.users as ExportDataBundle["users"],
         projects: source.projects as ExportDataBundle["projects"],
+        projectChecklists: source.projectChecklists as ExportDataBundle["projectChecklists"],
         legalDocs: source.legalDocs as ExportDataBundle["legalDocs"],
         obligations: source.obligations as ExportDataBundle["obligations"],
         deadlines: source.deadlines as ExportDataBundle["deadlines"],
@@ -276,19 +278,80 @@ function validateProjects(
       pushMessage(errors, "import.validation.invalidObject", `${path}.status`);
     }
 
-    if (hasValue(object.submissionProfileKeys)) {
-      if (!Array.isArray(object.submissionProfileKeys)) {
-        pushMessage(errors, "import.validation.invalidArray", `${path}.submissionProfileKeys`);
-      } else if (
-        object.submissionProfileKeys.some(
-          (key) =>
-            !isNonEmptyString(key) ||
-            !SUBMISSION_PROFILE_KEYS.includes(key as (typeof SUBMISSION_PROFILE_KEYS)[number])
-        )
-      ) {
-        pushMessage(errors, "import.validation.invalidObject", `${path}.submissionProfileKeys`);
-      }
+    if (
+      hasValue(object.submissionType) &&
+      (!isNonEmptyString(object.submissionType) ||
+        !PROJECT_SUBMISSION_TYPE_VALUES.includes(
+          object.submissionType as (typeof PROJECT_SUBMISSION_TYPE_VALUES)[number]
+        ))
+    ) {
+      pushMessage(errors, "import.validation.invalidObject", `${path}.submissionType`);
     }
+  });
+}
+
+function validateProjectChecklists(
+  value: unknown,
+  errors: ImportValidationMessage[]
+) {
+  if (!hasValue(value)) {
+    return;
+  }
+
+  const rows = ensureArray(value, "data.projectChecklists", errors);
+  validateArrayIds(rows, "data.projectChecklists", errors);
+
+  rows.forEach((row, index) => {
+    const path = `data.projectChecklists[${index}]`;
+    const checklist = ensureRecord(row, path, errors);
+    if (!checklist) {
+      return;
+    }
+
+    if (!isNonEmptyString(checklist.projectId)) {
+      pushMessage(errors, "import.validation.invalidId", `${path}.projectId`);
+    }
+
+    const sections = ensureArray(checklist.sections, `${path}.sections`, errors);
+    sections.forEach((sectionRow, sectionIndex) => {
+      const sectionPath = `${path}.sections[${sectionIndex}]`;
+      const section = ensureRecord(sectionRow, sectionPath, errors);
+      if (!section) {
+        return;
+      }
+
+      if (!isNonEmptyString(section.id)) {
+        pushMessage(errors, "import.validation.invalidId", `${sectionPath}.id`);
+      }
+      if (!isNonEmptyString(section.title)) {
+        pushMessage(errors, "import.validation.invalidObject", `${sectionPath}.title`);
+      }
+
+      const items = ensureArray(section.items, `${sectionPath}.items`, errors);
+      items.forEach((itemRow, itemIndex) => {
+        const itemPath = `${sectionPath}.items[${itemIndex}]`;
+        const item = ensureRecord(itemRow, itemPath, errors);
+        if (!item) {
+          return;
+        }
+
+        if (!isNonEmptyString(item.id)) {
+          pushMessage(errors, "import.validation.invalidId", `${itemPath}.id`);
+        }
+        if (!isNonEmptyString(item.title)) {
+          pushMessage(errors, "import.validation.invalidObject", `${itemPath}.title`);
+        }
+        if (
+          hasValue(item.status) &&
+          (!isNonEmptyString(item.status) ||
+            !CHECKLIST_ITEM_STATUS_VALUES.includes(
+              item.status as (typeof CHECKLIST_ITEM_STATUS_VALUES)[number]
+            ))
+        ) {
+          pushMessage(errors, "import.validation.invalidObject", `${itemPath}.status`);
+        }
+      });
+    });
   });
 }
 
@@ -416,6 +479,7 @@ export function validateImport(value: unknown): ImportValidationResult {
 
   validateUsers(data.users, errors);
   validateProjects(data.projects, errors);
+  validateProjectChecklists(data.projectChecklists, errors);
   validateOptionalArray(data.legalDocs, "data.legalDocs", errors);
   validateOptionalArray(data.obligations, "data.obligations", errors);
   validateOptionalArray(data.deadlines, "data.deadlines", errors);
@@ -436,6 +500,9 @@ export function validateImport(value: unknown): ImportValidationResult {
   }
   if (!hasValue(data.projects)) {
     pushMessage(warnings, "import.validation.missingOptionalKey", "data.projects");
+  }
+  if (!hasValue(data.projectChecklists)) {
+    pushMessage(warnings, "import.validation.missingOptionalKey", "data.projectChecklists");
   }
   if (!hasValue(data.legalDocs)) {
     pushMessage(warnings, "import.validation.missingOptionalKey", "data.legalDocs");

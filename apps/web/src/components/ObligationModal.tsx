@@ -132,6 +132,7 @@ export default function ObligationModal({
       open={open}
       onClose={onClose}
       closeAriaLabel={t("modal.close")}
+      mobileFullscreen
       header={obligation ? t("obligations.modal.editTitle") : t("obligations.modal.title")}
       footer={
         <div className="modalFooter">
@@ -240,7 +241,10 @@ export default function ObligationModal({
             <Select
               options={[
                 { value: "", label: t("obligations.form.intervalUnit") },
+                { value: "DAY", label: t("obligations.interval.day") },
+                { value: "WEEK", label: t("obligations.interval.week") },
                 { value: "MONTH", label: t("obligations.interval.month") },
+                { value: "QUARTER", label: t("obligations.interval.quarter") },
                 { value: "YEAR", label: t("obligations.interval.year") }
               ]}
               value={form.intervalUnit}

@@ -11,9 +11,15 @@ import {
   Modal,
   Select
 } from "@nemetz/ui";
+import { ApiError } from "../api/client";
+import {
+  bulkReplaceProjectChecklists,
+  listProjectChecklists
+} from "../api/projectChecklists";
 import { useRuntimeConfig } from "../config/runtimeConfig";
 import { t } from "../i18n";
 import HelpHintCard from "../components/HelpHintCard";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { ArchiveIcon, EditIcon } from "../components/Icons";
 import {
   useAuthorities
@@ -45,6 +51,7 @@ import {
 } from "../state/importExport/validateImport";
 import { createDemoScenarioSeed, mergeDemoScenario } from "../state/demoScenario";
 import type { ExportPayload } from "../state/importExport/types";
+import type { ProjectChecklist } from "../data/projectChecklists";
 import type { Project } from "../data/projects";
 import type { LegalDoc } from "../data/legalDocs";
 import type { Obligation } from "../state/ObligationsStore";
@@ -732,14 +739,22 @@ export default function AdminPage() {
     await replaceDeadlines([]);
     await replaceObligations([]);
     await replaceLegalDocs([]);
+    await bulkReplaceProjectChecklists([]);
     await replaceProjects([]);
-  }, [replaceDeadlines, replaceLegalDocs, replaceObligations, replaceProjects, replaceTaskState]);
+  }, [
+    replaceDeadlines,
+    replaceLegalDocs,
+    replaceObligations,
+    replaceProjects,
+    replaceTaskState
+  ]);
 
   const applyFullDomainReplaceInDependencyOrder = useCallback(
     async (input: {
       scopes: ExportPayload["data"]["scopes"];
       authorities: ExportPayload["data"]["authorities"];
       projects: Project[];
+      projectChecklists?: ProjectChecklist[];
       legalDocs: LegalDoc[];
       obligations: Obligation[];
       deadlines: Deadline[];
@@ -748,6 +763,7 @@ export default function AdminPage() {
       await replaceScopes(input.scopes);
       await replaceAuthorities(input.authorities);
       await replaceProjects(input.projects);
+      await bulkReplaceProjectChecklists(input.projectChecklists ?? []);
       await replaceLegalDocs(input.legalDocs);
       await replaceObligations(input.obligations);
       await replaceDeadlines(input.deadlines);
@@ -764,29 +780,37 @@ export default function AdminPage() {
     ]
   );
 
-  const handleExport = () => {
-    const payload = buildExportPayload({
-      scopes: {
-        companies,
-        sites,
-        facilities
-      },
-      authorities: {
-        authorities,
-        contacts
-      },
-      projects,
-      legalDocs,
-      obligations,
-      deadlines,
-      taskState,
-      auditLog: entries,
-      users,
-      notifications
-    });
-    downloadExportPayload(payload);
+  const handleExport = async () => {
+    try {
+      const projectChecklists = await listProjectChecklists();
+      const payload = buildExportPayload({
+        scopes: {
+          companies,
+          sites,
+          facilities
+        },
+        authorities: {
+          authorities,
+          contacts
+        },
+        projects,
+        projectChecklists,
+        legalDocs,
+        obligations,
+        deadlines,
+        taskState,
+        auditLog: entries,
+        users,
+        notifications
+      });
+      downloadExportPayload(payload);
 
-    setDataManagementMessage(t("admin.dataManagement.exportSuccess"));
+      setDataManagementMessage(t("admin.dataManagement.exportSuccess"));
+    } catch (error) {
+      setDataManagementMessage(
+        error instanceof ApiError ? error.message : t("admin.dataManagement.exportInvalid")
+      );
+    }
   };
 
   const handleImportFile = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -834,95 +858,144 @@ export default function AdminPage() {
       return;
     }
 
-    const imported = pendingImport.data;
-    const legalDocsForImport = imported.legalDocs ?? legalDocs;
-    const sanitizedProjectImport = imported.projects
-      ? sanitizeProjectRelations(
-          imported.projects,
-          new Set(legalDocsForImport.map((doc) => doc.id))
-        )
-      : null;
-    const normalizedEvidenceStorage = await normalizeImportedEvidenceStorage({
-      deadlines: imported.deadlines,
-      taskState: imported.taskState
-    });
-
-    if (
-      sanitizedProjectImport &&
-      (!imported.legalDocs || !imported.obligations || !imported.deadlines || !imported.taskState)
-    ) {
-      setImportErrors([
-        {
-          key: "import.validation.projectReplaceRequiresDependents",
-          path: "data.projects"
-        }
-      ]);
-      setImportConfirmOpen(false);
-      return;
-    }
-
-    if (sanitizedProjectImport) {
-      await clearServerDomainsInDependencyOrder();
-      await applyFullDomainReplaceInDependencyOrder({
-        scopes: imported.scopes,
-        authorities: imported.authorities,
-        projects: sanitizedProjectImport.projects,
-        legalDocs: imported.legalDocs ?? [],
-        obligations: imported.obligations ?? [],
-        deadlines: normalizedEvidenceStorage.deadlines ?? imported.deadlines ?? [],
-        taskState: normalizedEvidenceStorage.taskState ?? imported.taskState ?? {}
+    try {
+      const imported = pendingImport.data;
+      const legalDocsForImport = imported.legalDocs ?? legalDocs;
+      const sanitizedProjectImport = imported.projects
+        ? sanitizeProjectRelations(
+            imported.projects,
+            new Set(legalDocsForImport.map((doc) => doc.id))
+          )
+        : null;
+      const normalizedEvidenceStorage = await normalizeImportedEvidenceStorage({
+        deadlines: imported.deadlines,
+        taskState: imported.taskState
       });
-    } else {
-      if (imported.deadlines) {
-        await replaceDeadlines([]);
-      }
-      await replaceScopes(imported.scopes);
-      await replaceAuthorities(imported.authorities);
-      if (imported.legalDocs) {
-        await replaceLegalDocs(imported.legalDocs);
-      }
-      if (imported.obligations) {
-        await replaceObligations(imported.obligations);
-      }
-      if (imported.deadlines) {
-        await replaceDeadlines(normalizedEvidenceStorage.deadlines ?? imported.deadlines);
-      }
-      if (imported.taskState) {
-        await replaceTaskState(normalizedEvidenceStorage.taskState ?? imported.taskState);
-      }
-    }
-    replaceAuditLog(imported.auditLog ?? []);
-    replaceUsers(imported.users ?? users);
-    replaceNotifications(imported.notifications ?? []);
+      const hasExistingScopeDependents = projects.length > 0;
+      const hasExistingAuthorityDependents =
+        projects.length > 0 ||
+        legalDocs.length > 0 ||
+        obligations.length > 0 ||
+        deadlines.length > 0 ||
+        Object.keys(taskState).length > 0;
 
-    setPendingImport(null);
-    setImportConfirmOpen(false);
-    setImportErrors([]);
+      if (!imported.projects) {
+        const partialReplaceErrors: ImportValidationMessage[] = [];
+        if (imported.scopes) {
+          partialReplaceErrors.push({
+            key: "import.validation.scopeReplaceBlockedByProjects",
+            path: "data.scopes"
+          });
+        }
+        if (imported.authorities) {
+          partialReplaceErrors.push({
+            key: "import.validation.authorityReplaceBlockedByDownstream",
+            path: "data.authorities"
+          });
+        }
 
-    const warnings: ImportValidationMessage[] = [];
-    if (normalizedEvidenceStorage.missingContentCount > 0) {
-      warnings.push({ key: "admin.dataManagement.importMissingFiles" });
-    }
-    if (
-      sanitizedProjectImport &&
-      (sanitizedProjectImport.removedDependencyLinks > 0 ||
-        sanitizedProjectImport.removedLegalDocRefs > 0)
-    ) {
-      warnings.push({ key: "admin.dataManagement.importRelationsSanitized" });
-    }
+        const filteredPartialReplaceErrors = partialReplaceErrors.filter((entry) =>
+          entry.path === "data.scopes" ? hasExistingScopeDependents : hasExistingAuthorityDependents
+        );
 
-    setImportWarnings(warnings);
+        if (filteredPartialReplaceErrors.length > 0) {
+          setImportErrors(filteredPartialReplaceErrors);
+          setPendingImport(null);
+          setImportConfirmOpen(false);
+          return;
+        }
+      }
 
-    if (warnings.length) {
+      if (
+        sanitizedProjectImport &&
+        (!imported.legalDocs || !imported.obligations || !imported.deadlines || !imported.taskState)
+      ) {
+        setImportErrors([
+          {
+            key: "import.validation.projectReplaceRequiresDependents",
+            path: "data.projects"
+          }
+        ]);
+        setPendingImport(null);
+        setImportConfirmOpen(false);
+        return;
+      }
+
+      if (sanitizedProjectImport) {
+        await clearServerDomainsInDependencyOrder();
+        await applyFullDomainReplaceInDependencyOrder({
+          scopes: imported.scopes,
+          authorities: imported.authorities,
+          projects: sanitizedProjectImport.projects,
+          projectChecklists: imported.projectChecklists ?? [],
+          legalDocs: imported.legalDocs ?? [],
+          obligations: imported.obligations ?? [],
+          deadlines: normalizedEvidenceStorage.deadlines ?? imported.deadlines ?? [],
+          taskState: normalizedEvidenceStorage.taskState ?? imported.taskState ?? {}
+        });
+      } else {
+        if (imported.deadlines) {
+          await replaceDeadlines([]);
+        }
+        await replaceScopes(imported.scopes);
+        await replaceAuthorities(imported.authorities);
+        if (imported.legalDocs) {
+          await replaceLegalDocs(imported.legalDocs);
+        }
+        if (imported.obligations) {
+          await replaceObligations(imported.obligations);
+        }
+        if (imported.projectChecklists) {
+          await bulkReplaceProjectChecklists(imported.projectChecklists);
+        }
+        if (imported.deadlines) {
+          await replaceDeadlines(normalizedEvidenceStorage.deadlines ?? imported.deadlines);
+        }
+        if (imported.taskState) {
+          await replaceTaskState(normalizedEvidenceStorage.taskState ?? imported.taskState);
+        }
+      }
+      replaceAuditLog(imported.auditLog ?? []);
+      replaceUsers(imported.users ?? users);
+      replaceNotifications(imported.notifications ?? []);
+
+      setPendingImport(null);
+      setImportConfirmOpen(false);
+      setImportErrors([]);
+
+      const warnings: ImportValidationMessage[] = [];
+      if (normalizedEvidenceStorage.missingContentCount > 0) {
+        warnings.push({ key: "admin.dataManagement.importMissingFiles" });
+      }
+      if (
+        sanitizedProjectImport &&
+        (sanitizedProjectImport.removedDependencyLinks > 0 ||
+          sanitizedProjectImport.removedLegalDocRefs > 0)
+      ) {
+        warnings.push({ key: "admin.dataManagement.importRelationsSanitized" });
+      }
+
+      setImportWarnings(warnings);
+
+      if (warnings.length) {
+        setDataManagementMessage(
+          `${t("admin.dataManagement.importSuccess")} ${warnings
+            .map((warning) => formatImportMessage(warning))
+            .join(" ")}`
+        );
+        return;
+      }
+
+      setDataManagementMessage(t("admin.dataManagement.importSuccess"));
+    } catch (error) {
+      setPendingImport(null);
+      setImportConfirmOpen(false);
+      setImportErrors([]);
+      setImportWarnings([]);
       setDataManagementMessage(
-        `${t("admin.dataManagement.importSuccess")} ${warnings
-          .map((warning) => formatImportMessage(warning))
-          .join(" ")}`
+        error instanceof ApiError ? error.message : t("admin.dataManagement.importInvalid")
       );
-      return;
     }
-
-    setDataManagementMessage(t("admin.dataManagement.importSuccess"));
   };
 
   const handleConfirmReset = async () => {
@@ -1192,7 +1265,7 @@ export default function AdminPage() {
             "helpHints.admin.bullets.2",
             "helpHints.admin.bullets.3"
           ]}
-          link={{ labelKey: "common.openHelp", to: "/help#admin-tools" }}
+          link={{ labelKey: "common.openHelp", to: getHelpHref(HELP_CONTEXT_SLUGS.adminData) }}
         />
       ) : null}
 
@@ -1415,7 +1488,11 @@ export default function AdminPage() {
           <div className="tableSection">
             <div className="sectionHeader">
               <h2 className="sectionTitle">{t("diagnostics.title")}</h2>
-              <Button size="sm" variant="ghost" onClick={() => navigate("/help#admin-tools")}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => navigate(getHelpHref(HELP_CONTEXT_SLUGS.adminData))}
+              >
                 {t("common.openHelp")}
               </Button>
             </div>
@@ -1489,7 +1566,11 @@ export default function AdminPage() {
           <div className="tableSection">
             <div className="sectionHeader">
               <h2 className="sectionTitle">{t("admin.dataManagement.title")}</h2>
-              <Button size="sm" variant="ghost" onClick={() => navigate("/help#admin-tools")}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => navigate(getHelpHref(HELP_CONTEXT_SLUGS.adminData))}
+              >
                 {t("common.openHelp")}
               </Button>
             </div>
@@ -1500,7 +1581,7 @@ export default function AdminPage() {
               {t("admin.dataManagement.lastTickAt").replace("{date}", lastTickAt || t("common.notAvailable"))}
             </p>
             <div className="inlineMeta">
-              <Button onClick={handleExport}>{t("admin.dataManagement.export")}</Button>
+              <Button onClick={() => void handleExport()}>{t("admin.dataManagement.export")}</Button>
               <Button
                 variant="secondary"
                 onClick={() => fileInputRef.current?.click()}

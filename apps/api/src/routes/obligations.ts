@@ -26,7 +26,7 @@ type ObligationDto = {
   criticality?: "LOW" | "MEDIUM" | "HIGH";
   scheduleType: "ONCE" | "RECURRING" | "ONCE_THEN_RECURRING";
   firstDueDate?: string;
-  intervalUnit?: "MONTH" | "YEAR";
+  intervalUnit?: "DAY" | "WEEK" | "MONTH" | "QUARTER" | "YEAR";
   intervalValue?: number;
   ownerUserId?: string;
   deputyUserId?: string;
@@ -123,7 +123,13 @@ function normalizeScheduleType(value: unknown): ObligationDto["scheduleType"] {
 }
 
 function normalizeIntervalUnit(value: unknown): ObligationDto["intervalUnit"] {
-  if (value === "MONTH" || value === "YEAR") {
+  if (
+    value === "DAY" ||
+    value === "WEEK" ||
+    value === "MONTH" ||
+    value === "QUARTER" ||
+    value === "YEAR"
+  ) {
     return value;
   }
   return undefined;

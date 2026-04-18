@@ -10,6 +10,9 @@ import {
 } from "@nemetz/ui";
 import { t } from "../i18n";
 import { ArchiveIcon, EditIcon } from "../components/Icons";
+import HelpHintCard from "../components/HelpHintCard";
+import { useRuntimeConfig } from "../config/runtimeConfig";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
@@ -65,6 +68,7 @@ function createEmptySummary(): ScopeSummary {
 }
 
 export default function ScopesPage() {
+  const runtimeConfig = useRuntimeConfig();
   const {
     companies,
     sites,
@@ -551,6 +555,22 @@ export default function ScopesPage() {
         </div>
       </div>
 
+      {runtimeConfig.features.enableHelpHints ? (
+        <HelpHintCard
+          hintId="hint.scopes"
+          title="Scope-Struktur und Stammdaten"
+          bullets={[
+            "Companies, Standorte und Anlagen sind die Referenzbasis fuer Projekte und Folgeobjekte.",
+            "Ein falscher Scope fuehrt spaeter zu unklaren Filtern und fehlerhaften Beziehungen.",
+            "Archivieren Sie Stammdaten nur bewusst, weil aktive Projekte indirekt mitbetroffen sein koennen."
+          ]}
+          link={{
+            label: "Passenden Hilfeartikel oeffnen",
+            to: getHelpHref(HELP_CONTEXT_SLUGS.scopes)
+          }}
+        />
+      ) : null}
+
       <Card>
         <label className="scopesArchiveToggle">
           <input
@@ -738,6 +758,7 @@ export default function ScopesPage() {
           setCompanyModalOpen(false);
           setEditingCompanyId(null);
         }}
+        mobileFullscreen
         closeAriaLabel={t("modal.close")}
         header={
           editingCompanyId
@@ -788,6 +809,7 @@ export default function ScopesPage() {
           setSiteModalOpen(false);
           setEditingSiteId(null);
         }}
+        mobileFullscreen
         closeAriaLabel={t("modal.close")}
         header={
           editingSiteId ? t("scopes.modal.site.titleEdit") : t("scopes.modal.site.titleNew")
@@ -839,6 +861,7 @@ export default function ScopesPage() {
           setFacilityModalOpen(false);
           setEditingFacilityId(null);
         }}
+        mobileFullscreen
         closeAriaLabel={t("modal.close")}
         header={
           editingFacilityId

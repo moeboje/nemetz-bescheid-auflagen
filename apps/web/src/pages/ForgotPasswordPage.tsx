@@ -50,6 +50,9 @@ export default function ForgotPasswordPage() {
             <Link to="/login" className="authLink">
               {t("auth.backToLogin")}
             </Link>
+            <Link to="/help/auth#security-login-password-mfa" className="authLink">
+              Hilfe zu Passwort-Reset
+            </Link>
           </div>
         </form>
       </Card>

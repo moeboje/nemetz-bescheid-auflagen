@@ -35,6 +35,22 @@ function getReminderText(daysBefore?: number) {
   return t("common.daysBefore.7");
 }
 
+function getIntervalUnitLabel(unit: "DAY" | "WEEK" | "MONTH" | "QUARTER" | "YEAR") {
+  switch (unit) {
+    case "DAY":
+      return t("obligations.interval.day");
+    case "WEEK":
+      return t("obligations.interval.week");
+    case "QUARTER":
+      return t("obligations.interval.quarter");
+    case "YEAR":
+      return t("obligations.interval.year");
+    case "MONTH":
+    default:
+      return t("obligations.interval.month");
+  }
+}
+
 export default function ObligationDetailPage() {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -201,11 +217,7 @@ export default function ObligationDetailPage() {
             <div className="metaLabel">{t("obligations.detail.interval")}</div>
             <div className="metaValue">
               {obligation.intervalValue && obligation.intervalUnit
-                ? `${obligation.intervalValue} ${
-                    obligation.intervalUnit === "MONTH"
-                      ? t("obligations.interval.month")
-                      : t("obligations.interval.year")
-                  }`
+                ? `${obligation.intervalValue} ${getIntervalUnitLabel(obligation.intervalUnit)}`
                 : t("common.notAvailable")}
             </div>
           </div>

@@ -96,6 +96,9 @@ export default function MfaVerifyPage() {
             <Link to="/login" className="authLink">
               Zurück zum Login
             </Link>
+            <Link to="/help/auth#security-login-password-mfa" className="authLink">
+              Hilfe zu MFA & Recovery-Code
+            </Link>
           </div>
         </form>
       </Card>

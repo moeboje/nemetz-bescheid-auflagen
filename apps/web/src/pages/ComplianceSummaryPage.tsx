@@ -1,5 +1,8 @@
 import React, { useMemo, useState } from "react";
 import { Breadcrumbs, Card, Input, Select } from "@nemetz/ui";
+import HelpHintCard from "../components/HelpHintCard";
+import { useRuntimeConfig } from "../config/runtimeConfig";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { t } from "../i18n";
 import { useProjects } from "../state/ProjectsStore";
 import { useTasks } from "../state/TasksStore";
@@ -53,6 +56,7 @@ function summarizeTasks(
 }
 
 export default function ComplianceSummaryPage() {
+  const runtimeConfig = useRuntimeConfig();
   const { tasks } = useTasks();
   const { projects } = useProjects();
   const [filters, setFilters] = useState({
@@ -137,6 +141,22 @@ export default function ComplianceSummaryPage() {
           <h1 className="pageTitle">{t("complianceSummary.title")}</h1>
         </div>
       </div>
+
+      {runtimeConfig.features.enableHelpHints ? (
+        <HelpHintCard
+          hintId="hint.complianceSummary"
+          title="Compliance Summary richtig lesen"
+          bullets={[
+            "Die Summary ist ein Lesemodul fuer Ueberblick und Trendbeobachtung.",
+            "Operative Korrekturen erfolgen weiterhin in Projekten, Aufgaben, Fristen oder Auflagen.",
+            "Wenn Zahlen ungewoehnlich wirken, pruefen Sie zuerst Zeitraum, Projekt- und Scope-Filter."
+          ]}
+          link={{
+            label: "Passenden Hilfeartikel oeffnen",
+            to: getHelpHref(HELP_CONTEXT_SLUGS.reports)
+          }}
+        />
+      ) : null}
 
       <Card>
         <div className="filterRowFive">

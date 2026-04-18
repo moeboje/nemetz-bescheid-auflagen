@@ -1,136 +1,357 @@
-import React, { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Breadcrumbs, Button, Card, Input, Modal } from "@nemetz/ui";
 import { t } from "../i18n";
-import { HELP_SECTIONS, type HelpSection } from "../help/helpContent";
+import {
+  HELP_CATEGORIES,
+  getHelpArticle,
+  getHelpArticlesForScope,
+  getHelpFaqEntriesForScope,
+  getHelpGlossaryForScope,
+  getHelpHref,
+  getHelpQuickLinksForScope,
+  matchesHelpArticle,
+  matchesHelpFaqEntry,
+  matchesHelpGlossaryEntry,
+  type HelpScope
+} from "../help/helpContent";
+import { useAuthorization } from "../state/AuthorizationStore";
 import { useHelpHints } from "../state/HelpHintsStore";
+import styles from "./HelpPage.module.css";
 
-function getSectionSearchValues(section: HelpSection) {
-  const keys = [
-    section.id,
-    section.titleKey,
-    section.descriptionKey,
-    ...(section.steps ?? []).flatMap((step) => [step.titleKey, step.bodyKey]),
-    ...(section.links ?? []).map((link) => link.labelKey)
-  ].filter(Boolean) as string[];
+type HelpPageProps = {
+  scope?: HelpScope;
+  standalone?: boolean;
+  title?: string;
+  description?: string;
+  showHintControls?: boolean;
+};
 
-  const localized = [
-    t(section.titleKey),
-    section.descriptionKey ? t(section.descriptionKey) : "",
-    ...(section.steps ?? []).flatMap((step) => [t(step.titleKey), t(step.bodyKey)]),
-    ...(section.links ?? []).map((link) => t(link.labelKey))
-  ].filter(Boolean);
-
-  return [...keys, ...localized];
+function normalizeSearch(value: string) {
+  return value.trim().toLowerCase();
 }
 
-export default function HelpPage() {
+function getDefaultTitle(scope: HelpScope) {
+  if (scope === "publicAuth") {
+    return "Hilfe zu Login, Passwort und MFA";
+  }
+  return t("help.title");
+}
+
+function getDefaultDescription(scope: HelpScope) {
+  if (scope === "publicAuth") {
+    return "Schnelle Hilfe fuer Zugang, Passwort-Reset, Microsoft-Anmeldung und MFA, ohne vorher im Portal angemeldet zu sein.";
+  }
+  return "Das Help Center verbindet Ueberblick, Schritt-fuer-Schritt-Anleitungen, Troubleshooting und FAQ in einer gemeinsamen Struktur.";
+}
+
+function getArticleTypeLabel(articleType: string) {
+  if (articleType === "overview") {
+    return "Ueberblick";
+  }
+  if (articleType === "workflow") {
+    return "Workflow";
+  }
+  if (articleType === "step_by_step") {
+    return "Schritt fuer Schritt";
+  }
+  if (articleType === "reference") {
+    return "Referenz";
+  }
+  if (articleType === "troubleshooting") {
+    return "Troubleshooting";
+  }
+  if (articleType === "submission_guidance") {
+    return "Einreichhilfe";
+  }
+  return articleType;
+}
+
+export default function HelpPage({
+  scope = "portal",
+  standalone = false,
+  title,
+  description,
+  showHintControls
+}: HelpPageProps) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { permissions } = useAuthorization();
   const { resetAll } = useHelpHints();
   const [search, setSearch] = useState("");
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
-  const normalizedSearch = search.trim().toLowerCase();
+  const normalizedSearch = normalizeSearch(search);
+  const allowAdminContent = scope === "portal" && permissions.canViewAdmin;
+  const showResetControls = showHintControls ?? (scope === "portal" && !standalone);
+  const pageTitle = title ?? getDefaultTitle(scope);
+  const pageDescription = description ?? getDefaultDescription(scope);
 
-  const visibleSections = useMemo(() => {
-    if (!normalizedSearch) {
-      return HELP_SECTIONS;
+  const articles = useMemo(
+    () => getHelpArticlesForScope(scope, allowAdminContent),
+    [allowAdminContent, scope]
+  );
+  const quickLinks = useMemo(
+    () => getHelpQuickLinksForScope(scope, allowAdminContent),
+    [allowAdminContent, scope]
+  );
+  const faqEntries = useMemo(
+    () => getHelpFaqEntriesForScope(scope, allowAdminContent),
+    [allowAdminContent, scope]
+  );
+  const glossaryEntries = useMemo(
+    () => getHelpGlossaryForScope(scope, allowAdminContent),
+    [allowAdminContent, scope]
+  );
+
+  const visibleArticles = useMemo(
+    () => articles.filter((article) => matchesHelpArticle(article, normalizedSearch)),
+    [articles, normalizedSearch]
+  );
+  const visibleFaqEntries = useMemo(
+    () => faqEntries.filter((entry) => matchesHelpFaqEntry(entry, normalizedSearch)),
+    [faqEntries, normalizedSearch]
+  );
+  const visibleGlossaryEntries = useMemo(
+    () => glossaryEntries.filter((entry) => matchesHelpGlossaryEntry(entry, normalizedSearch)),
+    [glossaryEntries, normalizedSearch]
+  );
+
+  const accessibleArticleSlugs = useMemo(
+    () => new Set(articles.map((article) => article.slug)),
+    [articles]
+  );
+
+  const articleGroups = useMemo(
+    () =>
+      HELP_CATEGORIES.map((category) => ({
+        category,
+        articles: visibleArticles.filter((article) => article.categorySlug === category.slug)
+      })).filter((group) => group.articles.length > 0),
+    [visibleArticles]
+  );
+
+  useEffect(() => {
+    if (!location.hash) {
+      return;
     }
-    return HELP_SECTIONS.filter((section) =>
-      getSectionSearchValues(section).some((value) =>
-        value.toLowerCase().includes(normalizedSearch)
-      )
-    );
-  }, [normalizedSearch]);
+
+    const targetId = decodeURIComponent(location.hash.slice(1));
+    const timeoutId = window.setTimeout(() => {
+      const element = document.getElementById(targetId);
+      element?.scrollIntoView({ block: "start" });
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [location.hash, visibleArticles.length, visibleFaqEntries.length, visibleGlossaryEntries.length]);
 
   return (
-    <div className="page">
-      <div className="pageHeader">
-        <div>
-          <Breadcrumbs
-            ariaLabel={t("breadcrumb.label")}
-            items={[
-              { key: "home", label: t("breadcrumb.home") },
-              { key: "help", label: t("breadcrumb.help") }
-            ]}
-          />
-          <h1 className="pageTitle">{t("help.title")}</h1>
+    <div className={standalone ? styles.standalonePage : "page"}>
+      {!standalone ? (
+        <div className="pageHeader">
+          <div>
+            <Breadcrumbs
+              ariaLabel={t("breadcrumb.label")}
+              items={[
+                { key: "home", label: t("breadcrumb.home") },
+                { key: "help", label: t("breadcrumb.help") }
+              ]}
+            />
+            <h1 className="pageTitle">{pageTitle}</h1>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className={styles.standaloneHeader}>
+          <h1 className="pageTitle">{pageTitle}</h1>
+          <p className={`placeholderText ${styles.standaloneLead}`}>{pageDescription}</p>
+        </div>
+      )}
 
       <Card>
-        <div className="helpHeader">
-          <p className="placeholderText">{t("help.description")}</p>
+        <div className={styles.hero}>
+          {standalone ? null : <p className="placeholderText">{pageDescription}</p>}
           <Input
             aria-label={t("help.search.ariaLabel")}
-            placeholder={t("help.search.placeholder")}
+            placeholder={
+              scope === "publicAuth"
+                ? "Login, Passwort, MFA oder Recovery-Code suchen"
+                : t("help.search.placeholder")
+            }
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <div className="helpIndex">
-            <h2 className="sectionTitle">{t("help.index.title")}</h2>
-            <div className="helpIndexLinks">
-              {visibleSections.map((section) => (
-                <a key={section.id} className="helpIndexLink" href={`#${section.id}`}>
-                  {t(section.titleKey)}
-                </a>
+
+          {quickLinks.length > 0 ? (
+            <div className={styles.block}>
+              <h2 className="sectionTitle">Schnelle Einstiege</h2>
+              <div className={styles.quickLinks}>
+                {quickLinks.map((link) => (
+                  <button
+                    key={link.id}
+                    type="button"
+                    className={styles.quickLink}
+                    onClick={() => navigate(getHelpHref(link.articleSlug, scope))}
+                  >
+                    <span className={styles.quickLinkTitle}>{link.label}</span>
+                    <span className="placeholderText">{link.description}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {articleGroups.length > 0 ? (
+            <div className={styles.block}>
+              <h2 className="sectionTitle">Themenbereiche</h2>
+              <div className={styles.categoryLinks}>
+                {articleGroups.map(({ category }) => (
+                  <a
+                    key={category.slug}
+                    className={styles.categoryLink}
+                    href={`#category-${category.slug}`}
+                  >
+                    {category.title}
+                  </a>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </Card>
+
+      {showResetControls ? (
+        <Card>
+          <div className={styles.resetSection}>
+            <h2 className="sectionTitle">{t("help.hints.title")}</h2>
+            <p className="placeholderText">{t("help.hints.description")}</p>
+            <div className={styles.actionRow}>
+              <Button variant="secondary" onClick={() => setResetConfirmOpen(true)}>
+                {t("help.hints.resetAll")}
+              </Button>
+            </div>
+          </div>
+        </Card>
+      ) : null}
+
+      {articleGroups.length > 0 ? (
+        articleGroups.map(({ category, articles: categoryArticles }) => (
+          <section
+            key={category.slug}
+            id={`category-${category.slug}`}
+            className={styles.articleGroup}
+          >
+            <div className={styles.groupHeader}>
+              <h2 className="sectionTitle">{category.title}</h2>
+              <p className="placeholderText">{category.summary}</p>
+            </div>
+
+            {categoryArticles.map((article) => (
+              <Card key={article.slug}>
+                <article id={article.slug} className={styles.article}>
+                  <div className={styles.articleHeader}>
+                    <div>
+                      <h3 className={styles.articleTitle}>{article.title}</h3>
+                      <p className={`placeholderText ${styles.articleSummary}`}>{article.summary}</p>
+                    </div>
+                    <span className={styles.articleType}>{getArticleTypeLabel(article.articleType)}</span>
+                  </div>
+
+                  {article.sections.map((section) => (
+                    <section key={`${article.slug}-${section.heading}`} className={styles.articleSection}>
+                      <h4 className={styles.sectionHeading}>{section.heading}</h4>
+                      {section.ordered ? (
+                        <ol className={styles.list}>
+                          {section.lines.map((line) => (
+                            <li key={line} className="placeholderText">
+                              {line}
+                            </li>
+                          ))}
+                        </ol>
+                      ) : (
+                        <ul className={styles.list}>
+                          {section.lines.map((line) => (
+                            <li key={line} className="placeholderText">
+                              {line}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </section>
+                  ))}
+
+                  {article.relatedArticleSlugs.length > 0 ? (
+                    <div className={styles.relatedBlock}>
+                      <h4 className={styles.sectionHeading}>Verwandte Themen</h4>
+                      <div className={styles.relatedLinks}>
+                        {article.relatedArticleSlugs
+                          .filter((slug) => accessibleArticleSlugs.has(slug))
+                          .map((slug) => {
+                            const relatedArticle = getHelpArticle(slug);
+                            if (!relatedArticle) {
+                              return null;
+                            }
+                            return (
+                              <Button
+                                key={`${article.slug}-${slug}`}
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => navigate(getHelpHref(slug, scope))}
+                              >
+                                {relatedArticle.title}
+                              </Button>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  ) : null}
+                </article>
+              </Card>
+            ))}
+          </section>
+        ))
+      ) : null}
+
+      {visibleFaqEntries.length > 0 ? (
+        <Card>
+          <div className={styles.block}>
+            <h2 className="sectionTitle">FAQ</h2>
+            <div className={styles.faqList}>
+              {visibleFaqEntries.map((entry) => (
+                <section key={entry.id} id={entry.id} className={styles.faqItem}>
+                  <h3 className={styles.faqQuestion}>{entry.question}</h3>
+                  <p className="placeholderText">{entry.answer}</p>
+                </section>
               ))}
             </div>
           </div>
-        </div>
-      </Card>
+        </Card>
+      ) : null}
 
-      <Card>
-        <div className="helpHintsResetSection">
-          <h2 className="sectionTitle">{t("help.hints.title")}</h2>
-          <p className="placeholderText">{t("help.hints.description")}</p>
-          <div className="helpHintsResetActions">
-            <Button variant="secondary" onClick={() => setResetConfirmOpen(true)}>
-              {t("help.hints.resetAll")}
-            </Button>
-          </div>
-        </div>
-      </Card>
-
-      {visibleSections.length ? (
-        visibleSections.map((section) => (
-          <Card key={section.id}>
-            <div className="helpSection" id={section.id}>
-              <h2 className="sectionTitle">{t(section.titleKey)}</h2>
-              {section.descriptionKey ? (
-                <p className="placeholderText">{t(section.descriptionKey)}</p>
-              ) : null}
-              {section.steps?.length ? (
-                <ol className="helpStepList">
-                  {section.steps.map((step) => (
-                    <li key={`${section.id}-${step.titleKey}`} className="helpStepItem">
-                      <h3 className="helpStepTitle">{t(step.titleKey)}</h3>
-                      <p className="placeholderText">{t(step.bodyKey)}</p>
-                    </li>
-                  ))}
-                </ol>
-              ) : null}
-              {section.links?.length ? (
-                <div className="helpLinkRow">
-                  {section.links.map((link) => (
-                    <Button
-                      key={`${section.id}-${link.labelKey}`}
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => navigate(link.to)}
-                    >
-                      {t(link.labelKey)}
-                    </Button>
-                  ))}
-                </div>
-              ) : null}
+      {visibleGlossaryEntries.length > 0 ? (
+        <Card>
+          <div className={styles.block}>
+            <h2 className="sectionTitle">Glossar</h2>
+            <div className={styles.glossaryList}>
+              {visibleGlossaryEntries.map((entry) => (
+                <section key={entry.term} className={styles.glossaryItem}>
+                  <h3 className={styles.glossaryTerm}>{entry.term}</h3>
+                  <p className="placeholderText">{entry.definition}</p>
+                  {entry.synonyms?.length ? (
+                    <p className={styles.synonyms}>
+                      Synonyme: {entry.synonyms.join(", ")}
+                    </p>
+                  ) : null}
+                </section>
+              ))}
             </div>
-          </Card>
-        ))
-      ) : (
+          </div>
+        </Card>
+      ) : null}
+
+      {!articleGroups.length && !visibleFaqEntries.length && !visibleGlossaryEntries.length ? (
         <Card>
           <p className="placeholderText">{t("help.search.empty")}</p>
         </Card>
-      )}
+      ) : null}
 
       <Modal
         open={resetConfirmOpen}

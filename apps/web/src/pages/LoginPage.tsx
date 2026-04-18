@@ -128,6 +128,9 @@ export default function LoginPage() {
             <Link to="/forgot-password" className="authLink">
               {t("auth.login.forgot")}
             </Link>
+            <Link to="/help/auth#security-login-password-mfa" className="authLink">
+              Hilfe zu Login & MFA
+            </Link>
           </div>
         </form>
       </Card>

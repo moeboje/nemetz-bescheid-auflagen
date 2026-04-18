@@ -431,6 +431,31 @@ async function listAuthoritiesSnapshot(prisma: PrismaClient): Promise<Authoritie
   };
 }
 
+async function ensureAuthoritiesBulkMutationAllowed(db: DbClient) {
+  const [projectCount, legalDocumentCount, obligationCount, deadlineCount, taskStateCount] =
+    await Promise.all([
+      db.project.count(),
+      db.legalDocument.count(),
+      db.obligation.count(),
+      db.deadline.count(),
+      db.taskStateEntry.count()
+    ]);
+
+  const blockers = [
+    projectCount > 0 ? "projects" : null,
+    legalDocumentCount > 0 ? "legal documents" : null,
+    obligationCount > 0 ? "obligations" : null,
+    deadlineCount > 0 ? "deadlines" : null,
+    taskStateCount > 0 ? "task state" : null
+  ].filter(isPresent);
+
+  if (blockers.length === 0) {
+    return null;
+  }
+
+  return `Authorities cannot be replaced or deleted while persisted downstream data exists (${blockers.join(", ")}). Import a full package with dependent domains or clear downstream data first.`;
+}
+
 async function replaceAuthoritiesSnapshot(prisma: PrismaClient, snapshot: AuthoritiesSnapshotDto) {
   await prisma.$transaction(async (tx) => {
     await tx.$executeRaw(Prisma.sql`DELETE FROM "AuthorityContact"`);
@@ -869,6 +894,12 @@ export function createAuthoritiesRouter(prisma: PrismaClient) {
         return;
       }
 
+      const mutationConflict = await ensureAuthoritiesBulkMutationAllowed(prisma);
+      if (mutationConflict) {
+        res.status(409).json({ ok: false, message: mutationConflict });
+        return;
+      }
+
       const snapshot = normalizeAuthoritiesSnapshot(req.body);
       await replaceAuthoritiesSnapshot(prisma, snapshot);
 
@@ -887,6 +918,12 @@ export function createAuthoritiesRouter(prisma: PrismaClient) {
 
       const user = await requireAdminRouteUser(req, res, prisma);
       if (!user) {
+        return;
+      }
+
+      const mutationConflict = await ensureAuthoritiesBulkMutationAllowed(prisma);
+      if (mutationConflict) {
+        res.status(409).json({ ok: false, message: mutationConflict });
         return;
       }
 

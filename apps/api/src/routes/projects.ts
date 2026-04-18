@@ -6,19 +6,6 @@ import {
 } from "@prisma/client";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import {
-  DEFAULT_PROJECT_SUBMISSION_PROFILE_KEY,
-  INVALID_SUBMISSION_PROFILE_KEYS_MESSAGE,
-  MISSING_SUBMISSION_PROFILE_BASE_MESSAGE,
-  MULTIPLE_SUBMISSION_PROFILE_BASES_MESSAGE,
-  buildSubmissionProfileDtos,
-  ensureDefaultSubmissionProfiles,
-  listAvailableSubmissionProfiles,
-  resolveSubmissionProfileKeysFromUnknown,
-  validateSubmissionProfileKeys,
-  type SubmissionProfileDto,
-  type SubmissionProfileKey
-} from "../projectSubmissionProfiles.js";
-import {
   applyNoStoreHeaders,
   requireAdminRouteUser,
   requireInternalRouteUser
@@ -37,8 +24,13 @@ const PROJECT_STATUS_VALUES = [
 
 type ProjectStatus = (typeof PROJECT_STATUS_VALUES)[number];
 
+const PROJECT_SUBMISSION_TYPE_VALUES = ["GEWERBE", "AWG", "UVP_UVE"] as const;
+
+type ProjectSubmissionType = (typeof PROJECT_SUBMISSION_TYPE_VALUES)[number];
+
 const DEFAULT_PROJECT_STATUS: ProjectStatus = "DRAFT";
 const INVALID_PROJECT_STATUS_MESSAGE = `Invalid project status. Allowed values: ${PROJECT_STATUS_VALUES.join(", ")}.`;
+const INVALID_PROJECT_SUBMISSION_TYPE_MESSAGE = `Invalid project submission type. Allowed values: ${PROJECT_SUBMISSION_TYPE_VALUES.join(", ")}.`;
 
 type ProjectAttachmentDto = {
   id: string;
@@ -72,8 +64,7 @@ type ProjectDto = {
   id: string;
   title: string;
   status?: ProjectStatus;
-  submissionProfileKeys: SubmissionProfileKey[];
-  submissionProfiles: SubmissionProfileDto[];
+  submissionType?: ProjectSubmissionType;
   shortDescription?: string;
   authorityRef?: string;
   companyId: string;
@@ -175,6 +166,27 @@ function normalizeProjectStatus(value: unknown) {
   }
 
   throw new Error(INVALID_PROJECT_STATUS_MESSAGE);
+}
+
+function normalizeProjectSubmissionType(value: unknown) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+
+  if (typeof value !== "string") {
+    throw new Error(INVALID_PROJECT_SUBMISSION_TYPE_MESSAGE);
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (PROJECT_SUBMISSION_TYPE_VALUES.includes(trimmed as ProjectSubmissionType)) {
+    return trimmed as ProjectSubmissionType;
+  }
+
+  throw new Error(INVALID_PROJECT_SUBMISSION_TYPE_MESSAGE);
 }
 
 function toDateValue(value?: string) {
@@ -495,12 +507,7 @@ function normalizeProjectDto(value: unknown, index: number): ProjectDto | null {
   const updatedAt =
     typeof row.updatedAt === "string" && row.updatedAt.trim() ? row.updatedAt : createdAt;
   const status = normalizeProjectStatus(row.status);
-  const submissionProfileKeys = validateSubmissionProfileKeys(
-    resolveSubmissionProfileKeysFromUnknown({
-      submissionProfileKeys: row.submissionProfileKeys,
-      submissionProfiles: row.submissionProfiles
-    })
-  );
+  const submissionType = normalizeProjectSubmissionType(row.submissionType);
 
   const participantUserIds = normalizeParticipantUserIds({
     internalParticipants: row.internalParticipants,
@@ -536,8 +543,7 @@ function normalizeProjectDto(value: unknown, index: number): ProjectDto | null {
     id: row.id,
     title: row.title,
     status,
-    submissionProfileKeys,
-    submissionProfiles: buildSubmissionProfileDtos(submissionProfileKeys),
+    submissionType,
     shortDescription: row.shortDescription ?? "",
     authorityRef: row.authorityRef ?? "",
     companyId: row.companyId,
@@ -577,8 +583,7 @@ function normalizeProjectsSnapshot(value: unknown): ProjectDto[] {
 
 function toProjectDto(
   project: DbProject,
-  status?: ProjectStatus,
-  submissionProfiles: SubmissionProfileDto[] = []
+  status?: ProjectStatus
 ): ProjectDto {
   const participantUserIds = normalizeParticipantUserIds({
     participantUserIds: project.participantUserIds,
@@ -614,8 +619,7 @@ function toProjectDto(
     id: project.id,
     title: project.title,
     status,
-    submissionProfileKeys: submissionProfiles.map((profile) => profile.key),
-    submissionProfiles,
+    submissionType: normalizeProjectSubmissionType(project.submissionType),
     shortDescription: project.shortDescription ?? "",
     authorityRef: project.authorityRef ?? "",
     companyId: project.companyId,
@@ -642,6 +646,7 @@ function toProjectCreateInput(project: ProjectDto): Prisma.ProjectUncheckedCreat
   return {
     id: project.id,
     title: project.title,
+    submissionType: project.submissionType ?? null,
     shortDescription: project.shortDescription || null,
     authorityRef: project.authorityRef || null,
     companyId: project.companyId,
@@ -667,6 +672,7 @@ function toProjectCreateInput(project: ProjectDto): Prisma.ProjectUncheckedCreat
 function toProjectUpdateInput(project: ProjectDto): Prisma.ProjectUncheckedUpdateInput {
   return {
     title: project.title,
+    submissionType: project.submissionType ?? null,
     shortDescription: project.shortDescription || null,
     authorityRef: project.authorityRef || null,
     companyId: project.companyId,
@@ -710,57 +716,6 @@ async function readProjectStatus(db: DbClient, projectId: string) {
   return statusByProjectId.get(projectId);
 }
 
-async function readProjectSubmissionProfileMap(db: DbClient, projectIds: string[]) {
-  const submissionProfilesByProjectId = new Map<string, SubmissionProfileDto[]>();
-
-  if (projectIds.length === 0) {
-    return submissionProfilesByProjectId;
-  }
-
-  const rows = await db.$queryRaw<
-    Array<{
-      projectId: string;
-      profileKey: string;
-      label: string;
-      profileType: string;
-      isActive: boolean;
-    }>
-  >(
-    Prisma.sql`
-      SELECT
-        assignment."projectId",
-        assignment."profileKey",
-        profile."label",
-        profile."profileType"::text AS "profileType",
-        profile."isActive"
-      FROM "ProjectSubmissionProfileAssignment" assignment
-      JOIN "SubmissionProfile" profile
-        ON profile."key" = assignment."profileKey"
-      WHERE assignment."projectId" IN (${Prisma.join(projectIds)})
-      ORDER BY profile."sortOrder" ASC, assignment."profileKey" ASC
-    `
-  );
-
-  rows.forEach((row) => {
-    const key = row.profileKey as SubmissionProfileKey;
-    const current = submissionProfilesByProjectId.get(row.projectId) ?? [];
-    if (current.some((entry) => entry.key === key)) {
-      return;
-    }
-
-    current.push({
-      key,
-      label: row.label,
-      profileType:
-        row.profileType === "BASE" || row.profileType === "ADDON" ? row.profileType : "ADDON",
-      isActive: row.isActive
-    });
-    submissionProfilesByProjectId.set(row.projectId, current);
-  });
-
-  return submissionProfilesByProjectId;
-}
-
 async function updateProjectStatus(
   db: DbClient,
   projectId: string,
@@ -768,31 +723,6 @@ async function updateProjectStatus(
 ) {
   await db.$executeRaw(
     Prisma.sql`UPDATE "Project" SET "status" = ${status ?? null}::"ProjectStatus" WHERE "id" = ${projectId}`
-  );
-}
-
-async function syncProjectSubmissionProfiles(
-  db: DbClient,
-  projectId: string,
-  submissionProfileKeys: SubmissionProfileKey[]
-) {
-  const normalizedKeys = validateSubmissionProfileKeys(submissionProfileKeys);
-  await db.$executeRaw(
-    Prisma.sql`DELETE FROM "ProjectSubmissionProfileAssignment" WHERE "projectId" = ${projectId}`
-  );
-
-  if (normalizedKeys.length === 0) {
-    return;
-  }
-
-  const values = Prisma.join(
-    normalizedKeys.map((profileKey) => Prisma.sql`(${projectId}, ${profileKey}, NOW(), NOW())`)
-  );
-  await db.$executeRaw(
-    Prisma.sql`
-      INSERT INTO "ProjectSubmissionProfileAssignment" ("projectId", "profileKey", "createdAt", "updatedAt")
-      VALUES ${values}
-    `
   );
 }
 
@@ -805,19 +735,9 @@ async function listProjectsSnapshot(db: DbClient): Promise<ProjectDto[]> {
     db,
     projects.map((project) => project.id)
   );
-  const submissionProfilesByProjectId = await readProjectSubmissionProfileMap(
-    db,
-    projects.map((project) => project.id)
-  );
 
   return sanitizeProjectRelations(
-    projects.map((project) =>
-      toProjectDto(
-        project,
-        statusByProjectId.get(project.id),
-        submissionProfilesByProjectId.get(project.id) ?? []
-      )
-    )
+    projects.map((project) => toProjectDto(project, statusByProjectId.get(project.id)))
   ).projects;
 }
 
@@ -836,8 +756,7 @@ async function findProjectSnapshotById(db: DbClient, id: string) {
   }
 
   const status = await readProjectStatus(db, id);
-  const submissionProfilesByProjectId = await readProjectSubmissionProfileMap(db, [id]);
-  return toProjectDto(project, status, submissionProfilesByProjectId.get(id) ?? []);
+  return toProjectDto(project, status);
 }
 
 async function listProjectIds(db: DbClient) {
@@ -906,7 +825,6 @@ async function replaceProjectsSnapshot(prisma: PrismaClient, snapshot: ProjectDt
         update: toProjectUpdateInput(project)
       });
       await updateProjectStatus(tx, project.id, project.status);
-      await syncProjectSubmissionProfiles(tx, project.id, project.submissionProfileKeys);
     }
   });
 }
@@ -1156,8 +1074,6 @@ async function normalizeProjectForWrite(
     input.internalParticipants,
     participantUserIds
   );
-  const submissionProfileKeys = validateSubmissionProfileKeys(input.submissionProfileKeys);
-
   const dependencyValidationProjects = currentProjects.some((project) => project.id === input.id)
     ? currentProjects
     : [...currentProjects, { id: input.id, dependsOnProjectIds: [] }];
@@ -1173,8 +1089,7 @@ async function normalizeProjectForWrite(
     project: {
       ...input,
       status: input.status,
-      submissionProfileKeys,
-      submissionProfiles: buildSubmissionProfileDtos(submissionProfileKeys),
+      submissionType: input.submissionType,
       companyId: relationValidation.companyId,
       siteId: relationValidation.siteId,
       facilityId: relationValidation.facilityId,
@@ -1213,30 +1128,15 @@ export function createProjectsRouter(prisma: PrismaClient) {
 
       res.json(await listProjectsSnapshot(prisma));
     } catch (error) {
-      if (error instanceof Error && error.message === INVALID_PROJECT_STATUS_MESSAGE) {
+      if (
+        error instanceof Error &&
+        [INVALID_PROJECT_STATUS_MESSAGE, INVALID_PROJECT_SUBMISSION_TYPE_MESSAGE].includes(
+          error.message
+        )
+      ) {
         res.status(400).json({ ok: false, message: error.message });
         return;
       }
-      next(error);
-    }
-  });
-
-  router.get("/projects/submission-profiles", async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      applyNoStoreHeaders(res);
-
-      const user = await requireInternalRouteUser(req, res, prisma);
-      if (!user) {
-        return;
-      }
-
-      await ensureDefaultSubmissionProfiles(prisma);
-
-      res.json({
-        ok: true,
-        profiles: await listAvailableSubmissionProfiles(prisma)
-      });
-    } catch (error) {
       next(error);
     }
   });
@@ -1261,7 +1161,12 @@ export function createProjectsRouter(prisma: PrismaClient) {
         project
       });
     } catch (error) {
-      if (error instanceof Error && error.message === INVALID_PROJECT_STATUS_MESSAGE) {
+      if (
+        error instanceof Error &&
+        [INVALID_PROJECT_STATUS_MESSAGE, INVALID_PROJECT_SUBMISSION_TYPE_MESSAGE].includes(
+          error.message
+        )
+      ) {
         res.status(400).json({ ok: false, message: error.message });
         return;
       }
@@ -1283,19 +1188,14 @@ export function createProjectsRouter(prisma: PrismaClient) {
       const title = ensureStringField(req.body?.title);
       const companyId = ensureStringField(req.body?.companyId);
       const status = normalizeProjectStatus(req.body?.status) ?? DEFAULT_PROJECT_STATUS;
-      const submissionProfileKeys = hasOwn(req.body, "submissionProfileKeys")
-        ? resolveSubmissionProfileKeysFromUnknown({
-            submissionProfileKeys: req.body?.submissionProfileKeys,
-            submissionProfiles: req.body?.submissionProfiles
-          })
-        : [DEFAULT_PROJECT_SUBMISSION_PROFILE_KEY];
+      const submissionType = hasOwn(req.body, "submissionType")
+        ? normalizeProjectSubmissionType(req.body?.submissionType)
+        : undefined;
 
       if (!title || !companyId) {
         res.status(400).json({ ok: false, message: "title and companyId are required." });
         return;
       }
-
-      await ensureDefaultSubmissionProfiles(prisma);
 
       const currentProjects = await listProjectsSnapshot(prisma);
       const normalized = await normalizeProjectForWrite(
@@ -1304,8 +1204,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
           id: projectId,
           title,
           status,
-          submissionProfileKeys,
-          submissionProfiles: buildSubmissionProfileDtos(submissionProfileKeys),
+          submissionType,
           shortDescription: ensureStringField(req.body?.shortDescription),
           authorityRef: ensureStringField(req.body?.authorityRef),
           companyId,
@@ -1364,27 +1263,19 @@ export function createProjectsRouter(prisma: PrismaClient) {
           data: toProjectCreateInput(normalized.project)
         });
         await updateProjectStatus(tx, created.id, normalized.project.status);
-        await syncProjectSubmissionProfiles(tx, created.id, normalized.project.submissionProfileKeys);
         return created;
       });
 
       res.status(201).json({
         ok: true,
-        project: toProjectDto(
-          project,
-          normalized.project.status,
-          normalized.project.submissionProfiles
-        )
+        project: toProjectDto(project, normalized.project.status)
       });
     } catch (error) {
       if (
         error instanceof Error &&
-        [
-          INVALID_PROJECT_STATUS_MESSAGE,
-          INVALID_SUBMISSION_PROFILE_KEYS_MESSAGE,
-          MISSING_SUBMISSION_PROFILE_BASE_MESSAGE,
-          MULTIPLE_SUBMISSION_PROFILE_BASES_MESSAGE
-        ].includes(error.message)
+        [INVALID_PROJECT_STATUS_MESSAGE, INVALID_PROJECT_SUBMISSION_TYPE_MESSAGE].includes(
+          error.message
+        )
       ) {
         res.status(400).json({ ok: false, message: error.message });
         return;
@@ -1413,15 +1304,9 @@ export function createProjectsRouter(prisma: PrismaClient) {
             participantUserIds: req.body?.participantUserIds
           })
         : existing.participantUserIds;
-      const submissionProfileKeys =
-        hasOwn(req.body, "submissionProfileKeys") || hasOwn(req.body, "submissionProfiles")
-          ? resolveSubmissionProfileKeysFromUnknown({
-              submissionProfileKeys: req.body?.submissionProfileKeys,
-              submissionProfiles: req.body?.submissionProfiles
-            })
-          : existing.submissionProfileKeys;
-
-      await ensureDefaultSubmissionProfiles(prisma);
+      const submissionType = hasOwn(req.body, "submissionType")
+        ? normalizeProjectSubmissionType(req.body?.submissionType)
+        : existing.submissionType;
 
       const merged: ProjectDto = {
         ...existing,
@@ -1429,8 +1314,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
         status: hasOwn(req.body, "status")
           ? normalizeProjectStatus(req.body?.status)
           : existing.status,
-        submissionProfileKeys,
-        submissionProfiles: buildSubmissionProfileDtos(submissionProfileKeys),
+        submissionType,
         shortDescription: hasOwn(req.body, "shortDescription")
           ? ensureStringField(req.body?.shortDescription)
           : existing.shortDescription ?? "",
@@ -1517,27 +1401,19 @@ export function createProjectsRouter(prisma: PrismaClient) {
           data: toProjectUpdateInput(normalized.project)
         });
         await updateProjectStatus(tx, existing.id, normalized.project.status);
-        await syncProjectSubmissionProfiles(tx, existing.id, normalized.project.submissionProfileKeys);
         return nextProject;
       });
 
       res.json({
         ok: true,
-        project: toProjectDto(
-          updated,
-          normalized.project.status,
-          normalized.project.submissionProfiles
-        )
+        project: toProjectDto(updated, normalized.project.status)
       });
     } catch (error) {
       if (
         error instanceof Error &&
-        [
-          INVALID_PROJECT_STATUS_MESSAGE,
-          INVALID_SUBMISSION_PROFILE_KEYS_MESSAGE,
-          MISSING_SUBMISSION_PROFILE_BASE_MESSAGE,
-          MULTIPLE_SUBMISSION_PROFILE_BASES_MESSAGE
-        ].includes(error.message)
+        [INVALID_PROJECT_STATUS_MESSAGE, INVALID_PROJECT_SUBMISSION_TYPE_MESSAGE].includes(
+          error.message
+        )
       ) {
         res.status(400).json({ ok: false, message: error.message });
         return;
@@ -1561,7 +1437,6 @@ export function createProjectsRouter(prisma: PrismaClient) {
         return;
       }
       const status = await readProjectStatus(prisma, existing.id);
-      const submissionProfilesByProjectId = await readProjectSubmissionProfileMap(prisma, [existing.id]);
 
       const updated = existing.isArchived
         ? existing
@@ -1577,7 +1452,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        project: toProjectDto(updated, status, submissionProfilesByProjectId.get(existing.id) ?? [])
+        project: toProjectDto(updated, status)
       });
     } catch (error) {
       next(error);
@@ -1599,7 +1474,6 @@ export function createProjectsRouter(prisma: PrismaClient) {
         return;
       }
       const status = await readProjectStatus(prisma, existing.id);
-      const submissionProfilesByProjectId = await readProjectSubmissionProfileMap(prisma, [existing.id]);
 
       const updated = !existing.isArchived && !existing.archivedAt
         ? existing
@@ -1615,7 +1489,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        project: toProjectDto(updated, status, submissionProfilesByProjectId.get(existing.id) ?? [])
+        project: toProjectDto(updated, status)
       });
     } catch (error) {
       next(error);
@@ -1637,19 +1511,15 @@ export function createProjectsRouter(prisma: PrismaClient) {
       } catch (error) {
         if (
           error instanceof Error &&
-          [
-            INVALID_PROJECT_STATUS_MESSAGE,
-            INVALID_SUBMISSION_PROFILE_KEYS_MESSAGE,
-            MISSING_SUBMISSION_PROFILE_BASE_MESSAGE,
-            MULTIPLE_SUBMISSION_PROFILE_BASES_MESSAGE
-          ].includes(error.message)
+          [INVALID_PROJECT_STATUS_MESSAGE, INVALID_PROJECT_SUBMISSION_TYPE_MESSAGE].includes(
+            error.message
+          )
         ) {
           res.status(400).json({ ok: false, message: error.message });
           return;
         }
         throw error;
       }
-      await ensureDefaultSubmissionProfiles(prisma);
       const normalizedProjects: ProjectDto[] = [];
 
       for (const project of snapshot) {
@@ -1722,12 +1592,9 @@ export function createProjectsRouter(prisma: PrismaClient) {
       } catch (error) {
         if (
           error instanceof Error &&
-          [
-            INVALID_PROJECT_STATUS_MESSAGE,
-            INVALID_SUBMISSION_PROFILE_KEYS_MESSAGE,
-            MISSING_SUBMISSION_PROFILE_BASE_MESSAGE,
-            MULTIPLE_SUBMISSION_PROFILE_BASES_MESSAGE
-          ].includes(error.message)
+          [INVALID_PROJECT_STATUS_MESSAGE, INVALID_PROJECT_SUBMISSION_TYPE_MESSAGE].includes(
+            error.message
+          )
         ) {
           res.status(400).json({ ok: false, message: error.message });
           return;
@@ -1739,7 +1606,6 @@ export function createProjectsRouter(prisma: PrismaClient) {
         return;
       }
 
-      await ensureDefaultSubmissionProfiles(prisma);
       const normalizedProjects: ProjectDto[] = [];
       for (const project of snapshot) {
         const normalized = await normalizeProjectForWrite(prisma, project, normalizedProjects);

@@ -499,6 +499,17 @@ async function listScopesSnapshot(prisma: PrismaClient): Promise<ScopesSnapshotD
   };
 }
 
+async function ensureScopesBulkMutationAllowed(db: DbClient) {
+  const projectCount = await db.project.count();
+  const blockers = [projectCount > 0 ? "projects" : null].filter(isPresent);
+
+  if (blockers.length === 0) {
+    return null;
+  }
+
+  return `Scopes cannot be replaced or deleted while persisted scope-dependent data exists (${blockers.join(", ")}). Import a full package with dependent domains or clear persisted projects first.`;
+}
+
 async function replaceScopesSnapshot(prisma: PrismaClient, snapshot: ScopesSnapshotDto) {
   await prisma.$transaction(async (tx) => {
     await tx.$executeRaw(Prisma.sql`DELETE FROM "Facility"`);
@@ -1016,6 +1027,12 @@ export function createScopesRouter(prisma: PrismaClient) {
         return;
       }
 
+      const mutationConflict = await ensureScopesBulkMutationAllowed(prisma);
+      if (mutationConflict) {
+        res.status(409).json({ ok: false, message: mutationConflict });
+        return;
+      }
+
       const snapshot = normalizeScopesSnapshot(req.body);
       await replaceScopesSnapshot(prisma, snapshot);
 
@@ -1034,6 +1051,12 @@ export function createScopesRouter(prisma: PrismaClient) {
 
       const user = await requireAdminRouteUser(req, res, prisma);
       if (!user) {
+        return;
+      }
+
+      const mutationConflict = await ensureScopesBulkMutationAllowed(prisma);
+      if (mutationConflict) {
+        res.status(409).json({ ok: false, message: mutationConflict });
         return;
       }
 

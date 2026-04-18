@@ -295,6 +295,26 @@
 - Nicht-Ziele:
 - keine Checklisten-Engine, keine Profil-/Modul-Logik, keine UVP-Speziallogik, keine Dokumentpflichtlogik, keine Aufgaben-/Fristen-Automatik, keine neue API-Architektur.
 
+## 2o. Facherweiterung 2026-04-18 Phase C1b Projekteinreichtyp
+- Dies ist keine neue Persistenzphase.
+- Ziel dieses Laufs ist ausschließlich die additive Einführung eines einzelnen fachlichen Einreichtyps auf der bereits serverseitig persistierten Domäne `projects`.
+- Verbindliche Produktregel:
+- `Project.status` aus C1a bleibt unverändert der fachliche Bearbeitungs- und Verfahrensstatus.
+- `Project.submissionType` ist ein davon getrenntes skalare Fachattribut mit genau einem Wert pro Projekt in Version 1.
+- `isArchived` und `archivedAt` bleiben unverändert die einzige Archivierungslogik; Archivierung wird nicht aus `status` oder `submissionType` abgeleitet.
+- Zulässiger Umfang:
+- `Project` in Prisma, API, Store, Import/Export und bestehender Projekt-UI minimal-invasiv um `submissionType` erweitern.
+- erlaubte Werte in C1b: `GEWERBE`, `AWG`, `UVP_UVE`.
+- Legacy-Bestände ohne Einreichtyp bleiben fachlich neutral und werden als "nicht gesetzt" behandelt.
+- Neue Projekte erhalten keinen stillen Default; der Einreichtyp wird im bestehenden Projekt-Modal bewusst gewählt.
+- Projektliste, Projektdetail und Projekt-Modal zeigen den Einreichtyp; ein additiver Filter ist nur zulässig, wenn er ohne UX-Umbau bleibt.
+- Import/Export, Demo- und Reset-Flows für Projekte bleiben kompatibel und führen das Feld mit.
+- Nicht-Ziele:
+- kein Mehrfachprofil-System.
+- keine Checklisten-Engine.
+- keine Dokumentpflicht-, Aufgaben-, Fristen- oder Statusautomatik aus dem Einreichtyp.
+- keine AWG-/UVP-spezifischen Vorlagen oder Zusatzmodule in diesem Lauf.
+
 ## 3. Ist-Zustand
 - Browser-persistiert fachlich aktiv ist aktuell nur noch `taskState`; zusätzliche UI-/Recovery-Daten liegen weiterhin via `apps/web/src/state/persistence.ts` lokal.
 - `ScopesStore`, `AuthoritiesStore`, `ProjectsStore`, `LegalDocsStore`, `ObligationsStore` und `DeadlinesStore` sind bereits API-backed und löschen ihre alten Domänen-Storage-Keys aktiv.

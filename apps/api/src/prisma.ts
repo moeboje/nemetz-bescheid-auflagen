@@ -1,6 +1,8 @@
 import { PrismaClient } from "@prisma/client";
+import { loadProjectEnvFile, resolveDatabaseUrl } from "./config.js";
 
-process.env.DATABASE_URL = process.env.DATABASE_URL || "file:./dev.db";
+loadProjectEnvFile();
+process.env.DATABASE_URL = resolveDatabaseUrl(process.env);
 
 export const prisma = new PrismaClient();
 

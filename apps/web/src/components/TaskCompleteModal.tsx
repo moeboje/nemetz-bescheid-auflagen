@@ -87,6 +87,7 @@ export default function TaskCompleteModal({
       onClose={onClose}
       closeAriaLabel={t("modal.close")}
       className="taskCompleteModal"
+      mobileFullscreen
       header={t("tasks.complete.title")}
       footer={
         <div className="modalFooter taskCompleteModalFooter">

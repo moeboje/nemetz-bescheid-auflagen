@@ -173,6 +173,7 @@ export default function ScopeInlineCreateModal({
       open={open}
       onClose={onCancel}
       closeAriaLabel={t("modal.close")}
+      mobileFullscreen
       header={
         mode === "SITE"
           ? t("projects.inlineCreate.site.title")

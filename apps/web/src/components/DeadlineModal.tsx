@@ -153,6 +153,7 @@ export default function DeadlineModal({
       open={open}
       onClose={onClose}
       closeAriaLabel={t("modal.close")}
+      mobileFullscreen
       header={deadline ? t("deadlines.edit") : t("deadlines.new")}
       footer={
         <div className="modalFooter">

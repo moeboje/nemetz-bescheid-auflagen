@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import { authenticator } from "otplib";
 import { createApp } from "./app.js";
-import type { AppConfig } from "./config.js";
+import { resolveDatabaseUrl, type AppConfig } from "./config.js";
 import { prisma } from "./prisma.js";
 import { hashPassword } from "./security.js";
 
@@ -115,7 +115,7 @@ describe("Auth API", () => {
   before(async () => {
     const config: AppConfig = {
       port: 0,
-      databaseUrl: process.env.DATABASE_URL || "file:./test.db",
+      databaseUrl: resolveDatabaseUrl(process.env, "test"),
       appOrigin: "http://localhost:5173",
       sessionSecret: "test-secret",
       nodeEnv: "test",

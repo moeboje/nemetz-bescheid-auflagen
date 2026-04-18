@@ -47,3 +47,79 @@
 .right {
   text-align: right;
 }
+
+@media (max-width: 760px) {
+  .wrapper {
+    overflow: visible;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .table,
+  .table tbody,
+  .row,
+  .th,
+  .td,
+  .actions {
+    display: block;
+    width: 100%;
+  }
+
+  .table thead {
+    display: none;
+  }
+
+  .table tbody {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .row {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    box-shadow: var(--shadow-sm);
+    padding: var(--space-3);
+  }
+
+  .td {
+    padding: 0;
+    border-bottom: none;
+  }
+
+  .td + .td {
+    margin-top: var(--space-3);
+  }
+
+  .td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: var(--space-1);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .td[data-label=""]::before {
+    content: none;
+    display: none;
+    margin-bottom: 0;
+  }
+
+  .actions {
+    padding: 0;
+    margin-top: var(--space-3);
+    border-top: 1px solid var(--color-border);
+    padding-top: var(--space-3);
+    text-align: left;
+  }
+
+  .left,
+  .center,
+  .right {
+    text-align: left;
+  }
+}

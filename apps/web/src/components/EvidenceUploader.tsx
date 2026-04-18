@@ -379,6 +379,7 @@ export default function EvidenceUploader({
         open={Boolean(previewAttachment)}
         onClose={closePreview}
         closeAriaLabel={t("modal.close")}
+        mobileFullscreen
         header={previewAttachment?.filename ?? t("common.preview")}
         footer={
           <div className="modalFooter">

@@ -531,6 +531,7 @@ export default function LegalDocModal({
         open={open}
         onClose={onClose}
         closeAriaLabel={t("modal.close")}
+        mobileFullscreen
         header={legalDoc ? t("legalDocs.modal.editTitle") : t("legalDocs.modal.title")}
         footer={
           <div className="modalFooter">

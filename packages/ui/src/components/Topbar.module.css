@@ -12,3 +12,14 @@
   align-items: center;
   gap: var(--space-4);
 }
+
+@media (max-width: 900px) {
+  .topbar {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .right {
+    flex: 1 1 100%;
+  }
+}

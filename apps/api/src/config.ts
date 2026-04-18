@@ -20,6 +20,10 @@ export type AppConfig = {
   documentsMaxUploadBytes: number;
 };
 
+export const DEFAULT_DATABASE_URL = "postgresql://portal:portalpw@localhost:5433/portaldev?schema=public";
+export const DEFAULT_TEST_DATABASE_URL = "postgresql://portal:portalpw@localhost:5433/portaldev?schema=test";
+const DEFAULT_TEST_SCHEMA = "test";
+
 let hasLoadedEnvFile = false;
 
 export function loadProjectEnvFile() {
@@ -81,6 +85,66 @@ function normalizeBasePath(value: string | undefined) {
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
+function parsePostgresUrl(value: string, sourceName: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${sourceName} must be a valid PostgreSQL URL.`);
+  }
+
+  if (parsed.protocol !== "postgresql:" && parsed.protocol !== "postgres:") {
+    throw new Error(`${sourceName} must use the PostgreSQL protocol.`);
+  }
+
+  return parsed;
+}
+
+function assertSafeTestDatabaseUrl(value: string, sourceName: string) {
+  const parsed = parsePostgresUrl(value, sourceName);
+  const schema = parsed.searchParams.get("schema")?.trim().toLowerCase();
+
+  if (!schema || schema === "public") {
+    throw new Error(
+      `${sourceName} must point to a dedicated non-public PostgreSQL schema when NODE_ENV=test.`
+    );
+  }
+
+  return value;
+}
+
+function deriveSafeTestDatabaseUrl(databaseUrl: string) {
+  const parsed = parsePostgresUrl(databaseUrl, "DATABASE_URL");
+  parsed.searchParams.set("schema", DEFAULT_TEST_SCHEMA);
+  return parsed.toString();
+}
+
+export function resolveDatabaseUrl(
+  env: NodeJS.ProcessEnv = process.env,
+  nodeEnv: AppConfig["nodeEnv"] | string | undefined = env.NODE_ENV
+) {
+  if (nodeEnv === "test") {
+    const explicitTestDatabaseUrl = env.TEST_DATABASE_URL?.trim();
+    if (explicitTestDatabaseUrl) {
+      return assertSafeTestDatabaseUrl(explicitTestDatabaseUrl, "TEST_DATABASE_URL");
+    }
+
+    const explicitDatabaseUrl = env.DATABASE_URL?.trim();
+    if (explicitDatabaseUrl) {
+      return deriveSafeTestDatabaseUrl(explicitDatabaseUrl);
+    }
+
+    return DEFAULT_TEST_DATABASE_URL;
+  }
+
+  const explicitDatabaseUrl = env.DATABASE_URL?.trim();
+  if (explicitDatabaseUrl) {
+    return explicitDatabaseUrl;
+  }
+
+  return DEFAULT_DATABASE_URL;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   loadProjectEnvFile();
 
@@ -88,7 +152,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   const config: AppConfig = {
     port: toInteger(env.PORT, 4000),
-    databaseUrl: env.DATABASE_URL?.trim() || "file:./dev.db",
+    databaseUrl: resolveDatabaseUrl(env, nodeEnv),
     appOrigin: env.APP_ORIGIN?.trim() || "http://localhost:5173",
     sessionSecret: env.SESSION_SECRET?.trim() || "dev-only-change-me",
     nodeEnv,

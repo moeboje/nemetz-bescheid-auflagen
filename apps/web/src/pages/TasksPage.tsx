@@ -15,6 +15,7 @@ import { t } from "../i18n";
 import { useRuntimeConfig } from "../config/runtimeConfig";
 import { EyeIcon } from "../components/Icons";
 import HelpHintCard from "../components/HelpHintCard";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { exportTasksToIcs } from "../services/icsExport";
 import { useTasks } from "../state/TasksStore";
 import { useProjects } from "../state/ProjectsStore";
@@ -259,7 +260,7 @@ export default function TasksPage() {
             "helpHints.tasks.bullets.2",
             "helpHints.tasks.bullets.3"
           ]}
-          link={{ labelKey: "common.openHelp", to: "/help#workflows" }}
+          link={{ labelKey: "common.openHelp", to: getHelpHref(HELP_CONTEXT_SLUGS.tasks) }}
         />
       ) : null}
 

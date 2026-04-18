@@ -13,6 +13,7 @@ import { t } from "../i18n";
 import { EyeIcon, EditIcon } from "../components/Icons";
 import HelpHintCard from "../components/HelpHintCard";
 import { useRuntimeConfig } from "../config/runtimeConfig";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
@@ -164,7 +165,7 @@ export default function LegalDocsPage() {
             "helpHints.legalDocs.bullets.2",
             "helpHints.legalDocs.bullets.3"
           ]}
-          link={{ labelKey: "common.openHelp", to: "/help#workflows" }}
+          link={{ labelKey: "common.openHelp", to: getHelpHref(HELP_CONTEXT_SLUGS.legalDocsList) }}
         />
       ) : null}
 

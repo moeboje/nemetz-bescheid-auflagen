@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Button, Card, Input, Select } from "@nemetz/ui";
 import { ApiError } from "../api/client";
 import { confirmMfaTotp, disableMfaTotp, getMfaStatus, setupMfaTotp, type MfaStatus } from "../api/auth";
+import HelpHintCard from "../components/HelpHintCard";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 
 type DisableMethod = "code" | "recovery" | "password";
 
@@ -163,6 +165,20 @@ export default function SecuritySettingsPage() {
       <div className="pageHeader">
         <h1 className="pageTitle">Sicherheit</h1>
       </div>
+
+      <HelpHintCard
+        hintId="hint.securitySettings"
+        title="MFA, Recovery-Codes und Sicherheitsoptionen"
+        bullets={[
+          "Recovery-Codes sind fuer Notfaelle gedacht und sollten getrennt vom Alltagsgeraet aufbewahrt werden.",
+          "Passwort-Reset, MFA-Setup und MFA-Deaktivierung sind unterschiedliche Prozesse.",
+          "Wenn Codes oder Links abgelaufen sind, starten Sie den jeweiligen Vorgang bewusst neu."
+        ]}
+        link={{
+          label: "Passenden Hilfeartikel oeffnen",
+          to: getHelpHref(HELP_CONTEXT_SLUGS.security)
+        }}
+      />
 
       {isLoading ? (
         <Card>
