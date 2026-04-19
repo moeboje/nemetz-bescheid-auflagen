@@ -38,13 +38,15 @@ function sortRoles(rows: AdminRole[]) {
 export function RolesProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const [roles, setRoles] = useState<AdminRole[]>([]);
+  const canManageRoles =
+    Array.isArray(user?.effectivePermissions) && user.effectivePermissions.includes("roles.manage");
 
   const loadRoles = useCallback(async (query: AdminRolesQuery = {}) => {
     return listAdminRoles(query);
   }, []);
 
   const reloadRoles = useCallback(async () => {
-    if (!user || user.role !== "ADMIN") {
+    if (!user || !canManageRoles) {
       setRoles([]);
       return [];
     }
@@ -55,10 +57,10 @@ export function RolesProvider({ children }: { children: React.ReactNode }) {
     const next = sortRoles(payload.items);
     setRoles(next);
     return next;
-  }, [user]);
+  }, [canManageRoles, user]);
 
   useEffect(() => {
-    if (!user || user.role !== "ADMIN") {
+    if (!user || !canManageRoles) {
       setRoles([]);
       return;
     }
@@ -66,7 +68,7 @@ export function RolesProvider({ children }: { children: React.ReactNode }) {
     void reloadRoles().catch(() => {
       setRoles([]);
     });
-  }, [reloadRoles, user]);
+  }, [canManageRoles, reloadRoles, user]);
 
   const createRoleEntry = useCallback(
     async (input: { key: string; labelDe: string; descriptionDe?: string }) => {

@@ -4,6 +4,11 @@ import type { Request, Response, NextFunction } from "express";
 
 const PASSWORD_MIN_LENGTH = 12;
 
+export type PasswordPolicy = {
+  minLength: number;
+  requireNumberOrSpecial: boolean;
+};
+
 export type PasswordValidationResult = {
   valid: boolean;
   message?: string;
@@ -22,17 +27,19 @@ export async function verifyPassword(hash: string, password: string) {
   return argon2.verify(hash, password);
 }
 
-export function validatePassword(password: string): PasswordValidationResult {
+export function validatePassword(password: string, policy: Partial<PasswordPolicy> = {}): PasswordValidationResult {
   const normalized = password.trim();
+  const minLength = Math.max(policy.minLength ?? PASSWORD_MIN_LENGTH, PASSWORD_MIN_LENGTH);
+  const requireNumberOrSpecial = policy.requireNumberOrSpecial ?? true;
 
-  if (normalized.length < PASSWORD_MIN_LENGTH) {
+  if (normalized.length < minLength) {
     return {
       valid: false,
-      message: "Password must be at least 12 characters long."
+      message: `Password must be at least ${minLength} characters long.`
     };
   }
 
-  if (!/[0-9]|[^A-Za-z0-9]/.test(normalized)) {
+  if (requireNumberOrSpecial && !/[0-9]|[^A-Za-z0-9]/.test(normalized)) {
     return {
       valid: false,
       message: "Password must include at least one number or special character."

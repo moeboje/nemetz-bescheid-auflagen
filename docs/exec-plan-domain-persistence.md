@@ -315,6 +315,32 @@
 - keine Dokumentpflicht-, Aufgaben-, Fristen- oder Statusautomatik aus dem Einreichtyp.
 - keine AWG-/UVP-spezifischen Vorlagen oder Zusatzmodule in diesem Lauf.
 
+## 2p. Remediation-Lauf 2026-04-19 vor dem Azure-Rollout
+- Dies ist keine neue Persistenz-, Mobile- oder Help-Phase.
+- Ziel dieses Laufs ist ausschließlich die Behebung der aktuellen P1/P2-Review-Blocker vor einem Azure-Rollout.
+- Zulässiger Umfang:
+- Bootstrap/Seed/Compose-/Beispielkonfiguration gegen bekannte Default-Credentials absichern; leere oder Platzhalter-Credentials dürfen keinen automatischen Initial-Admin erzeugen.
+- `project-checklists`-Bulk-Importe von einem globalen Tabellen-Replace auf projektbezogenes Replace umstellen; destruktive Voll-Löschungen nur noch über einen expliziten Delete-All-Pfad ausführen.
+- Recovery-Export für `users` vollständig serverseitig lesen; kein `localStorage`-Fallback mehr.
+- generischen `users`-Import nicht mehr nur im React-State anwenden; für diesen Lauf wird der Block explizit als server-managed ignoriert statt still lokal überschrieben.
+- `TaskStateStore` bei `/api/task-state`- oder Legacy-Reconcile-Fehlern fail-closed betreiben; kein Wiederbeleben alter `localStorage`-/Snapshot-Daten.
+- `ExternalParticipantModal` nur bei bestätigtem Persist-Erfolg schließen.
+- Nicht-Ziele:
+- keine neue Persistenzmigration, keine Schema-Erweiterung, keine neuen Dependencies.
+- keine UX-Neugestaltung, keine zusätzlichen Admin- oder Recovery-Features.
+- kein echter serverseitiger User-Restore über generische Importdateien in diesem Lauf; dafür wäre ein eigener, gesonderter Entwurf nötig.
+
+## 2q. Gezielter Review-Fixlauf 2026-04-19 fuer drei Release-Blocker
+- Dies ist keine neue Persistenzphase und keine neue Feature-Phase.
+- Ziel dieses Laufs ist ausschliesslich die Behebung von drei konkret benannten Review-Findings.
+- Zulaessiger Umfang:
+- `ADMIN_PASSWORD=ChangeMe123!` in Bootstrap- und Seed-Pfaden unabhaengig von `ADMIN_EMAIL` blockieren; fehlende oder Platzhalter-Credentials duerfen keinen Initial-Admin erzeugen.
+- den Admin-Import fuer `projectChecklists` so korrigieren, dass `projectChecklists` nur dann unveraendert bleibt, wenn der Block fehlt; ein explizites `projectChecklists: []` loescht Checklisten bewusst ueber den vorhandenen Delete-All-Pfad; nicht-leere Arrays bleiben projektbezogene Replaces.
+- Recovery- und generische Exportpfade von `/users` und `/users/lookup` entkoppeln, solange generische Imports den Benutzerblock bewusst ignorieren; User-Daten werden dabei nicht als wiederherstellbarer Teil des Exports ausgegeben.
+- Nicht-Ziele:
+- keine weiteren Review-Fixes, keine neue Import-/Recovery-Architektur, keine UX-Neugestaltung.
+- keine neuen Dependencies, keine Rueckkehr zu localStorage- oder Snapshot-Pfaden fuer migrierte Domänen.
+
 ## 3. Ist-Zustand
 - Browser-persistiert fachlich aktiv ist aktuell nur noch `taskState`; zusätzliche UI-/Recovery-Daten liegen weiterhin via `apps/web/src/state/persistence.ts` lokal.
 - `ScopesStore`, `AuthoritiesStore`, `ProjectsStore`, `LegalDocsStore`, `ObligationsStore` und `DeadlinesStore` sind bereits API-backed und löschen ihre alten Domänen-Storage-Keys aktiv.

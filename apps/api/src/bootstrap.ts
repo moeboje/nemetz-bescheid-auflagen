@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "./prisma.js";
-import { loadProjectEnvFile } from "./config.js";
-import { hashPassword, validatePassword } from "./security.js";
+import { loadConfig, loadProjectEnvFile } from "./config.js";
+import { hashPassword } from "./security.js";
+import { resolveExplicitAdminCredentials } from "./adminCredentials.js";
+import { ROLE_CATALOG } from "./accessControl.js";
+import { setStoredRolePermissionKeys } from "./rolePermissions.js";
+import { ensureSecuritySettings } from "./securitySettings.js";
 
-const systemRoles = [
-  { key: "ADMIN", labelDe: "Admin" },
-  { key: "COMPLIANCE", labelDe: "Compliance" },
-  { key: "USER", labelDe: "Benutzer" },
-  { key: "EXTERNAL", labelDe: "Extern" }
-] as const;
+const systemRoles = ROLE_CATALOG;
 
 async function ensureSystemRoles() {
   for (const role of systemRoles) {
@@ -18,6 +17,7 @@ async function ensureSystemRoles() {
       },
       update: {
         labelDe: role.labelDe,
+        descriptionDe: role.descriptionDe,
         isSystem: true,
         isArchived: false
       },
@@ -25,10 +25,12 @@ async function ensureSystemRoles() {
         id: randomUUID(),
         key: role.key,
         labelDe: role.labelDe,
+        descriptionDe: role.descriptionDe,
         isSystem: true,
         isArchived: false
       }
     });
+    await setStoredRolePermissionKeys(prisma, role.key, role.permissionKeys);
   }
 }
 
@@ -38,12 +40,7 @@ async function ensureInitialAdminUser() {
     return;
   }
 
-  const adminEmail = (process.env.ADMIN_EMAIL || "admin@example.com").trim().toLowerCase();
-  const adminPassword = process.env.ADMIN_PASSWORD || "ChangeMe123!";
-  const passwordValidation = validatePassword(adminPassword);
-  if (!passwordValidation.valid) {
-    throw new Error(passwordValidation.message || "Invalid ADMIN_PASSWORD");
-  }
+  const { adminEmail, adminPassword } = resolveExplicitAdminCredentials("bootstrap");
 
   const passwordHash = await hashPassword(adminPassword);
 
@@ -64,7 +61,9 @@ async function ensureInitialAdminUser() {
 
 async function run() {
   loadProjectEnvFile();
+  const config = loadConfig();
   await ensureSystemRoles();
+  await ensureSecuritySettings(prisma, config);
   await ensureInitialAdminUser();
 }
 

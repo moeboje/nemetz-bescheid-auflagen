@@ -8,6 +8,10 @@ export type AdminRole = {
   labelDe: string;
   descriptionDe?: string;
   isSystem: boolean;
+  isAssignable?: boolean;
+  isDeprecated?: boolean;
+  permissionKeys?: string[];
+  permissionLabels?: string[];
   isArchived: boolean;
   createdAt: string;
   updatedAt: string;

@@ -36,10 +36,30 @@ import {
   verifyTotpCode
 } from "./mfa.js";
 import { createEntraStateStore, extractEmailFromClaims, isAllowedEmailDomain } from "./entra.js";
+import {
+  describePermission,
+  getDefaultPermissionKeys,
+  getRoleCatalogEntry,
+  hasPermission,
+  normalizeRoleKey,
+  parsePermissionKeys,
+  resolvePermissionKeys,
+  type PermissionKey
+} from "./accessControl.js";
+import {
+  getStoredRolePermissionKeys,
+  getStoredRolePermissionMap,
+  getStoredRolePermissionState,
+  setStoredRolePermissionKeys
+} from "./rolePermissions.js";
+import {
+  getAllowExternalUsers,
+  getEffectiveSecuritySettings,
+  sanitizeSecuritySettingsInput,
+  saveSecuritySettings
+} from "./securitySettings.js";
 
 const SESSION_COOKIE_NAME = "nemetz_session";
-const MAX_FAILED_LOGIN_ATTEMPTS = 5;
-const LOCKOUT_MINUTES = 15;
 const DEFAULT_ADMIN_PAGE = 1;
 const DEFAULT_ADMIN_PAGE_SIZE = 20;
 const MAX_ADMIN_PAGE_SIZE = 100;
@@ -48,7 +68,6 @@ const MFA_CHALLENGE_TTL_MINUTES = 10;
 const DEFAULT_POST_LOGIN_PATH = "/compliance/dashboard";
 const SAFE_HTTP_METHODS = ["GET", "HEAD", "OPTIONS"] as const;
 
-const SYSTEM_ROLE_KEYS = ["ADMIN", "COMPLIANCE", "USER", "EXTERNAL"] as const;
 const USER_TYPES = ["INTERNAL", "EXTERNAL"] as const;
 const ADMIN_SORT_FIELDS = ["name", "email", "createdAt", "lastLoginAt"] as const;
 const SORT_DIRECTIONS = ["asc", "desc"] as const;
@@ -69,6 +88,7 @@ type CommentEntityType = (typeof COMMENT_ENTITY_TYPES)[number];
 type AuthenticatedRequest = Request & {
   authUser?: PrismaUser;
   authSession?: Session;
+  authPermissionKeys?: PermissionKey[];
 };
 
 type SafeUserDto = {
@@ -96,6 +116,7 @@ type SafeUserDto = {
   mfaEnabled: boolean;
   mfaEnforced: boolean;
   mfaVerifiedAt?: string;
+  effectivePermissions: PermissionKey[];
   createdAt: string;
   updatedAt: string;
 };
@@ -146,9 +167,48 @@ type AdminRoleDto = {
   labelDe: string;
   descriptionDe?: string;
   isSystem: boolean;
+  isAssignable: boolean;
+  isDeprecated: boolean;
+  permissionKeys: PermissionKey[];
+  permissionLabels: string[];
   isArchived: boolean;
   createdAt: string;
   updatedAt: string;
+};
+
+type SecuritySettingsDto = {
+  passwordMinLength: number;
+  passwordRequireNumberOrSpecial: boolean;
+  maxFailedLoginAttempts: number;
+  lockoutMinutes: number;
+  sessionTtlDays: number;
+  allowExternalUsers: boolean;
+};
+
+type PasswordPolicyDto = Pick<SecuritySettingsDto, "passwordMinLength" | "passwordRequireNumberOrSpecial">;
+
+type SecurityAuditEventDto = {
+  id: string;
+  action: string;
+  actorUserId?: string;
+  actorLabel?: string;
+  targetUserId?: string;
+  targetLabel?: string;
+  createdAt: string;
+  metadata?: Record<string, unknown>;
+};
+
+type SecuritySummaryDto = {
+  totalUsers: number;
+  activeUsers: number;
+  archivedUsers: number;
+  adminUsers: number;
+  externalUsers: number;
+  lockedUsers: number;
+  usersMustChangePassword: number;
+  mfaEnabledUsers: number;
+  adminsWithoutMfa: number;
+  entraEnabled: boolean;
 };
 
 type ExternalOrganizationDto = {
@@ -246,7 +306,26 @@ function extractExternalOrg(user: PrismaUser | UserWithExternalOrg) {
   };
 }
 
-function toSafeUser(user: PrismaUser | UserWithExternalOrg): SafeUserDto {
+function resolveRolePermissionKeys(
+  roleKey: string,
+  userType: string,
+  roleRow?: {
+    roleExists?: boolean;
+    hasStoredPermissions?: boolean;
+    permissionKeys?: unknown;
+  } | null
+) {
+  const isCatalogRole = Boolean(getRoleCatalogEntry(roleKey));
+  return resolvePermissionKeys({
+    roleKey,
+    userType,
+    storedPermissionKeys: roleRow?.permissionKeys,
+    hasStoredPermissionKeys: roleRow?.hasStoredPermissions,
+    useLegacyInternalFallback: Boolean(roleRow?.roleExists && !roleRow?.hasStoredPermissions && !isCatalogRole)
+  });
+}
+
+function toSafeUser(user: PrismaUser | UserWithExternalOrg, permissionKeys: PermissionKey[] = getDefaultPermissionKeys(user.role, user.type)): SafeUserDto {
   const externalOrg = extractExternalOrg(user);
   return {
     id: user.id,
@@ -273,6 +352,7 @@ function toSafeUser(user: PrismaUser | UserWithExternalOrg): SafeUserDto {
     mfaEnabled: user.mfaEnabled,
     mfaEnforced: user.mfaEnforced,
     mfaVerifiedAt: toIsoString(user.mfaVerifiedAt),
+    effectivePermissions: permissionKeys,
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString()
   };
@@ -283,20 +363,84 @@ function toAdminRole(role: {
   key: string;
   labelDe: string;
   descriptionDe: string | null;
+  permissionsJson?: Prisma.JsonValue | null;
   isSystem: boolean;
   isArchived: boolean;
   createdAt: Date;
   updatedAt: Date;
 }): AdminRoleDto {
+  const catalogEntry = getRoleCatalogEntry(role.key);
+  const permissionKeys = resolvePermissionKeys({
+    roleKey: role.key,
+    userType: "INTERNAL",
+    storedPermissionKeys: role.permissionsJson
+  });
+
   return {
     id: role.id,
     key: role.key,
     labelDe: role.labelDe,
     descriptionDe: role.descriptionDe ?? undefined,
     isSystem: role.isSystem,
+    isAssignable: catalogEntry?.isAssignable ?? !catalogEntry?.isDeprecated,
+    isDeprecated: Boolean(catalogEntry?.isDeprecated),
+    permissionKeys,
+    permissionLabels: permissionKeys.map((permissionKey) => describePermission(permissionKey)),
     isArchived: role.isArchived,
     createdAt: role.createdAt.toISOString(),
     updatedAt: role.updatedAt.toISOString()
+  };
+}
+
+function toSecuritySettingsDto(value: SecuritySettingsDto) {
+  return {
+    passwordMinLength: value.passwordMinLength,
+    passwordRequireNumberOrSpecial: value.passwordRequireNumberOrSpecial,
+    maxFailedLoginAttempts: value.maxFailedLoginAttempts,
+    lockoutMinutes: value.lockoutMinutes,
+    sessionTtlDays: value.sessionTtlDays,
+    allowExternalUsers: value.allowExternalUsers
+  } satisfies SecuritySettingsDto;
+}
+
+function toPasswordPolicyDto(value: SecuritySettingsDto): PasswordPolicyDto {
+  return {
+    passwordMinLength: value.passwordMinLength,
+    passwordRequireNumberOrSpecial: value.passwordRequireNumberOrSpecial
+  };
+}
+
+function toSecurityAuditEvent(entry: {
+  id: string;
+  action: string;
+  createdAt: Date;
+  metadataJson: string | null;
+  actorUserId: string | null;
+  targetUserId: string | null;
+  actor?: { firstName: string; lastName: string } | null;
+  target?: { firstName: string; lastName: string } | null;
+}): SecurityAuditEventDto {
+  let metadata: Record<string, unknown> | undefined;
+  if (typeof entry.metadataJson === "string" && entry.metadataJson.trim()) {
+    try {
+      const parsed = JSON.parse(entry.metadataJson) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        metadata = parsed as Record<string, unknown>;
+      }
+    } catch {
+      metadata = undefined;
+    }
+  }
+
+  return {
+    id: entry.id,
+    action: entry.action,
+    actorUserId: entry.actorUserId ?? undefined,
+    actorLabel: entry.actor ? `${entry.actor.firstName} ${entry.actor.lastName}`.trim() : undefined,
+    targetUserId: entry.targetUserId ?? undefined,
+    targetLabel: entry.target ? `${entry.target.firstName} ${entry.target.lastName}`.trim() : undefined,
+    createdAt: entry.createdAt.toISOString(),
+    metadata
   };
 }
 
@@ -386,8 +530,21 @@ function normalizeRoleKeyInput(value: unknown) {
   return normalized;
 }
 
+function normalizeRequestedRole(value: string) {
+  if (value === "USER") {
+    return "COMPLIANCE_EDITOR";
+  }
+
+  if (value === "COMPLIANCE") {
+    return "COMPLIANCE_MANAGER";
+  }
+
+  return value;
+}
+
 function parseRole(value: unknown): UserRole | null {
-  return normalizeRoleKeyInput(value);
+  const normalized = normalizeRoleKeyInput(value);
+  return normalized ? normalizeRequestedRole(normalized) : null;
 }
 
 function parseType(value: unknown): UserType | null {
@@ -398,6 +555,7 @@ function parseType(value: unknown): UserType | null {
 }
 
 async function findAssignableRole(roleKey: string) {
+  const catalogEntry = getRoleCatalogEntry(roleKey);
   const role = await prisma.role.findUnique({
     where: {
       key: roleKey
@@ -405,11 +563,16 @@ async function findAssignableRole(roleKey: string) {
   });
 
   if (role) {
-    return role.isArchived ? null : role;
+    if (role.isArchived) {
+      return null;
+    }
+    if (catalogEntry && !catalogEntry.isAssignable) {
+      return null;
+    }
+    return role;
   }
 
-  const roleCount = await prisma.role.count();
-  if (roleCount === 0 && SYSTEM_ROLE_KEYS.includes(roleKey as (typeof SYSTEM_ROLE_KEYS)[number])) {
+  if (catalogEntry?.isAssignable) {
     return {
       id: `fallback:${roleKey}`,
       key: roleKey,
@@ -491,6 +654,22 @@ function parseBoolean(value: unknown) {
     return false;
   }
   return null;
+}
+
+function parsePasswordMode(value: unknown): "link" | "manual" | "auto" | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "link" || normalized === "manual" || normalized === "auto") {
+    return normalized;
+  }
+  return null;
+}
+
+function generateTemporaryPassword() {
+  return `${generateOpaqueToken(12)}Aa1!`;
 }
 
 function isValidEmail(value: string) {
@@ -680,7 +859,10 @@ function toCommentRevisionDto(revision: {
 }
 
 function canManageComment(user: PrismaUser, comment: { authorUserId: string }) {
-  return comment.authorUserId === user.id || normalizeRoleValue(user.role) === "ADMIN";
+  return (
+    comment.authorUserId === user.id ||
+    (normalizeRoleValue(user.role) === "ADMIN" && normalizeTypeValue(user.type) === "INTERNAL")
+  );
 }
 
 function resolveStorageRoot(config: AppConfig) {
@@ -915,18 +1097,10 @@ function getRoleAndType(input: {
   fallbackRole: UserRole;
   fallbackType: UserType;
 }) {
-  let role = input.role ?? input.fallbackRole;
-  let type = input.type ?? input.fallbackType;
-
-  if (role === "EXTERNAL") {
-    type = "EXTERNAL";
-  }
-
-  if (type === "EXTERNAL" && role !== "EXTERNAL") {
-    role = "EXTERNAL";
-  }
-
-  return { role, type };
+  return {
+    role: input.role ?? input.fallbackRole,
+    type: input.type ?? input.fallbackType
+  };
 }
 
 async function discoverEntraClient(config: AppConfig) {
@@ -989,11 +1163,21 @@ async function hasOtherActiveAdmin(excludedUserId: string) {
         not: excludedUserId
       },
       isArchived: false,
-      role: "ADMIN"
+      role: "ADMIN",
+      type: "INTERNAL"
     }
   });
 
   return count > 0;
+}
+
+async function getStoredRole(roleKey: string) {
+  return getStoredRolePermissionState(prisma, normalizeRoleValue(roleKey));
+}
+
+async function getUserPermissionKeys(user: Pick<PrismaUser, "role" | "type">) {
+  const role = await getStoredRole(user.role);
+  return resolveRolePermissionKeys(normalizeRoleValue(user.role), normalizeTypeValue(user.type), role);
 }
 
 function assertAuthenticated(req: AuthenticatedRequest, res: Response): req is AuthenticatedRequest & {
@@ -1018,7 +1202,7 @@ function authorizeAdmin(req: AuthenticatedRequest, res: Response): req is Authen
     return false;
   }
 
-  if (normalizeRoleValue(req.authUser.role) !== "ADMIN") {
+  if (!hasPermission(req.authPermissionKeys ?? [], "admin.access")) {
     res.status(403).json({
       ok: false,
       message: "Admin access required."
@@ -1060,8 +1244,22 @@ async function authMiddleware(req: AuthenticatedRequest, res: Response, next: Ne
       return;
     }
 
+    if (await shouldBlockExternalUser(session.user.type)) {
+      await prisma.session.update({
+        where: {
+          id: session.id
+        },
+        data: {
+          revokedAt: now
+        }
+      });
+      res.status(401).json({ ok: false, message: "Authentication required." });
+      return;
+    }
+
     req.authUser = session.user;
     req.authSession = session;
+    req.authPermissionKeys = await getUserPermissionKeys(session.user);
     next();
   } catch (error) {
     next(error);
@@ -1076,8 +1274,24 @@ function requireAdmin(req: AuthenticatedRequest, res: Response, next: NextFuncti
   next();
 }
 
-function canAccessDocuments(user: PrismaUser) {
-  return normalizeTypeValue(user.type) !== "EXTERNAL";
+function canAccessDocuments(permissionKeys: Iterable<string>) {
+  return (
+    hasPermission(permissionKeys, "projects.view") ||
+    hasPermission(permissionKeys, "legalDocs.view") ||
+    hasPermission(permissionKeys, "obligations.view") ||
+    hasPermission(permissionKeys, "deadlines.view") ||
+    hasPermission(permissionKeys, "tasks.view")
+  );
+}
+
+function canManageDocuments(permissionKeys: Iterable<string>) {
+  return (
+    hasPermission(permissionKeys, "projects.edit") ||
+    hasPermission(permissionKeys, "legalDocs.edit") ||
+    hasPermission(permissionKeys, "obligations.edit") ||
+    hasPermission(permissionKeys, "deadlines.edit") ||
+    hasPermission(permissionKeys, "tasks.edit")
+  );
 }
 
 function assertCanAccessDocuments(req: AuthenticatedRequest, res: Response): req is AuthenticatedRequest & {
@@ -1088,7 +1302,25 @@ function assertCanAccessDocuments(req: AuthenticatedRequest, res: Response): req
     return false;
   }
 
-  if (!canAccessDocuments(req.authUser)) {
+  if (normalizeTypeValue(req.authUser.type) === "EXTERNAL") {
+    res.status(403).json({
+      ok: false,
+      message: "Forbidden."
+    });
+    return false;
+  }
+
+  const permissionKeys = req.authPermissionKeys ?? [];
+
+  if (!canAccessDocuments(permissionKeys)) {
+    res.status(403).json({
+      ok: false,
+      message: "Forbidden."
+    });
+    return false;
+  }
+
+  if (!SAFE_HTTP_METHODS.includes(req.method as (typeof SAFE_HTTP_METHODS)[number]) && !canManageDocuments(permissionKeys)) {
     res.status(403).json({
       ok: false,
       message: "Forbidden."
@@ -1146,13 +1378,13 @@ function csrfProtectionMiddleware(req: Request, res: Response, next: NextFunctio
   next();
 }
 
-function setSessionCookie(res: Response, token: string, config: AppConfig) {
+function setSessionCookie(res: Response, token: string, config: AppConfig, sessionTtlDays = config.sessionTtlDays) {
   res.cookie(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
     secure: config.cookieSecure,
     path: "/",
-    maxAge: config.sessionTtlDays * 24 * 60 * 60 * 1000
+    maxAge: sessionTtlDays * 24 * 60 * 60 * 1000
   });
 }
 
@@ -1163,6 +1395,18 @@ function clearSessionCookie(res: Response, config: AppConfig) {
     secure: config.cookieSecure,
     path: "/"
   });
+}
+
+function isExternalUserType(userType: string | null | undefined) {
+  return normalizeTypeValue(String(userType ?? "")) === "EXTERNAL";
+}
+
+async function shouldBlockExternalUser(userType: string | null | undefined) {
+  if (!isExternalUserType(userType)) {
+    return false;
+  }
+
+  return !(await getAllowExternalUsers(prisma));
 }
 
 function buildMfaChallengeIpHash(req: Request) {
@@ -1373,10 +1617,16 @@ export function createApp(config: AppConfig = loadConfig()) {
         return;
       }
 
+      if (await shouldBlockExternalUser(user.type)) {
+        redirectWithError("external_users_disabled");
+        return;
+      }
+
+      const securitySettings = await getEffectiveSecuritySettings(prisma, config);
       const now = new Date();
       const rawToken = generateOpaqueToken(32);
       const sessionHash = hashToken(rawToken);
-      const expiresAt = new Date(Date.now() + config.sessionTtlDays * 24 * 60 * 60 * 1000);
+      const expiresAt = new Date(Date.now() + securitySettings.sessionTtlDays * 24 * 60 * 60 * 1000);
 
       await prisma.$transaction([
         prisma.user.update({
@@ -1398,7 +1648,7 @@ export function createApp(config: AppConfig = loadConfig()) {
         })
       ]);
 
-      setSessionCookie(res, rawToken, config);
+      setSessionCookie(res, rawToken, config, securitySettings.sessionTtlDays);
 
       await audit({
         actorUserId: user.id,
@@ -1421,6 +1671,7 @@ export function createApp(config: AppConfig = loadConfig()) {
 
   router.post("/auth/login", loginLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const securitySettings = await getEffectiveSecuritySettings(prisma, config);
       const rawEmail = ensureStringBody(req.body?.email);
       const rawPassword = ensureStringBody(req.body?.password);
 
@@ -1450,6 +1701,18 @@ export function createApp(config: AppConfig = loadConfig()) {
         return;
       }
 
+      if (user && normalizeTypeValue(user.type) === "EXTERNAL" && !securitySettings.allowExternalUsers) {
+        await audit({
+          actorUserId: user.id,
+          targetUserId: user.id,
+          action: "LOGIN_FAIL",
+          req,
+          metadata: { reason: "EXTERNAL_ACCESS_DISABLED" }
+        });
+        res.status(403).json({ ok: false, message: "External users are currently disabled." });
+        return;
+      }
+
       let isPasswordValid = false;
       if (user && !user.isArchived) {
         isPasswordValid = await verifyPassword(user.passwordHash, rawPassword);
@@ -1458,8 +1721,10 @@ export function createApp(config: AppConfig = loadConfig()) {
       if (!isPasswordValid || !user) {
         if (user) {
           const nextFailedCount = user.failedLoginCount + 1;
-          const shouldLock = nextFailedCount >= MAX_FAILED_LOGIN_ATTEMPTS;
-          const nextLockedUntil = shouldLock ? new Date(Date.now() + LOCKOUT_MINUTES * 60 * 1000) : user.lockedUntil;
+          const shouldLock = nextFailedCount >= securitySettings.maxFailedLoginAttempts;
+          const nextLockedUntil = shouldLock
+            ? new Date(Date.now() + securitySettings.lockoutMinutes * 60 * 1000)
+            : user.lockedUntil;
 
           await prisma.user.update({
             where: { id: user.id },
@@ -1550,7 +1815,8 @@ export function createApp(config: AppConfig = loadConfig()) {
 
       const rawToken = generateOpaqueToken(32);
       const sessionHash = hashToken(rawToken);
-      const expiresAt = new Date(Date.now() + config.sessionTtlDays * 24 * 60 * 60 * 1000);
+      const expiresAt = new Date(Date.now() + securitySettings.sessionTtlDays * 24 * 60 * 60 * 1000);
+      const permissionKeys = await getUserPermissionKeys(user);
 
       await prisma.$transaction([
         prisma.user.update({
@@ -1572,7 +1838,7 @@ export function createApp(config: AppConfig = loadConfig()) {
         })
       ]);
 
-      setSessionCookie(res, rawToken, config);
+      setSessionCookie(res, rawToken, config, securitySettings.sessionTtlDays);
 
       await audit({
         actorUserId: user.id,
@@ -1583,13 +1849,16 @@ export function createApp(config: AppConfig = loadConfig()) {
 
       const response: LoginSuccessPayload = {
         ok: true,
-        user: toSafeUser({
-          ...user,
-          failedLoginCount: 0,
-          lockedUntil: null,
-          lastLoginAt: now,
-          updatedAt: now
-        })
+        user: toSafeUser(
+          {
+            ...user,
+            failedLoginCount: 0,
+            lockedUntil: null,
+            lastLoginAt: now,
+            updatedAt: now
+          },
+          permissionKeys
+        )
       };
 
       res.json(response);
@@ -1643,8 +1912,21 @@ export function createApp(config: AppConfig = loadConfig()) {
     }
 
     res.json({
-      user: toSafeUser(req.authUser)
+      user: toSafeUser(req.authUser, req.authPermissionKeys ?? [])
     });
+  });
+
+  router.get("/auth/password/policy", authMiddleware, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      if (!assertAuthenticated(req, res)) {
+        return;
+      }
+
+      const securitySettings = await getEffectiveSecuritySettings(prisma, config);
+      res.json(toPasswordPolicyDto(securitySettings));
+    } catch (error) {
+      next(error);
+    }
   });
 
   router.post(
@@ -2467,6 +2749,7 @@ export function createApp(config: AppConfig = loadConfig()) {
 
   router.post("/auth/mfa/verify", mfaVerifyLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const securitySettings = await getEffectiveSecuritySettings(prisma, config);
       const mfaToken = ensureStringBody(req.body?.mfaToken).trim();
       const codeOrRecovery = ensureStringBody(req.body?.codeOrRecovery).trim();
 
@@ -2489,6 +2772,16 @@ export function createApp(config: AppConfig = loadConfig()) {
 
       if (!challenge || challenge.user.isArchived) {
         res.status(401).json({ ok: false, message: "Invalid MFA challenge." });
+        return;
+      }
+
+      if (await shouldBlockExternalUser(challenge.user.type)) {
+        await prisma.mfaChallenge.delete({
+          where: {
+            id: challenge.id
+          }
+        });
+        res.status(403).json({ ok: false, message: "External users are currently disabled." });
         return;
       }
 
@@ -2529,7 +2822,7 @@ export function createApp(config: AppConfig = loadConfig()) {
       const now = new Date();
       const rawSessionToken = generateOpaqueToken(32);
       const sessionHash = hashToken(rawSessionToken);
-      const expiresAt = new Date(Date.now() + config.sessionTtlDays * 24 * 60 * 60 * 1000);
+      const expiresAt = new Date(Date.now() + securitySettings.sessionTtlDays * 24 * 60 * 60 * 1000);
       const userUpdateData: Prisma.UserUpdateInput = {
         failedLoginCount: 0,
         lockedUntil: null,
@@ -2564,7 +2857,7 @@ export function createApp(config: AppConfig = loadConfig()) {
         })
       ]);
 
-      setSessionCookie(res, rawSessionToken, config);
+      setSessionCookie(res, rawSessionToken, config, securitySettings.sessionTtlDays);
 
       await audit({
         actorUserId: challenge.userId,
@@ -2595,9 +2888,11 @@ export function createApp(config: AppConfig = loadConfig()) {
         }
       });
 
+      const permissionKeys = await getUserPermissionKeys(updatedUser);
+
       res.json({
         ok: true,
-        user: toSafeUser(updatedUser)
+        user: toSafeUser(updatedUser, permissionKeys)
       });
     } catch (error) {
       next(error);
@@ -2651,6 +2946,7 @@ export function createApp(config: AppConfig = loadConfig()) {
 
   router.post("/auth/password/reset", passwordResetLimiter, async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const securitySettings = await getEffectiveSecuritySettings(prisma, config);
       const token = ensureStringBody(req.body?.token).trim();
       const newPassword = ensureStringBody(req.body?.newPassword);
 
@@ -2659,7 +2955,10 @@ export function createApp(config: AppConfig = loadConfig()) {
         return;
       }
 
-      const passwordValidation = validatePassword(newPassword);
+      const passwordValidation = validatePassword(newPassword, {
+        minLength: securitySettings.passwordMinLength,
+        requireNumberOrSpecial: securitySettings.passwordRequireNumberOrSpecial
+      });
       if (!passwordValidation.valid) {
         res.status(400).json({ ok: false, message: passwordValidation.message });
         return;
@@ -2725,6 +3024,81 @@ export function createApp(config: AppConfig = loadConfig()) {
 
       clearSessionCookie(res, config);
       res.json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post("/auth/password/change", authMiddleware, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      if (!assertAuthenticated(req, res)) {
+        return;
+      }
+
+      const securitySettings = await getEffectiveSecuritySettings(prisma, config);
+      const currentPassword = ensureStringBody(req.body?.currentPassword);
+      const newPassword = ensureStringBody(req.body?.newPassword);
+
+      if (!currentPassword || !newPassword) {
+        res.status(400).json({ ok: false, message: "currentPassword and newPassword are required." });
+        return;
+      }
+
+      const isCurrentPasswordValid = await verifyPassword(req.authUser.passwordHash, currentPassword);
+      if (!isCurrentPasswordValid) {
+        res.status(400).json({ ok: false, message: "Current password is invalid." });
+        return;
+      }
+
+      const passwordValidation = validatePassword(newPassword, {
+        minLength: securitySettings.passwordMinLength,
+        requireNumberOrSpecial: securitySettings.passwordRequireNumberOrSpecial
+      });
+      if (!passwordValidation.valid) {
+        res.status(400).json({ ok: false, message: passwordValidation.message });
+        return;
+      }
+
+      const now = new Date();
+      const passwordHash = await hashPassword(newPassword);
+      const [updatedUser] = await prisma.$transaction([
+        prisma.user.update({
+          where: { id: req.authUser.id },
+          data: {
+            passwordHash,
+            passwordUpdatedAt: now,
+            lastPasswordResetAt: now,
+            mustChangePassword: false,
+            failedLoginCount: 0,
+            lockedUntil: null
+          }
+        }),
+        prisma.session.updateMany({
+          where: {
+            userId: req.authUser.id,
+            revokedAt: null,
+            id: {
+              not: req.authSession.id
+            }
+          },
+          data: {
+            revokedAt: now
+          }
+        })
+      ]);
+
+      await audit({
+        actorUserId: req.authUser.id,
+        targetUserId: req.authUser.id,
+        action: "PASSWORD_CHANGED",
+        req
+      });
+
+      const permissionKeys = await getUserPermissionKeys(updatedUser);
+      res.json({
+        ok: true,
+        user: toSafeUser(updatedUser, permissionKeys)
+      });
     } catch (error) {
       next(error);
     }
@@ -2851,9 +3225,18 @@ export function createApp(config: AppConfig = loadConfig()) {
               `${row.key} ${row.labelDe} ${row.descriptionDe ?? ""}`.toLowerCase().includes(search)
             )
           : roles;
+        const permissionMap = await getStoredRolePermissionMap(
+          prisma,
+          filtered.map((row) => row.key)
+        );
 
         res.json({
-          items: filtered.map((row) => toAdminRole(row)),
+          items: filtered.map((row) =>
+            toAdminRole({
+              ...row,
+              permissionsJson: permissionMap.get(row.key) ?? undefined
+            })
+          ),
           total: filtered.length
         });
       } catch (error) {
@@ -2888,6 +3271,10 @@ export function createApp(config: AppConfig = loadConfig()) {
           return;
         }
 
+        const permissionKeys = parsePermissionKeys(req.body?.permissionKeys).length
+          ? parsePermissionKeys(req.body?.permissionKeys)
+          : getDefaultPermissionKeys("READ_ONLY", "INTERNAL");
+
         const created = await prisma.role.create({
           data: {
             key,
@@ -2896,6 +3283,7 @@ export function createApp(config: AppConfig = loadConfig()) {
             isSystem: false
           }
         });
+        await setStoredRolePermissionKeys(prisma, created.key, permissionKeys);
 
         await audit({
           actorUserId: req.authUser?.id,
@@ -2909,7 +3297,10 @@ export function createApp(config: AppConfig = loadConfig()) {
 
         res.status(201).json({
           ok: true,
-          role: toAdminRole(created)
+          role: toAdminRole({
+            ...created,
+            permissionsJson: permissionKeys
+          })
         });
       } catch (error) {
         next(error);
@@ -2938,6 +3329,8 @@ export function createApp(config: AppConfig = loadConfig()) {
         const hasKey = hasOwn(req.body, "key");
         const hasLabelDe = hasOwn(req.body, "labelDe");
         const hasDescriptionDe = hasOwn(req.body, "descriptionDe");
+        const hasPermissionKeys = hasOwn(req.body, "permissionKeys");
+        const existingPermissionKeys = await getStoredRolePermissionKeys(prisma, existing.key);
 
         const key = hasKey ? normalizeRoleKeyInput(req.body?.key) : existing.key;
         const labelDe = hasLabelDe ? ensureStringBody(req.body?.labelDe).trim() : existing.labelDe;
@@ -2955,6 +3348,11 @@ export function createApp(config: AppConfig = loadConfig()) {
 
         if (existing.isSystem && hasKey && key !== existing.key) {
           res.status(400).json({ ok: false, message: "System role key cannot be changed." });
+          return;
+        }
+
+        if (existing.isSystem && hasPermissionKeys) {
+          res.status(400).json({ ok: false, message: "System role permissions cannot be changed." });
           return;
         }
 
@@ -2990,10 +3388,21 @@ export function createApp(config: AppConfig = loadConfig()) {
           changedFields.push("descriptionDe");
         }
 
+        let nextPermissionKeys = existingPermissionKeys;
+        if (hasPermissionKeys) {
+          nextPermissionKeys = parsePermissionKeys(req.body?.permissionKeys);
+          if (JSON.stringify(existingPermissionKeys) !== JSON.stringify(nextPermissionKeys)) {
+            changedFields.push("permissionKeys");
+          }
+        }
+
         if (changedFields.length === 0) {
           res.json({
             ok: true,
-            role: toAdminRole(existing)
+            role: toAdminRole({
+              ...existing,
+              permissionsJson: existingPermissionKeys
+            })
           });
           return;
         }
@@ -3004,6 +3413,9 @@ export function createApp(config: AppConfig = loadConfig()) {
           },
           data
         });
+        if (hasPermissionKeys) {
+          await setStoredRolePermissionKeys(prisma, updated.key, nextPermissionKeys);
+        }
 
         await audit({
           actorUserId: req.authUser?.id,
@@ -3018,7 +3430,10 @@ export function createApp(config: AppConfig = loadConfig()) {
 
         res.json({
           ok: true,
-          role: toAdminRole(updated)
+          role: toAdminRole({
+            ...updated,
+            permissionsJson: nextPermissionKeys
+          })
         });
       } catch (error) {
         next(error);
@@ -3050,7 +3465,14 @@ export function createApp(config: AppConfig = loadConfig()) {
         }
 
         if (existing.isArchived) {
-          res.json({ ok: true, role: toAdminRole(existing) });
+          const existingPermissionKeys = await getStoredRolePermissionKeys(prisma, existing.key);
+          res.json({
+            ok: true,
+            role: toAdminRole({
+              ...existing,
+              permissionsJson: existingPermissionKeys
+            })
+          });
           return;
         }
 
@@ -3087,7 +3509,10 @@ export function createApp(config: AppConfig = loadConfig()) {
 
         res.json({
           ok: true,
-          role: toAdminRole(updated)
+          role: toAdminRole({
+            ...updated,
+            permissionsJson: await getStoredRolePermissionKeys(prisma, updated.key)
+          })
         });
       } catch (error) {
         next(error);
@@ -3114,7 +3539,14 @@ export function createApp(config: AppConfig = loadConfig()) {
         }
 
         if (!existing.isArchived) {
-          res.json({ ok: true, role: toAdminRole(existing) });
+          const existingPermissionKeys = await getStoredRolePermissionKeys(prisma, existing.key);
+          res.json({
+            ok: true,
+            role: toAdminRole({
+              ...existing,
+              permissionsJson: existingPermissionKeys
+            })
+          });
           return;
         }
 
@@ -3139,7 +3571,276 @@ export function createApp(config: AppConfig = loadConfig()) {
 
         res.json({
           ok: true,
-          role: toAdminRole(updated)
+          role: toAdminRole({
+            ...updated,
+            permissionsJson: await getStoredRolePermissionKeys(prisma, updated.key)
+          })
+        });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  router.get(
+    "/admin/security",
+    authMiddleware,
+    requireAdmin,
+    async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const settings = await getEffectiveSecuritySettings(prisma, config);
+        const now = new Date();
+        const [
+          totalUsers,
+          activeUsers,
+          archivedUsers,
+          adminUsers,
+          externalUsers,
+          lockedUsers,
+          usersMustChangePassword,
+          mfaEnabledUsers,
+          adminsWithoutMfa,
+          auditRows
+        ] = await Promise.all([
+          prisma.user.count(),
+          prisma.user.count({ where: { isArchived: false } }),
+          prisma.user.count({ where: { isArchived: true } }),
+          prisma.user.count({ where: { isArchived: false, role: "ADMIN", type: "INTERNAL" } }),
+          prisma.user.count({ where: { isArchived: false, type: "EXTERNAL" } }),
+          prisma.user.count({
+            where: {
+              isArchived: false,
+              lockedUntil: {
+                gt: now
+              }
+            }
+          }),
+          prisma.user.count({
+            where: {
+              isArchived: false,
+              mustChangePassword: true
+            }
+          }),
+          prisma.user.count({
+            where: {
+              isArchived: false,
+              mfaEnabled: true
+            }
+          }),
+          prisma.user.count({
+            where: {
+              isArchived: false,
+              role: "ADMIN",
+              type: "INTERNAL",
+              mfaEnabled: false
+            }
+          }),
+          prisma.auditLog.findMany({
+            where: {
+              action: {
+                in: [
+                  "USER_CREATED",
+                  "USER_UPDATED",
+                  "USER_ARCHIVED",
+                  "USER_RESTORED",
+                  "USER_ROLE_CHANGED",
+                  "USER_TYPE_CHANGED",
+                  "USER_PASSWORD_CHANGE_REQUIRED_CHANGED",
+                  "USER_PASSWORD_RESET_REQUESTED_BY_ADMIN",
+                  "USER_PASSWORD_RESET_BY_ADMIN",
+                  "USER_UNLOCKED",
+                  "MFA_ENFORCED_CHANGED",
+                  "USER_MFA_RESET_BY_ADMIN",
+                  "ROLE_CREATED",
+                  "ROLE_UPDATED",
+                  "ROLE_ARCHIVED",
+                  "ROLE_RESTORED",
+                  "SECURITY_SETTINGS_UPDATED"
+                ]
+              }
+            },
+            orderBy: {
+              createdAt: "desc"
+            },
+            take: 25,
+            include: {
+              actorUser: {
+                select: {
+                  firstName: true,
+                  lastName: true
+                }
+              },
+              targetUser: {
+                select: {
+                  firstName: true,
+                  lastName: true
+                }
+              }
+            }
+          })
+        ]);
+
+        const summary: SecuritySummaryDto = {
+          totalUsers,
+          activeUsers,
+          archivedUsers,
+          adminUsers,
+          externalUsers,
+          lockedUsers,
+          usersMustChangePassword,
+          mfaEnabledUsers,
+          adminsWithoutMfa,
+          entraEnabled: config.authEnableEntra
+        };
+
+        const warnings = [
+          adminUsers === 0 ? "Kein aktiver ADMIN-Benutzer vorhanden." : null,
+          adminsWithoutMfa > 0 ? `${adminsWithoutMfa} aktive Admin-Konten ohne MFA.` : null,
+          lockedUsers > 0 ? `${lockedUsers} Benutzerkonten sind derzeit gesperrt.` : null,
+          usersMustChangePassword > 0
+            ? `${usersMustChangePassword} Benutzer muessen ihr Passwort beim naechsten Login aendern.`
+            : null,
+          !settings.allowExternalUsers && externalUsers > 0
+            ? "Externe Benutzer sind global gesperrt; bestehende externe Konten koennen sich nicht anmelden."
+            : null
+        ].filter((value): value is string => Boolean(value));
+
+        res.json({
+          settings: toSecuritySettingsDto(settings),
+          summary,
+          warnings,
+          auditEvents: auditRows.map((entry) =>
+            toSecurityAuditEvent({
+              id: entry.id,
+              action: entry.action,
+              createdAt: entry.createdAt,
+              metadataJson: entry.metadataJson,
+              actorUserId: entry.actorUserId,
+              targetUserId: entry.targetUserId,
+              actor: entry.actorUser,
+              target: entry.targetUser
+            })
+          )
+        });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  router.patch(
+    "/admin/security",
+    authMiddleware,
+    requireAdmin,
+    async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const current = await getEffectiveSecuritySettings(prisma, config);
+        const rawInput = {
+          passwordMinLength:
+            typeof req.body?.passwordMinLength === "number"
+              ? req.body.passwordMinLength
+              : typeof req.body?.passwordMinLength === "string"
+                ? Number.parseInt(req.body.passwordMinLength, 10)
+                : undefined,
+          passwordRequireNumberOrSpecial:
+            typeof req.body?.passwordRequireNumberOrSpecial === "boolean"
+              ? req.body.passwordRequireNumberOrSpecial
+              : undefined,
+          maxFailedLoginAttempts:
+            typeof req.body?.maxFailedLoginAttempts === "number"
+              ? req.body.maxFailedLoginAttempts
+              : typeof req.body?.maxFailedLoginAttempts === "string"
+                ? Number.parseInt(req.body.maxFailedLoginAttempts, 10)
+                : undefined,
+          lockoutMinutes:
+            typeof req.body?.lockoutMinutes === "number"
+              ? req.body.lockoutMinutes
+              : typeof req.body?.lockoutMinutes === "string"
+                ? Number.parseInt(req.body.lockoutMinutes, 10)
+                : undefined,
+          sessionTtlDays:
+            typeof req.body?.sessionTtlDays === "number"
+              ? req.body.sessionTtlDays
+              : typeof req.body?.sessionTtlDays === "string"
+                ? Number.parseInt(req.body.sessionTtlDays, 10)
+                : undefined,
+          allowExternalUsers:
+            typeof req.body?.allowExternalUsers === "boolean" ? req.body.allowExternalUsers : undefined
+        } satisfies Partial<SecuritySettingsDto>;
+
+        const nextSettings = sanitizeSecuritySettingsInput(rawInput, current);
+        const changedFields = Object.entries(nextSettings)
+          .filter(([key, value]) => current[key as keyof SecuritySettingsDto] !== value)
+          .map(([key]) => key);
+
+        if (changedFields.length === 0) {
+          res.json({
+            ok: true,
+            settings: toSecuritySettingsDto(current)
+          });
+          return;
+        }
+
+        await saveSecuritySettings(prisma, nextSettings);
+
+        let revokedExternalSessions = 0;
+        let deletedExternalChallenges = 0;
+        const externalAccessWasDisabled = current.allowExternalUsers && !nextSettings.allowExternalUsers;
+
+        if (externalAccessWasDisabled) {
+          const externalUsers = await prisma.user.findMany({
+            where: {
+              type: "EXTERNAL"
+            },
+            select: {
+              id: true
+            }
+          });
+
+          const externalUserIds = externalUsers.map((user) => user.id);
+          if (externalUserIds.length > 0) {
+            const now = new Date();
+            const [revokedSessionsResult, deletedChallengesResult] = await prisma.$transaction([
+              prisma.session.updateMany({
+                where: {
+                  userId: {
+                    in: externalUserIds
+                  },
+                  revokedAt: null
+                },
+                data: {
+                  revokedAt: now
+                }
+              }),
+              prisma.mfaChallenge.deleteMany({
+                where: {
+                  userId: {
+                    in: externalUserIds
+                  }
+                }
+              })
+            ]);
+
+            revokedExternalSessions = revokedSessionsResult.count;
+            deletedExternalChallenges = deletedChallengesResult.count;
+          }
+        }
+
+        await audit({
+          actorUserId: req.authUser?.id,
+          action: "SECURITY_SETTINGS_UPDATED",
+          req,
+          metadata: {
+            changedFields,
+            nextSettings,
+            revokedExternalSessions,
+            deletedExternalChallenges
+          }
+        });
+
+        res.json({
+          ok: true,
+          settings: toSecuritySettingsDto(nextSettings)
         });
       } catch (error) {
         next(error);
@@ -3544,6 +4245,7 @@ export function createApp(config: AppConfig = loadConfig()) {
     requireAdmin,
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
+        const securitySettings = await getEffectiveSecuritySettings(prisma, config);
         const firstName = ensureStringBody(req.body?.firstName).trim();
         const lastName = ensureStringBody(req.body?.lastName).trim();
         const email = normalizeEmail(ensureStringBody(req.body?.email));
@@ -3556,6 +4258,7 @@ export function createApp(config: AppConfig = loadConfig()) {
         const externalOrgIdInput = toOptionalTrimmedString(req.body?.externalOrgId);
         const notes = toOptionalTrimmedString(req.body?.notes);
         const initialPassword = toOptionalTrimmedString(req.body?.initialPassword);
+        const requestedPasswordMode = parsePasswordMode(req.body?.passwordMode);
 
         if (!firstName || !lastName || !email) {
           res.status(400).json({ ok: false, message: "firstName, lastName and email are required." });
@@ -3614,8 +4317,25 @@ export function createApp(config: AppConfig = loadConfig()) {
           };
         }
 
-        const effectivePassword = initialPassword || `${generateOpaqueToken(12)}Aa1!`;
-        const passwordValidation = validatePassword(effectivePassword);
+        const passwordMode = requestedPasswordMode ?? (initialPassword ? "manual" : "link");
+        if ((passwordMode === "manual" && !initialPassword) || (passwordMode === "link" && initialPassword)) {
+          res.status(400).json({ ok: false, message: "Invalid passwordMode for the provided input." });
+          return;
+        }
+
+        const generatedPassword = passwordMode === "auto" ? generateTemporaryPassword() : undefined;
+        let effectivePassword: string;
+        if (passwordMode === "manual") {
+          effectivePassword = initialPassword ?? "";
+        } else if (passwordMode === "auto") {
+          effectivePassword = generatedPassword ?? generateTemporaryPassword();
+        } else {
+          effectivePassword = generateTemporaryPassword();
+        }
+        const passwordValidation = validatePassword(effectivePassword, {
+          minLength: securitySettings.passwordMinLength,
+          requireNumberOrSpecial: securitySettings.passwordRequireNumberOrSpecial
+        });
         if (!passwordValidation.valid) {
           res.status(400).json({ ok: false, message: passwordValidation.message });
           return;
@@ -3639,9 +4359,9 @@ export function createApp(config: AppConfig = loadConfig()) {
             notes,
             passwordHash,
             passwordUpdatedAt: now,
-            mustChangePassword: Boolean(initialPassword),
-            invitedAt: initialPassword ? null : now,
-            lastPasswordResetAt: initialPassword ? null : now
+            mustChangePassword: passwordMode !== "link",
+            invitedAt: passwordMode === "link" ? now : null,
+            lastPasswordResetAt: now
           },
           include: {
             externalOrg: {
@@ -3655,8 +4375,9 @@ export function createApp(config: AppConfig = loadConfig()) {
 
         let resetLink: string | undefined;
         let outboxFile: string | undefined;
+        let temporaryPassword: string | undefined;
 
-        if (!initialPassword) {
+        if (passwordMode === "link") {
           const reset = await createPasswordResetToken({
             userId: created.id,
             appOrigin: config.appOrigin,
@@ -3677,6 +4398,8 @@ export function createApp(config: AppConfig = loadConfig()) {
               outboxFile: reset.outboxFile
             }
           });
+        } else if (passwordMode === "auto" && generatedPassword) {
+          temporaryPassword = generatedPassword;
         }
 
         await audit({
@@ -3687,7 +4410,8 @@ export function createApp(config: AppConfig = loadConfig()) {
           metadata: {
             role: created.role,
             type: created.type,
-            isInviteFlow: !initialPassword
+            passwordMode,
+            mustChangePassword: passwordMode !== "link"
           }
         });
 
@@ -3695,7 +4419,8 @@ export function createApp(config: AppConfig = loadConfig()) {
           ok: true,
           user: toSafeUser(created),
           resetLink,
-          outboxFile
+          outboxFile,
+          temporaryPassword
         });
       } catch (error) {
         next(error);
@@ -3742,6 +4467,7 @@ export function createApp(config: AppConfig = loadConfig()) {
         const hasExternalOrgId = hasOwn(req.body, "externalOrgId");
         const hasNotes = hasOwn(req.body, "notes");
         const hasMfaEnforced = hasOwn(req.body, "mfaEnforced");
+        const hasMustChangePassword = hasOwn(req.body, "mustChangePassword");
 
         const firstName = toOptionalTrimmedString(req.body?.firstName);
         const lastName = toOptionalTrimmedString(req.body?.lastName);
@@ -3750,6 +4476,7 @@ export function createApp(config: AppConfig = loadConfig()) {
         const requestedRole = hasRole ? parseRole(req.body?.role) : null;
         const requestedType = hasType ? parseType(req.body?.type) : null;
         const requestedMfaEnforced = hasMfaEnforced ? parseBoolean(req.body?.mfaEnforced) : null;
+        const requestedMustChangePassword = hasMustChangePassword ? parseBoolean(req.body?.mustChangePassword) : null;
         const titleOrPosition = toOptionalTrimmedString(req.body?.titleOrPosition);
         const department = toOptionalTrimmedString(req.body?.department);
         const externalCompany = toOptionalTrimmedString(req.body?.externalCompany);
@@ -3785,6 +4512,11 @@ export function createApp(config: AppConfig = loadConfig()) {
 
         if (hasMfaEnforced && requestedMfaEnforced === null) {
           res.status(400).json({ ok: false, message: "Invalid mfaEnforced value." });
+          return;
+        }
+
+        if (hasMustChangePassword && requestedMustChangePassword === null) {
+          res.status(400).json({ ok: false, message: "Invalid mustChangePassword value." });
           return;
         }
 
@@ -3837,7 +4569,10 @@ export function createApp(config: AppConfig = loadConfig()) {
           };
         }
 
-        const isDemotingAdmin = normalizeRoleValue(existing.role) === "ADMIN" && roleAndType.role !== "ADMIN";
+        const isExistingAdmin =
+          normalizeRoleValue(existing.role) === "ADMIN" && normalizeTypeValue(existing.type) === "INTERNAL";
+        const willRemainAdmin = roleAndType.role === "ADMIN" && roleAndType.type === "INTERNAL";
+        const isDemotingAdmin = isExistingAdmin && !willRemainAdmin;
         if (isDemotingAdmin) {
           const hasBackupAdmin = await hasOtherActiveAdmin(existing.id);
           if (!hasBackupAdmin) {
@@ -3928,6 +4663,13 @@ export function createApp(config: AppConfig = loadConfig()) {
           }
         }
 
+        if (hasMustChangePassword && requestedMustChangePassword !== null) {
+          data.mustChangePassword = requestedMustChangePassword;
+          if (existing.mustChangePassword !== requestedMustChangePassword) {
+            changedFields.push("mustChangePassword");
+          }
+        }
+
         if (roleAndType.role !== normalizeRoleValue(existing.role)) {
           changedFields.push("role");
         }
@@ -4000,6 +4742,19 @@ export function createApp(config: AppConfig = loadConfig()) {
           });
         }
 
+        if (existing.mustChangePassword !== updated.mustChangePassword) {
+          await audit({
+            actorUserId: req.authUser?.id,
+            targetUserId: updated.id,
+            action: "USER_PASSWORD_CHANGE_REQUIRED_CHANGED",
+            req,
+            metadata: {
+              from: existing.mustChangePassword,
+              to: updated.mustChangePassword
+            }
+          });
+        }
+
         res.json({
           ok: true,
           user: toSafeUser(updated)
@@ -4029,7 +4784,7 @@ export function createApp(config: AppConfig = loadConfig()) {
           return;
         }
 
-        if (!user.isArchived && normalizeRoleValue(user.role) === "ADMIN") {
+        if (!user.isArchived && normalizeRoleValue(user.role) === "ADMIN" && normalizeTypeValue(user.type) === "INTERNAL") {
           const hasBackupAdmin = await hasOtherActiveAdmin(user.id);
           if (!hasBackupAdmin) {
             res.status(400).json({ ok: false, message: "At least one active ADMIN user is required." });
@@ -4121,7 +4876,11 @@ export function createApp(config: AppConfig = loadConfig()) {
 
   const handleAdminResetPassword = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
+      const securitySettings = await getEffectiveSecuritySettings(prisma, config);
       const userId = req.params.id;
+      const requestedPasswordMode = parsePasswordMode(req.body?.passwordMode);
+      const passwordMode = requestedPasswordMode ?? "link";
+      const temporaryPasswordInput = toOptionalTrimmedString(req.body?.temporaryPassword);
 
       const target = await prisma.user.findUnique({
         where: {
@@ -4134,37 +4893,100 @@ export function createApp(config: AppConfig = loadConfig()) {
         return;
       }
 
-      const reset = await createPasswordResetToken({
-        userId: target.id,
-        appOrigin: config.appOrigin,
-        ttlMinutes: config.resetTokenTtlMinutes,
-        email: target.email
-      });
+      if (passwordMode === "link") {
+        const reset = await createPasswordResetToken({
+          userId: target.id,
+          appOrigin: config.appOrigin,
+          ttlMinutes: config.resetTokenTtlMinutes,
+          email: target.email
+        });
 
-      await prisma.user.update({
-        where: {
-          id: target.id
-        },
-        data: {
-          lastPasswordResetAt: new Date()
-        }
+        await prisma.user.update({
+          where: {
+            id: target.id
+          },
+          data: {
+            lastPasswordResetAt: new Date()
+          }
+        });
+
+        await audit({
+          actorUserId: req.authUser?.id,
+          targetUserId: target.id,
+          action: "USER_PASSWORD_RESET_REQUESTED_BY_ADMIN",
+          req,
+          metadata: {
+            outboxFile: reset.outboxFile,
+            expiresAt: reset.expiresAt.toISOString(),
+            passwordMode
+          }
+        });
+
+        res.json({
+          ok: true,
+          resetLink: config.nodeEnv === "development" ? reset.resetLink : undefined,
+          outboxFile: config.nodeEnv === "development" ? reset.outboxFile : undefined
+        });
+        return;
+      }
+
+      const temporaryPassword =
+        passwordMode === "auto" ? generateTemporaryPassword() : temporaryPasswordInput;
+      if (!temporaryPassword) {
+        res.status(400).json({ ok: false, message: "temporaryPassword is required for manual resets." });
+        return;
+      }
+
+      const passwordValidation = validatePassword(temporaryPassword, {
+        minLength: securitySettings.passwordMinLength,
+        requireNumberOrSpecial: securitySettings.passwordRequireNumberOrSpecial
       });
+      if (!passwordValidation.valid) {
+        res.status(400).json({ ok: false, message: passwordValidation.message });
+        return;
+      }
+
+      const now = new Date();
+      const passwordHash = await hashPassword(temporaryPassword);
+      await prisma.$transaction([
+        prisma.user.update({
+          where: {
+            id: target.id
+          },
+          data: {
+            passwordHash,
+            passwordUpdatedAt: now,
+            lastPasswordResetAt: now,
+            mustChangePassword: true,
+            failedLoginCount: 0,
+            lockedUntil: null
+          }
+        }),
+        prisma.session.updateMany({
+          where: {
+            userId: target.id,
+            revokedAt: null
+          },
+          data: {
+            revokedAt: now
+          }
+        })
+      ]);
 
       await audit({
         actorUserId: req.authUser?.id,
         targetUserId: target.id,
-        action: "USER_PASSWORD_RESET_REQUESTED_BY_ADMIN",
+        action: "USER_PASSWORD_RESET_BY_ADMIN",
         req,
         metadata: {
-          outboxFile: reset.outboxFile,
-          expiresAt: reset.expiresAt.toISOString()
+          passwordMode,
+          mustChangePassword: true
         }
       });
 
       res.json({
         ok: true,
-        resetLink: config.nodeEnv === "development" ? reset.resetLink : undefined,
-        outboxFile: config.nodeEnv === "development" ? reset.outboxFile : undefined
+        temporaryPassword: passwordMode === "auto" ? temporaryPassword : undefined
       });
     } catch (error) {
       next(error);

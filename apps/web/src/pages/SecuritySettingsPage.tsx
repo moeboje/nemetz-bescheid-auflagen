@@ -1,9 +1,19 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Card, Input, Select } from "@nemetz/ui";
 import { ApiError } from "../api/client";
-import { confirmMfaTotp, disableMfaTotp, getMfaStatus, setupMfaTotp, type MfaStatus } from "../api/auth";
+import {
+  confirmMfaTotp,
+  disableMfaTotp,
+  getMfaStatus,
+  getPasswordPolicy,
+  setupMfaTotp,
+  type MfaStatus,
+  type PasswordPolicy
+} from "../api/auth";
 import HelpHintCard from "../components/HelpHintCard";
 import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
+import { useAuth } from "../state/AuthStore";
 
 type DisableMethod = "code" | "recovery" | "password";
 
@@ -12,11 +22,36 @@ const defaultStatus: MfaStatus = {
   enforced: false
 };
 
+function getPasswordPolicyErrorMessage(password: string, policy: PasswordPolicy | null) {
+  if (!policy) {
+    return "";
+  }
+
+  const normalizedPassword = password.trim();
+  if (normalizedPassword.length < policy.passwordMinLength) {
+    return `Das neue Passwort muss mindestens ${policy.passwordMinLength} Zeichen lang sein.`;
+  }
+
+  if (policy.passwordRequireNumberOrSpecial && !/[0-9]|[^A-Za-z0-9]/.test(normalizedPassword)) {
+    return "Das neue Passwort muss eine Zahl oder ein Sonderzeichen enthalten.";
+  }
+
+  return "";
+}
+
 export default function SecuritySettingsPage() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const { changePassword } = useAuth();
   const [status, setStatus] = useState<MfaStatus>(defaultStatus);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [passwordPolicy, setPasswordPolicy] = useState<PasswordPolicy | null>(null);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [isPasswordSubmitting, setIsPasswordSubmitting] = useState(false);
 
   const [setupUrl, setSetupUrl] = useState("");
   const [setupExpiresAt, setSetupExpiresAt] = useState("");
@@ -27,6 +62,7 @@ export default function SecuritySettingsPage() {
   const [disableMethod, setDisableMethod] = useState<DisableMethod>("code");
   const [disableValue, setDisableValue] = useState("");
   const [isDisableSubmitting, setIsDisableSubmitting] = useState(false);
+  const forcePasswordChange = searchParams.get("mode") === "force-password-change";
 
   const setupExpiryText = useMemo(() => {
     if (!setupExpiresAt) {
@@ -62,6 +98,69 @@ export default function SecuritySettingsPage() {
   useEffect(() => {
     void loadStatus();
   }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    void getPasswordPolicy()
+      .then((policy) => {
+        if (isMounted) {
+          setPasswordPolicy(policy);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setPasswordPolicy(null);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const handlePasswordChange = async () => {
+    if (!currentPassword.trim() || !newPassword || !confirmPassword) {
+      setError("Bitte aktuelles Passwort, neues Passwort und Bestaetigung eingeben.");
+      return;
+    }
+
+    const passwordPolicyError = getPasswordPolicyErrorMessage(newPassword, passwordPolicy);
+    if (passwordPolicyError) {
+      setError(passwordPolicyError);
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setError("Passwoerter stimmen nicht ueberein.");
+      return;
+    }
+
+    setIsPasswordSubmitting(true);
+    setError("");
+    setSuccess("");
+
+    try {
+      await changePassword(currentPassword.trim(), newPassword);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setSuccess(forcePasswordChange ? "Passwort geaendert. Weiterleitung ins Portal..." : "Passwort erfolgreich geaendert.");
+      if (forcePasswordChange) {
+        window.setTimeout(() => {
+          navigate("/compliance/dashboard", { replace: true });
+        }, 900);
+      }
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setError(err.message);
+      } else {
+        setError("Passwort konnte nicht geaendert werden.");
+      }
+    } finally {
+      setIsPasswordSubmitting(false);
+    }
+  };
 
   const handleStartSetup = async () => {
     setIsSetupSubmitting(true);
@@ -163,13 +262,14 @@ export default function SecuritySettingsPage() {
   return (
     <div className="page">
       <div className="pageHeader">
-        <h1 className="pageTitle">Sicherheit</h1>
+        <h1 className="pageTitle">Kontosicherheit</h1>
       </div>
 
       <HelpHintCard
         hintId="hint.securitySettings"
-        title="MFA, Recovery-Codes und Sicherheitsoptionen"
+        title="Passwort, MFA und Recovery-Codes"
         bullets={[
+          "Das eigene Passwort bleibt fuer alle Benutzer ausserhalb des Admin-Bereichs erreichbar.",
           "Recovery-Codes sind fuer Notfaelle gedacht und sollten getrennt vom Alltagsgeraet aufbewahrt werden.",
           "Passwort-Reset, MFA-Setup und MFA-Deaktivierung sind unterschiedliche Prozesse.",
           "Wenn Codes oder Links abgelaufen sind, starten Sie den jeweiligen Vorgang bewusst neu."
@@ -179,6 +279,56 @@ export default function SecuritySettingsPage() {
           to: getHelpHref(HELP_CONTEXT_SLUGS.security)
         }}
       />
+
+      {forcePasswordChange ? (
+        <Card>
+          <p className="validationText">
+            Fuer dieses Konto ist ein Passwortwechsel erforderlich, bevor das Portal weiter genutzt werden kann.
+          </p>
+        </Card>
+      ) : null}
+
+      <Card>
+        <h2 className="sectionTitle">Eigenes Passwort aendern</h2>
+        <div className="modalForm">
+          <div className="formField">
+            <span className="fieldLabel">Aktuelles Passwort</span>
+            <Input
+              type="password"
+              autoComplete="current-password"
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+              disabled={isPasswordSubmitting}
+            />
+          </div>
+
+          <div className="formField">
+            <span className="fieldLabel">Neues Passwort</span>
+            <Input
+              type="password"
+              autoComplete="new-password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              disabled={isPasswordSubmitting}
+            />
+          </div>
+
+          <div className="formField">
+            <span className="fieldLabel">Neues Passwort bestaetigen</span>
+            <Input
+              type="password"
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              disabled={isPasswordSubmitting}
+            />
+          </div>
+
+          <Button onClick={() => void handlePasswordChange()} disabled={isPasswordSubmitting}>
+            {isPasswordSubmitting ? "Speichere..." : "Passwort aendern"}
+          </Button>
+        </div>
+      </Card>
 
       {isLoading ? (
         <Card>

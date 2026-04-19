@@ -6,10 +6,12 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import { authenticator } from "otplib";
+import { Prisma } from "@prisma/client";
 import { createApp } from "./app.js";
 import { resolveDatabaseUrl, type AppConfig } from "./config.js";
 import { prisma } from "./prisma.js";
 import { hashPassword } from "./security.js";
+import { setStoredRolePermissionKeys } from "./rolePermissions.js";
 
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
@@ -150,9 +152,13 @@ describe("Auth API", () => {
 
   beforeEach(async () => {
     await prisma.session.deleteMany();
+    await prisma.mfaChallenge.deleteMany();
+    await prisma.mfaPending.deleteMany();
     await prisma.passwordResetToken.deleteMany();
     await prisma.auditLog.deleteMany();
     await prisma.user.deleteMany();
+    await prisma.role.deleteMany();
+    await prisma.$executeRaw(Prisma.sql`DELETE FROM "SecuritySettings"`);
     await cleanOutbox();
   });
 
@@ -179,6 +185,91 @@ describe("Auth API", () => {
     assert.equal(meResponse.status, 200);
     const mePayload = (await meResponse.json()) as { user: { email: string } };
     assert.equal(mePayload.user.email, "login-success@example.com");
+  });
+
+  it("preserves legacy internal permissions for custom roles without permissionsJson", async () => {
+    await prisma.role.create({
+      data: {
+        key: "QUALITY_MANAGER",
+        labelDe: "Qualitaetsmanagement",
+        isSystem: false
+      }
+    });
+    await createUser("custom-role@example.com", "ValidPassword1!");
+    await prisma.user.update({
+      where: {
+        email: "custom-role@example.com"
+      },
+      data: {
+        role: "QUALITY_MANAGER",
+        type: "INTERNAL"
+      }
+    });
+
+    const loginResponse = await request("/auth/login", {
+      method: "POST",
+      body: {
+        email: "custom-role@example.com",
+        password: "ValidPassword1!"
+      }
+    });
+
+    assert.equal(loginResponse.status, 200);
+    const sessionCookie = extractSessionCookie(loginResponse.headers.get("set-cookie"));
+    assert.ok(sessionCookie, "Expected session cookie");
+
+    const meResponse = await request("/auth/me", {
+      cookie: sessionCookie
+    });
+
+    assert.equal(meResponse.status, 200);
+    const mePayload = (await meResponse.json()) as { user: { effectivePermissions: string[] } };
+    assert.equal(mePayload.user.effectivePermissions.includes("masterData.manage"), true);
+    assert.equal(mePayload.user.effectivePermissions.includes("projects.archive"), true);
+    assert.equal(mePayload.user.effectivePermissions.includes("authorities.manage"), true);
+    assert.equal(mePayload.user.effectivePermissions.includes("admin.access"), false);
+  });
+
+  it("preserves explicitly empty permissionsJson for custom roles", async () => {
+    const role = await prisma.role.create({
+      data: {
+        key: "NO_ACCESS",
+        labelDe: "Ohne Zugriff",
+        isSystem: false
+      }
+    });
+    await setStoredRolePermissionKeys(prisma, role.key, []);
+
+    await createUser("empty-role@example.com", "ValidPassword1!");
+    await prisma.user.update({
+      where: {
+        email: "empty-role@example.com"
+      },
+      data: {
+        role: role.key,
+        type: "INTERNAL"
+      }
+    });
+
+    const loginResponse = await request("/auth/login", {
+      method: "POST",
+      body: {
+        email: "empty-role@example.com",
+        password: "ValidPassword1!"
+      }
+    });
+
+    assert.equal(loginResponse.status, 200);
+    const sessionCookie = extractSessionCookie(loginResponse.headers.get("set-cookie"));
+    assert.ok(sessionCookie, "Expected session cookie");
+
+    const meResponse = await request("/auth/me", {
+      cookie: sessionCookie
+    });
+
+    assert.equal(meResponse.status, 200);
+    const mePayload = (await meResponse.json()) as { user: { effectivePermissions: string[] } };
+    assert.deepEqual(mePayload.user.effectivePermissions, []);
   });
 
   it("me requires auth", async () => {
@@ -240,6 +331,48 @@ describe("Auth API", () => {
     assert.equal(lockedResponse.status, 429);
   });
 
+  it("disabling external users revokes active external sessions and blocks route-auth endpoints", async () => {
+    const admin = await createUser("external-toggle-admin@example.com", "ValidPassword1!");
+    const externalUser = await createUser("external-toggle-user@example.com", "ValidPassword1!");
+    await prisma.user.update({
+      where: {
+        id: externalUser.id
+      },
+      data: {
+        role: "EXTERNAL",
+        type: "EXTERNAL"
+      }
+    });
+
+    const adminCookie = await loginWithPassword(admin.email, "ValidPassword1!").then((response) =>
+      extractSessionCookie(response.headers.get("set-cookie"))
+    );
+    const externalCookie = await loginWithPassword(externalUser.email, "ValidPassword1!").then((response) =>
+      extractSessionCookie(response.headers.get("set-cookie"))
+    );
+    assert.ok(adminCookie);
+    assert.ok(externalCookie);
+
+    const disableResponse = await request("/admin/security", {
+      method: "PATCH",
+      cookie: adminCookie,
+      body: {
+        allowExternalUsers: false
+      }
+    });
+    assert.equal(disableResponse.status, 200);
+
+    const meResponse = await request("/auth/me", {
+      cookie: externalCookie
+    });
+    assert.equal(meResponse.status, 401);
+
+    const routeAuthResponse = await request("/scopes", {
+      cookie: externalCookie
+    });
+    assert.equal(routeAuthResponse.status, 401);
+  });
+
   it("forgot password always returns 200", async () => {
     await createUser("forgot@example.com", "ValidPassword1!");
 
@@ -259,6 +392,50 @@ describe("Auth API", () => {
 
     assert.equal(existingUserResponse.status, 200);
     assert.equal(missingUserResponse.status, 200);
+  });
+
+  it("returns the live password policy and applies it to own password changes", async () => {
+    const admin = await createUser("policy-admin@example.com", "ValidPassword1!");
+    const user = await createUser("policy-user@example.com", "ValidPassword1!");
+
+    const adminLogin = await loginWithPassword(admin.email, "ValidPassword1!");
+    const adminCookie = extractSessionCookie(adminLogin.headers.get("set-cookie"));
+    assert.ok(adminCookie);
+
+    const updateResponse = await request("/admin/security", {
+      method: "PATCH",
+      cookie: adminCookie,
+      body: {
+        passwordMinLength: 16,
+        passwordRequireNumberOrSpecial: false
+      }
+    });
+    assert.equal(updateResponse.status, 200);
+
+    const userLogin = await loginWithPassword(user.email, "ValidPassword1!");
+    const userCookie = extractSessionCookie(userLogin.headers.get("set-cookie"));
+    assert.ok(userCookie);
+
+    const policyResponse = await request("/auth/password/policy", {
+      cookie: userCookie
+    });
+    assert.equal(policyResponse.status, 200);
+    const policyPayload = (await policyResponse.json()) as {
+      passwordMinLength: number;
+      passwordRequireNumberOrSpecial: boolean;
+    };
+    assert.equal(policyPayload.passwordMinLength, 16);
+    assert.equal(policyPayload.passwordRequireNumberOrSpecial, false);
+
+    const changeResponse = await request("/auth/password/change", {
+      method: "POST",
+      cookie: userCookie,
+      body: {
+        currentPassword: "ValidPassword1!",
+        newPassword: "SixteenLettersPwd"
+      }
+    });
+    assert.equal(changeResponse.status, 200);
   });
 
   it("rate limits password reset attempts per IP", async () => {
@@ -397,6 +574,48 @@ describe("Auth API", () => {
       cookie: verifyCookie
     });
     assert.equal(meResponse.status, 200);
+  });
+
+  it("disabling external users blocks MFA verification before session creation", async () => {
+    const admin = await createUser("external-mfa-admin@example.com", "ValidPassword1!");
+    const externalUser = await createUser("external-mfa-user@example.com", "ValidPassword1!");
+    await prisma.user.update({
+      where: {
+        id: externalUser.id
+      },
+      data: {
+        role: "EXTERNAL",
+        type: "EXTERNAL",
+        mfaEnforced: true
+      }
+    });
+
+    const adminLogin = await loginWithPassword(admin.email, "ValidPassword1!");
+    const adminCookie = extractSessionCookie(adminLogin.headers.get("set-cookie"));
+    assert.ok(adminCookie);
+
+    const mfaLogin = await loginWithPassword(externalUser.email, "ValidPassword1!", "127.0.0.204");
+    const mfaLoginPayload = (await mfaLogin.json()) as { ok: true; mfaRequired: true; mfaToken: string };
+    assert.equal(mfaLoginPayload.mfaRequired, true);
+
+    const disableResponse = await request("/admin/security", {
+      method: "PATCH",
+      cookie: adminCookie,
+      body: {
+        allowExternalUsers: false
+      }
+    });
+    assert.equal(disableResponse.status, 200);
+
+    const verifyResponse = await request("/auth/mfa/verify", {
+      method: "POST",
+      ip: "127.0.0.204",
+      body: {
+        mfaToken: mfaLoginPayload.mfaToken,
+        codeOrRecovery: "123456"
+      }
+    });
+    assert.equal(verifyResponse.status, 401);
   });
 
   it("recovery code works only once", async () => {

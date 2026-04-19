@@ -47,13 +47,15 @@ function sortExternalOrgs(rows: ExternalOrganization[]) {
 export function ExternalOrgsProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const [externalOrgs, setExternalOrgs] = useState<ExternalOrganization[]>([]);
+  const canManageExternalOrgs =
+    Array.isArray(user?.effectivePermissions) && user.effectivePermissions.includes("externalOrgs.manage");
 
   const loadExternalOrgs = useCallback(async (query: ExternalOrganizationsQuery = {}) => {
     return listExternalOrganizations(query);
   }, []);
 
   const reloadExternalOrgs = useCallback(async () => {
-    if (!user || user.role !== "ADMIN") {
+    if (!user || !canManageExternalOrgs) {
       setExternalOrgs([]);
       return [];
     }
@@ -64,10 +66,10 @@ export function ExternalOrgsProvider({ children }: { children: React.ReactNode }
     const next = sortExternalOrgs(payload.items);
     setExternalOrgs(next);
     return next;
-  }, [user]);
+  }, [canManageExternalOrgs, user]);
 
   useEffect(() => {
-    if (!user || user.role !== "ADMIN") {
+    if (!user || !canManageExternalOrgs) {
       setExternalOrgs([]);
       return;
     }
@@ -75,7 +77,7 @@ export function ExternalOrgsProvider({ children }: { children: React.ReactNode }
     void reloadExternalOrgs().catch(() => {
       setExternalOrgs([]);
     });
-  }, [reloadExternalOrgs, user]);
+  }, [canManageExternalOrgs, reloadExternalOrgs, user]);
 
   const createExternalOrgEntry = useCallback(
     async (input: {

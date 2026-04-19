@@ -43,3 +43,9 @@ export async function bulkReplaceProjectChecklists(projectChecklists: ProjectChe
   );
   return payload.projectChecklists;
 }
+
+export async function bulkDeleteProjectChecklists() {
+  await apiRequest<{ ok: boolean }>("/admin/internal/project-checklists/bulk-delete", {
+    method: "DELETE"
+  });
+}

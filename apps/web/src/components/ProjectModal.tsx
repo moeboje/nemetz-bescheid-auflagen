@@ -239,8 +239,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
   const canSave = project
     ? ProjectPolicy.update(actor, project)
     : ProjectPolicy.create(actor);
-  const isSaveDisabled =
-    !canSave || !form.title.trim() || !form.companyId || (!project && !form.submissionType);
+  const isSaveDisabled = !canSave || !form.title.trim() || !form.companyId;
   const statusOptions = useMemo(
     () => getProjectStatusOptions({ includeUnset: Boolean(project && !project.status) }),
     [project]
@@ -248,7 +247,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
   const submissionTypeOptions = useMemo(
     () =>
       getProjectSubmissionTypeOptions({
-        includeUnset: Boolean(project && !project.submissionType)
+        includeUnset: !project || Boolean(project && !project.submissionType)
       }),
     [project]
   );

@@ -141,6 +141,7 @@ model Role {
   key           String   @unique
   labelDe       String
   descriptionDe String?
+  permissionsJson Json?
   isSystem      Boolean  @default(false)
   isArchived    Boolean  @default(false)
   createdAt     DateTime @default(now())
@@ -148,6 +149,18 @@ model Role {
 
   @@index([isArchived])
   @@index([labelDe])
+}
+
+model SecuritySettings {
+  id                             String   @id
+  passwordMinLength              Int      @default(12)
+  passwordRequireNumberOrSpecial Boolean  @default(true)
+  maxFailedLoginAttempts         Int      @default(5)
+  lockoutMinutes                 Int      @default(15)
+  sessionTtlDays                 Int      @default(7)
+  allowExternalUsers             Boolean  @default(true)
+  createdAt                      DateTime @default(now())
+  updatedAt                      DateTime @updatedAt
 }
 
 model ExternalOrganization {

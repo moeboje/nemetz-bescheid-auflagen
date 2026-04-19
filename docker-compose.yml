@@ -32,9 +32,9 @@ services:
       SESSION_TTL_DAYS: 7
       COOKIE_SECURE: "false"
       BASE_PATH: /api
-      ADMIN_EMAIL: admin@example.com
-      ADMIN_PASSWORD: ChangeMe123!
-      SEED_DEFAULT_PASSWORD: ChangeMe123!
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      SEED_DEFAULT_PASSWORD: ${SEED_DEFAULT_PASSWORD:-}
     volumes:
       - api_outbox:/app/apps/api/storage/mail-outbox
     networks:

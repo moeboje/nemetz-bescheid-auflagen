@@ -1,12 +1,22 @@
 import type { PrismaClient } from "@prisma/client";
 import type { Request, Response } from "express";
 import { hashToken, parseCookies } from "../security.js";
+import {
+  getRoleCatalogEntry,
+  hasPermission,
+  mapRequestToPermission,
+  resolvePermissionKeys,
+  type PermissionKey
+} from "../accessControl.js";
+import { getStoredRolePermissionState } from "../rolePermissions.js";
+import { getAllowExternalUsers } from "../securitySettings.js";
 
 export type RouteUser = {
   id: string;
   role: string;
   type: string;
   isArchived: boolean;
+  permissionKeys: PermissionKey[];
 };
 
 export function applyNoStoreHeaders(res: Response) {
@@ -53,7 +63,31 @@ export async function getRouteUser(
     return null;
   }
 
-  return session.user;
+  if (String(session.user.type).trim().toUpperCase() === "EXTERNAL" && !(await getAllowExternalUsers(prisma))) {
+    await prisma.session.update({
+      where: {
+        id: session.id
+      },
+      data: {
+        revokedAt: new Date()
+      }
+    });
+    return null;
+  }
+
+  const roleState = await getStoredRolePermissionState(prisma, session.user.role);
+  const isCatalogRole = Boolean(getRoleCatalogEntry(session.user.role));
+
+  return {
+    ...session.user,
+    permissionKeys: resolvePermissionKeys({
+      roleKey: session.user.role,
+      userType: session.user.type,
+      storedPermissionKeys: roleState.permissionKeys,
+      hasStoredPermissionKeys: roleState.hasStoredPermissions,
+      useLegacyInternalFallback: roleState.roleExists && !roleState.hasStoredPermissions && !isCatalogRole
+    })
+  };
 }
 
 export async function requireAuthenticatedRouteUser(
@@ -84,6 +118,15 @@ export async function requireInternalRouteUser(
     return null;
   }
 
+  const requiredPermission = mapRequestToPermission({
+    method: req.method,
+    path: req.path
+  });
+  if (requiredPermission && !hasPermission(user.permissionKeys, requiredPermission)) {
+    res.status(403).json({ ok: false, message: "Forbidden." });
+    return null;
+  }
+
   return user;
 }
 
@@ -97,7 +140,7 @@ export async function requireAdminRouteUser(
     return null;
   }
 
-  if (String(user.role).toUpperCase() !== "ADMIN") {
+  if (!hasPermission(user.permissionKeys, "admin.access")) {
     res.status(403).json({ ok: false, message: "Admin access required." });
     return null;
   }

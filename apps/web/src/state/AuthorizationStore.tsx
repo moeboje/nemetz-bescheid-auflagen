@@ -16,11 +16,14 @@ export type AuthorizationPermissions = {
   canViewObligations: boolean;
   canViewDeadlines: boolean;
   canViewScopes: boolean;
+  canViewReports: boolean;
 };
 
 export type AuthorizationContextValue = {
   actor: ProjectActor;
   permissions: AuthorizationPermissions;
+  permissionKeys: string[];
+  hasPermission: (key: string) => boolean;
 };
 
 const AuthorizationContext = createContext<AuthorizationContextValue | undefined>(undefined);
@@ -31,9 +34,10 @@ export function AuthorizationProvider({ children }: { children: React.ReactNode 
   const value = useMemo<AuthorizationContextValue>(() => {
     const hasUser = Boolean(currentUser);
     const isExternal = currentUser?.type === "EXTERNAL";
-    const isInternalUser = hasUser && !isExternal;
-    const isAdmin = currentUser?.role === "ADMIN";
-    const canEditCoreData = isInternalUser;
+    const permissionKeys = Array.isArray(currentUser?.effectivePermissions) ? currentUser.effectivePermissions : [];
+    const permissionSet = new Set(permissionKeys);
+    const hasPermission = (key: string) => permissionSet.has(key);
+    const isAdmin = hasPermission("admin.access");
 
     return {
       actor: {
@@ -42,20 +46,23 @@ export function AuthorizationProvider({ children }: { children: React.ReactNode 
         isExternal
       },
       permissions: {
-        canViewAdmin: isAdmin,
-        canEditMasterData: isAdmin,
-        canCreateProject: canEditCoreData,
-        canEditProject: canEditCoreData,
-        canEditLegalDocs: canEditCoreData,
-        canEditObligations: canEditCoreData,
-        canEditDeadlines: canEditCoreData,
-        canCompleteTasks: hasUser,
-        canViewProjects: isInternalUser,
-        canViewLegalDocs: isInternalUser,
-        canViewObligations: isInternalUser,
-        canViewDeadlines: isInternalUser,
-        canViewScopes: isInternalUser
-      }
+        canViewAdmin: hasPermission("admin.access"),
+        canEditMasterData: hasPermission("masterData.manage"),
+        canCreateProject: hasPermission("projects.create"),
+        canEditProject: hasPermission("projects.edit"),
+        canEditLegalDocs: hasPermission("legalDocs.edit"),
+        canEditObligations: hasPermission("obligations.edit"),
+        canEditDeadlines: hasPermission("deadlines.edit"),
+        canCompleteTasks: hasPermission("tasks.complete") || hasPermission("tasks.edit"),
+        canViewProjects: hasPermission("projects.view"),
+        canViewLegalDocs: hasPermission("legalDocs.view"),
+        canViewObligations: hasPermission("obligations.view"),
+        canViewDeadlines: hasPermission("deadlines.view"),
+        canViewScopes: hasPermission("masterData.view") || hasPermission("masterData.manage"),
+        canViewReports: hasPermission("reports.view")
+      },
+      permissionKeys,
+      hasPermission
     };
   }, [currentUser]);
 

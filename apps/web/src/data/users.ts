@@ -28,6 +28,7 @@ export type User = {
   mfaEnabled?: boolean;
   mfaEnforced?: boolean;
   mfaVerifiedAt?: string;
+  effectivePermissions?: string[];
   createdAt: string;
   updatedAt: string;
 };

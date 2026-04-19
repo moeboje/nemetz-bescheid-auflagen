@@ -28,6 +28,13 @@ type ServerDomainReaderResult = {
   taskState: Awaited<ReturnType<typeof readTaskStateForExport>>;
 };
 
+export const GENERIC_EXPORT_LIMITATION_META: NonNullable<ExportPayload["meta"]> = {
+  warnings: [
+    "Users are server-managed and are intentionally omitted from generic exports because generic imports do not restore users."
+  ],
+  omittedDomains: ["users"]
+};
+
 export class RecoveryExportError extends Error {
   readonly missingDomains: string[];
 
@@ -62,9 +69,14 @@ function readStorageValue<T>(key: string, fallback: T): T {
   return parsed as T;
 }
 
-export function buildExportPayload(data: ExportDataBundle): ExportPayload {
+export function buildExportPayload(
+  data: ExportDataBundle,
+  options: {
+    meta?: ExportPayload["meta"];
+  } = {}
+): ExportPayload {
   const runtimeConfig = getRuntimeConfigSnapshot();
-  return {
+  const payload: ExportPayload = {
     version: STORAGE_VERSION,
     exportedAt: new Date().toISOString(),
     app: {
@@ -76,6 +88,12 @@ export function buildExportPayload(data: ExportDataBundle): ExportPayload {
       featureFlagsSnapshot: runtimeConfig.features
     }
   };
+
+  if (options.meta) {
+    payload.meta = options.meta;
+  }
+
+  return payload;
 }
 
 async function readAuthoritiesForExport() {
@@ -141,7 +159,6 @@ export async function buildStorageExportPayload() {
   const payload = buildExportPayload({
     scopes: serverDomains.scopes,
     authorities: serverDomains.authorities,
-    users: readStorageValue(STORAGE_KEYS.users, []),
     projects: serverDomains.projects,
     projectChecklists: serverDomains.projectChecklists,
     legalDocs: serverDomains.legalDocs,
@@ -150,6 +167,8 @@ export async function buildStorageExportPayload() {
     taskState: serverDomains.taskState,
     auditLog: readStorageValue(STORAGE_KEYS.auditLog, []),
     notifications: readStorageValue(STORAGE_KEYS.notifications, [])
+  }, {
+    meta: GENERIC_EXPORT_LIMITATION_META
   });
 
   return payload;

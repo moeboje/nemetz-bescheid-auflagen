@@ -29,6 +29,7 @@ import AdminUsersPage from "./pages/AdminUsersPage";
 import AdminRolesPage from "./pages/AdminRolesPage";
 import AdminExternalOrgsPage from "./pages/AdminExternalOrgsPage";
 import AdminAuthoritiesPage from "./pages/AdminAuthoritiesPage";
+import AdminSecurityPage from "./pages/AdminSecurityPage";
 import MfaVerifyPage from "./pages/MfaVerifyPage";
 import SecuritySettingsPage from "./pages/SecuritySettingsPage";
 import {
@@ -114,6 +115,9 @@ function RequireGuest({ children }: { children: React.ReactNode }) {
   }
 
   if (user) {
+    if (user.mustChangePassword) {
+      return <Navigate to={`${MODULE_BASE_PATH}/settings/security?mode=force-password-change`} replace />;
+    }
     return <Navigate to={`${MODULE_BASE_PATH}/dashboard`} replace />;
   }
 
@@ -249,7 +253,7 @@ function AppLayout() {
       label: t("nav.reports"),
       path: `${MODULE_BASE_PATH}/reports`,
       icon: <DashboardIcon />,
-      visible: reportsEnabled && !currentUser?.isExternal
+      visible: reportsEnabled && permissions.canViewReports
     },
     {
       key: "notifications",
@@ -277,6 +281,11 @@ function AppLayout() {
   const restrictedFallback = currentUser?.isExternal
     ? `${MODULE_BASE_PATH}/tasks`
     : `${MODULE_BASE_PATH}/dashboard`;
+  const personalSecurityPath = `${MODULE_BASE_PATH}/settings/security`;
+
+  if (currentUser?.mustChangePassword && !location.pathname.endsWith("/settings/security")) {
+    return <Navigate to={`${personalSecurityPath}?mode=force-password-change`} replace />;
+  }
 
   if (isTasksReportPrintRoute(location.pathname)) {
     if (!reportsEnabled) {
@@ -363,9 +372,9 @@ function AppLayout() {
                   size="sm"
                   variant="ghost"
                   className="topbarActionButton"
-                  onClick={() => navigate(`${MODULE_BASE_PATH}/settings/security`)}
+                  onClick={() => navigate(personalSecurityPath)}
                 >
-                  Sicherheit
+                  Kontosicherheit
                 </Button>
                 {notificationsEnabled ? (
                   <IconButton
@@ -460,10 +469,14 @@ function AppLayout() {
             path="admin/authorities"
             element={permissions.canViewAdmin ? <AdminAuthoritiesPage /> : <Navigate to={restrictedFallback} replace />}
           />
+          <Route
+            path="admin/security"
+            element={permissions.canViewAdmin ? <AdminSecurityPage /> : <Navigate to={restrictedFallback} replace />}
+          />
           <Route path="compliance-summary" element={<ComplianceSummaryPage />} />
           <Route
             path="reports"
-            element={reportsEnabled ? <ReportsPage /> : <Navigate to={restrictedFallback} replace />}
+            element={reportsEnabled && permissions.canViewReports ? <ReportsPage /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route
             path="notifications"
@@ -533,10 +546,14 @@ function AppLayout() {
           path="/admin/authorities"
           element={permissions.canViewAdmin ? <AdminAuthoritiesPage /> : <Navigate to={restrictedFallback} replace />}
         />
+        <Route
+          path="/admin/security"
+          element={permissions.canViewAdmin ? <AdminSecurityPage /> : <Navigate to={restrictedFallback} replace />}
+        />
         <Route path="/compliance-summary" element={<ComplianceSummaryPage />} />
         <Route
           path="/reports"
-          element={reportsEnabled ? <ReportsPage /> : <Navigate to={restrictedFallback} replace />}
+          element={reportsEnabled && permissions.canViewReports ? <ReportsPage /> : <Navigate to={restrictedFallback} replace />}
         />
         <Route
           path="/notifications"

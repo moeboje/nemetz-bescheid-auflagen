@@ -46,6 +46,8 @@ export type UserCreateInput = {
   notes?: string;
   initialPassword?: string;
   mfaEnforced?: boolean;
+  mustChangePassword?: boolean;
+  passwordMode?: "link" | "manual" | "auto";
 };
 
 export type UserUpdateInput = Partial<UserCreateInput>;
@@ -74,6 +76,12 @@ function defaultRoleLabel(role: UserRole) {
   switch (role) {
     case "ADMIN":
       return "Admin";
+    case "COMPLIANCE_MANAGER":
+      return "Compliance Manager";
+    case "COMPLIANCE_EDITOR":
+      return "Compliance Editor";
+    case "READ_ONLY":
+      return "Read Only";
     case "COMPLIANCE":
       return "Compliance";
     case "USER":
@@ -229,8 +237,8 @@ export async function listAdminUsers(query: AdminUsersQuery = {}): Promise<Admin
 
 export async function createUser(
   input: UserCreateInput
-): Promise<{ user: User; resetLink?: string; outboxFile?: string }> {
-  const payload = await apiRequest<{ ok: boolean; user: ApiUser; resetLink?: string; outboxFile?: string }>(
+): Promise<{ user: User; resetLink?: string; outboxFile?: string; temporaryPassword?: string }> {
+  const payload = await apiRequest<{ ok: boolean; user: ApiUser; resetLink?: string; outboxFile?: string; temporaryPassword?: string }>(
     "/admin/users",
     {
       method: "POST",
@@ -241,7 +249,8 @@ export async function createUser(
   return {
     user: mapApiUserToUser(payload.user),
     resetLink: payload.resetLink,
-    outboxFile: payload.outboxFile
+    outboxFile: payload.outboxFile,
+    temporaryPassword: payload.temporaryPassword
   };
 }
 
@@ -268,12 +277,14 @@ export async function restoreUser(id: string): Promise<User> {
 }
 
 export async function requestUserPasswordReset(
-  id: string
-): Promise<{ ok: boolean; resetLink?: string; outboxFile?: string }> {
-  return apiRequest<{ ok: boolean; resetLink?: string; outboxFile?: string }>(
+  id: string,
+  input?: { passwordMode?: "link" | "manual" | "auto"; temporaryPassword?: string }
+): Promise<{ ok: boolean; resetLink?: string; outboxFile?: string; temporaryPassword?: string }> {
+  return apiRequest<{ ok: boolean; resetLink?: string; outboxFile?: string; temporaryPassword?: string }>(
     `/admin/users/${id}/reset-password`,
     {
-      method: "POST"
+      method: "POST",
+      body: input
     }
   );
 }

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { Navigate } from "react-router-dom";
 import {
   Breadcrumbs,
   Button,
@@ -15,6 +16,7 @@ import { useRuntimeConfig } from "../config/runtimeConfig";
 import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useProjects } from "../state/ProjectsStore";
+import { useAuthorization } from "../state/AuthorizationStore";
 import { useScopes } from "../state/ScopesStore";
 import { useTasks } from "../state/TasksStore";
 
@@ -69,6 +71,7 @@ function createEmptySummary(): ScopeSummary {
 
 export default function ScopesPage() {
   const runtimeConfig = useRuntimeConfig();
+  const { permissions } = useAuthorization();
   const {
     companies,
     sites,
@@ -106,6 +109,7 @@ export default function ScopesPage() {
   const [companyForm, setCompanyForm] = useState(emptyCompanyForm);
   const [siteForm, setSiteForm] = useState(emptySiteForm);
   const [facilityForm, setFacilityForm] = useState(emptyFacilityForm);
+  const canManageScopes = permissions.canEditMasterData;
 
   const activeProjects = useMemo(
     () => projects.filter((project) => !project.archivedAt && !project.isArchived),
@@ -275,12 +279,18 @@ export default function ScopesPage() {
   }, [facilityForm.companyId, facilityForm.siteId, sites]);
 
   const openNewCompanyModal = () => {
+    if (!canManageScopes) {
+      return;
+    }
     setEditingCompanyId(null);
     setCompanyForm(emptyCompanyForm);
     setCompanyModalOpen(true);
   };
 
   const openEditCompanyModal = (companyId: string) => {
+    if (!canManageScopes) {
+      return;
+    }
     const company = companies.find((item) => item.id === companyId);
     if (!company) {
       return;
@@ -294,6 +304,9 @@ export default function ScopesPage() {
   };
 
   const openNewSiteModal = () => {
+    if (!canManageScopes) {
+      return;
+    }
     const defaultCompanyId = companies.find((company) => !company.isArchived)?.id ?? "";
     setEditingSiteId(null);
     setSiteForm({
@@ -304,6 +317,9 @@ export default function ScopesPage() {
   };
 
   const openEditSiteModal = (siteId: string) => {
+    if (!canManageScopes) {
+      return;
+    }
     const site = sites.find((item) => item.id === siteId);
     if (!site) {
       return;
@@ -317,6 +333,9 @@ export default function ScopesPage() {
   };
 
   const openNewFacilityModal = () => {
+    if (!canManageScopes) {
+      return;
+    }
     const defaultCompanyId = companies.find((company) => !company.isArchived)?.id ?? "";
     const defaultSiteId =
       sites.find((site) => site.companyId === defaultCompanyId && !site.isArchived)?.id ?? "";
@@ -331,6 +350,9 @@ export default function ScopesPage() {
   };
 
   const openEditFacilityModal = (facilityId: string) => {
+    if (!canManageScopes) {
+      return;
+    }
     const facility = facilities.find((item) => item.id === facilityId);
     if (!facility) {
       return;
@@ -346,6 +368,9 @@ export default function ScopesPage() {
   };
 
   const askArchiveCompany = (companyId: string) => {
+    if (!canManageScopes) {
+      return;
+    }
     const company = companies.find((item) => item.id === companyId);
     if (!company) {
       return;
@@ -363,6 +388,9 @@ export default function ScopesPage() {
   };
 
   const askArchiveSite = (siteId: string) => {
+    if (!canManageScopes) {
+      return;
+    }
     const site = sites.find((item) => item.id === siteId);
     if (!site) {
       return;
@@ -379,6 +407,9 @@ export default function ScopesPage() {
   };
 
   const askArchiveFacility = (facilityId: string) => {
+    if (!canManageScopes) {
+      return;
+    }
     const facility = facilities.find((item) => item.id === facilityId);
     if (!facility) {
       return;
@@ -391,7 +422,7 @@ export default function ScopesPage() {
   };
 
   const handleConfirmArchive = async () => {
-    if (!archiveTarget) {
+    if (!archiveTarget || !canManageScopes) {
       return;
     }
 
@@ -445,21 +476,33 @@ export default function ScopesPage() {
   };
 
   const handleRestoreCompany = async (id: string) => {
+    if (!canManageScopes) {
+      return;
+    }
     await restoreCompany(id);
     setActiveScope({ level: "company", id });
   };
 
   const handleRestoreSite = async (id: string) => {
+    if (!canManageScopes) {
+      return;
+    }
     await restoreSite(id);
     setActiveScope({ level: "site", id });
   };
 
   const handleRestoreFacility = async (id: string) => {
+    if (!canManageScopes) {
+      return;
+    }
     await restoreFacility(id);
     setActiveScope({ level: "facility", id });
   };
 
   const handleSaveCompany = async () => {
+    if (!canManageScopes) {
+      return;
+    }
     const name = companyForm.name.trim();
     if (!name) {
       return;
@@ -481,6 +524,9 @@ export default function ScopesPage() {
   };
 
   const handleSaveSite = async () => {
+    if (!canManageScopes) {
+      return;
+    }
     const name = siteForm.name.trim();
     if (!siteForm.companyId || !name) {
       return;
@@ -502,6 +548,9 @@ export default function ScopesPage() {
   };
 
   const handleSaveFacility = async () => {
+    if (!canManageScopes) {
+      return;
+    }
     const name = facilityForm.name.trim();
     if (!facilityForm.companyId || !facilityForm.siteId || !name) {
       return;
@@ -531,6 +580,10 @@ export default function ScopesPage() {
   const isFacilitySaveDisabled =
     !facilityForm.companyId || !facilityForm.siteId || !facilityForm.name.trim();
 
+  if (!permissions.canViewScopes) {
+    return <Navigate to="/compliance/dashboard" replace />;
+  }
+
   return (
     <div className="page">
       <div className="pageHeader">
@@ -545,11 +598,13 @@ export default function ScopesPage() {
           <h1 className="pageTitle">{t("scopes.title")}</h1>
         </div>
         <div className="scopeHeaderActions">
-          <Button onClick={openNewCompanyModal}>{t("scopes.addCompany")}</Button>
-          <Button variant="secondary" onClick={openNewSiteModal}>
+          <Button onClick={openNewCompanyModal} disabled={!canManageScopes}>
+            {t("scopes.addCompany")}
+          </Button>
+          <Button variant="secondary" onClick={openNewSiteModal} disabled={!canManageScopes}>
             {t("scopes.addSite")}
           </Button>
-          <Button variant="secondary" onClick={openNewFacilityModal}>
+          <Button variant="secondary" onClick={openNewFacilityModal} disabled={!canManageScopes}>
             {t("scopes.addFacility")}
           </Button>
         </div>
@@ -612,17 +667,24 @@ export default function ScopesPage() {
                         <IconButton
                           ariaLabel={t("common.edit")}
                           onClick={() => openEditCompanyModal(company.id)}
+                          disabled={!canManageScopes}
                         >
                           <EditIcon />
                         </IconButton>
                         {company.isArchived ? (
-                          <Button size="sm" variant="ghost" onClick={() => handleRestoreCompany(company.id)}>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleRestoreCompany(company.id)}
+                            disabled={!canManageScopes}
+                          >
                             {t("common.restore")}
                           </Button>
                         ) : (
                           <IconButton
                             ariaLabel={t("common.archive")}
                             onClick={() => askArchiveCompany(company.id)}
+                            disabled={!canManageScopes}
                           >
                             <ArchiveIcon />
                           </IconButton>
@@ -654,17 +716,24 @@ export default function ScopesPage() {
                                 <IconButton
                                   ariaLabel={t("common.edit")}
                                   onClick={() => openEditSiteModal(site.id)}
+                                  disabled={!canManageScopes}
                                 >
                                   <EditIcon />
                                 </IconButton>
                                 {site.isArchived ? (
-                                  <Button size="sm" variant="ghost" onClick={() => handleRestoreSite(site.id)}>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => handleRestoreSite(site.id)}
+                                    disabled={!canManageScopes}
+                                  >
                                     {t("common.restore")}
                                   </Button>
                                 ) : (
                                   <IconButton
                                     ariaLabel={t("common.archive")}
                                     onClick={() => askArchiveSite(site.id)}
+                                    disabled={!canManageScopes}
                                   >
                                     <ArchiveIcon />
                                   </IconButton>
@@ -697,17 +766,24 @@ export default function ScopesPage() {
                                     <IconButton
                                       ariaLabel={t("common.edit")}
                                       onClick={() => openEditFacilityModal(facility.id)}
+                                      disabled={!canManageScopes}
                                     >
                                       <EditIcon />
                                     </IconButton>
                                     {facility.isArchived ? (
-                                      <Button size="sm" variant="ghost" onClick={() => handleRestoreFacility(facility.id)}>
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => handleRestoreFacility(facility.id)}
+                                        disabled={!canManageScopes}
+                                      >
                                         {t("common.restore")}
                                       </Button>
                                     ) : (
                                       <IconButton
                                         ariaLabel={t("common.archive")}
                                         onClick={() => askArchiveFacility(facility.id)}
+                                        disabled={!canManageScopes}
                                       >
                                         <ArchiveIcon />
                                       </IconButton>
@@ -770,7 +846,7 @@ export default function ScopesPage() {
             <Button variant="secondary" onClick={() => setCompanyModalOpen(false)}>
               {t("common.cancel")}
             </Button>
-            <Button onClick={handleSaveCompany} disabled={isCompanySaveDisabled}>
+            <Button onClick={handleSaveCompany} disabled={!canManageScopes || isCompanySaveDisabled}>
               {t("common.save")}
             </Button>
           </div>
@@ -819,7 +895,7 @@ export default function ScopesPage() {
             <Button variant="secondary" onClick={() => setSiteModalOpen(false)}>
               {t("common.cancel")}
             </Button>
-            <Button onClick={handleSaveSite} disabled={isSiteSaveDisabled}>
+            <Button onClick={handleSaveSite} disabled={!canManageScopes || isSiteSaveDisabled}>
               {t("common.save")}
             </Button>
           </div>
@@ -873,7 +949,7 @@ export default function ScopesPage() {
             <Button variant="secondary" onClick={() => setFacilityModalOpen(false)}>
               {t("common.cancel")}
             </Button>
-            <Button onClick={handleSaveFacility} disabled={isFacilitySaveDisabled}>
+            <Button onClick={handleSaveFacility} disabled={!canManageScopes || isFacilitySaveDisabled}>
               {t("common.save")}
             </Button>
           </div>
@@ -945,7 +1021,9 @@ export default function ScopesPage() {
             <Button variant="secondary" onClick={() => setArchiveTarget(null)}>
               {t("common.cancel")}
             </Button>
-            <Button onClick={handleConfirmArchive}>{t("common.confirm")}</Button>
+            <Button onClick={handleConfirmArchive} disabled={!canManageScopes}>
+              {t("common.confirm")}
+            </Button>
           </div>
         }
       >

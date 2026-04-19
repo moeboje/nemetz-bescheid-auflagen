@@ -334,4 +334,138 @@ describe("Project checklists", () => {
       [firstProject.id, secondProject.id].sort()
     );
   });
+
+  it("bulk-replace only updates the submitted project ids", async () => {
+    const user = await createUser({
+      email: "project-checklist-scope@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const company = await createCompany("Checklist Company");
+    const firstProject = await createProject(company.id, "Erstes Projekt");
+    const secondProject = await createProject(company.id, "Zweites Projekt");
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    await request("/admin/internal/project-checklists/bulk-replace", {
+      method: "PUT",
+      cookie,
+      body: [
+        {
+          id: "pcl-a",
+          projectId: firstProject.id,
+          sections: [
+            {
+              id: "pcs-a",
+              title: "Sektion A",
+              items: [{ id: "pci-a", title: "Punkt A", status: "DONE" }]
+            }
+          ]
+        },
+        {
+          id: "pcl-b",
+          projectId: secondProject.id,
+          sections: [
+            {
+              id: "pcs-b",
+              title: "Sektion B",
+              items: [{ id: "pci-b", title: "Punkt B", status: "NOT_REQUIRED" }]
+            }
+          ]
+        }
+      ]
+    });
+
+    const replaceResponse = await request("/admin/internal/project-checklists/bulk-replace", {
+      method: "PUT",
+      cookie,
+      body: [
+        {
+          id: "pcl-a-2",
+          projectId: firstProject.id,
+          sections: [
+            {
+              id: "pcs-a-2",
+              title: "Sektion A aktualisiert",
+              items: [{ id: "pci-a-2", title: "Punkt A2", status: "OPEN" }]
+            }
+          ]
+        }
+      ]
+    });
+
+    assert.equal(replaceResponse.status, 200);
+
+    const firstResponse = await request(`/projects/${firstProject.id}/checklist`, {
+      cookie
+    });
+    const secondResponse = await request(`/projects/${secondProject.id}/checklist`, {
+      cookie
+    });
+
+    const firstPayload = (await firstResponse.json()) as {
+      checklist: { id: string; sections: Array<{ title: string }> } | null;
+    };
+    const secondPayload = (await secondResponse.json()) as {
+      checklist: { id: string; sections: Array<{ title: string }> } | null;
+    };
+
+    assert.equal(firstPayload.checklist?.id, "pcl-a-2");
+    assert.equal(firstPayload.checklist?.sections[0]?.title, "Sektion A aktualisiert");
+    assert.equal(secondPayload.checklist?.id, "pcl-b");
+    assert.equal(secondPayload.checklist?.sections[0]?.title, "Sektion B");
+  });
+
+  it("bulk-delete removes all project checklists explicitly", async () => {
+    const user = await createUser({
+      email: "project-checklist-delete-all@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const company = await createCompany("Checklist Company");
+    const firstProject = await createProject(company.id, "Erstes Projekt");
+    const secondProject = await createProject(company.id, "Zweites Projekt");
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    await request("/admin/internal/project-checklists/bulk-replace", {
+      method: "PUT",
+      cookie,
+      body: [
+        {
+          id: "pcl-a",
+          projectId: firstProject.id,
+          sections: [
+            {
+              id: "pcs-a",
+              title: "Sektion A",
+              items: [{ id: "pci-a", title: "Punkt A", status: "DONE" }]
+            }
+          ]
+        },
+        {
+          id: "pcl-b",
+          projectId: secondProject.id,
+          sections: [
+            {
+              id: "pcs-b",
+              title: "Sektion B",
+              items: [{ id: "pci-b", title: "Punkt B", status: "NOT_REQUIRED" }]
+            }
+          ]
+        }
+      ]
+    });
+
+    const deleteResponse = await request("/admin/internal/project-checklists/bulk-delete", {
+      method: "DELETE",
+      cookie
+    });
+
+    assert.equal(deleteResponse.status, 200);
+
+    const checklistRows = await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT "id"
+      FROM "ProjectChecklist"
+    `;
+    assert.equal(checklistRows.length, 0);
+  });
 });

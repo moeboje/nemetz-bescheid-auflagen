@@ -1,6 +1,10 @@
 import { prisma } from "./prisma.js";
 import { hashPassword, validatePassword } from "./security.js";
-import { loadProjectEnvFile } from "./config.js";
+import { loadConfig, loadProjectEnvFile } from "./config.js";
+import { resolveExplicitAdminCredentials } from "./adminCredentials.js";
+import { ROLE_CATALOG } from "./accessControl.js";
+import { setStoredRolePermissionKeys } from "./rolePermissions.js";
+import { ensureSecuritySettings } from "./securitySettings.js";
 
 type SeedUser = {
   id: string;
@@ -8,7 +12,7 @@ type SeedUser = {
   lastName: string;
   email: string;
   phone?: string;
-  role: "ADMIN" | "COMPLIANCE" | "USER" | "EXTERNAL";
+  role: string;
   type: "INTERNAL" | "EXTERNAL";
   externalOrgName?: string;
 };
@@ -104,16 +108,15 @@ const seedAuthorityContacts: Array<{
   roleTitle?: string;
 }> = [];
 
+function resolveSeedCredentials() {
+  return resolveExplicitAdminCredentials("seed");
+}
+
 async function run() {
   loadProjectEnvFile();
-  const adminEmail = (process.env.ADMIN_EMAIL || "admin@example.com").trim().toLowerCase();
-  const adminPassword = process.env.ADMIN_PASSWORD || "ChangeMe123!";
+  const config = loadConfig();
+  const { adminEmail, adminPassword } = resolveSeedCredentials();
   const sharedPassword = process.env.SEED_DEFAULT_PASSWORD || adminPassword;
-
-  const passwordValidation = validatePassword(adminPassword);
-  if (!passwordValidation.valid) {
-    throw new Error(passwordValidation.message || "Invalid ADMIN_PASSWORD");
-  }
 
   const sharedPasswordValidation = validatePassword(sharedPassword);
   if (!sharedPasswordValidation.valid) {
@@ -124,43 +127,29 @@ async function run() {
   const defaultHash = await hashPassword(sharedPassword);
 
   const now = new Date();
-  const seedRoles = [
-    {
-      key: "ADMIN",
-      labelDe: "Admin"
-    },
-    {
-      key: "COMPLIANCE",
-      labelDe: "Compliance"
-    },
-    {
-      key: "USER",
-      labelDe: "Benutzer"
-    },
-    {
-      key: "EXTERNAL",
-      labelDe: "Extern"
-    }
-  ] as const;
-
-  for (const role of seedRoles) {
+  for (const role of ROLE_CATALOG) {
     await prisma.role.upsert({
       where: {
         key: role.key
       },
       update: {
         labelDe: role.labelDe,
+        descriptionDe: role.descriptionDe,
         isSystem: true,
         isArchived: false
       },
       create: {
         key: role.key,
         labelDe: role.labelDe,
+        descriptionDe: role.descriptionDe,
         isSystem: true,
         isArchived: false
       }
     });
+    await setStoredRolePermissionKeys(prisma, role.key, role.permissionKeys);
   }
+
+  await ensureSecuritySettings(prisma, config);
 
   const seedExternalOrganizations = [
     {

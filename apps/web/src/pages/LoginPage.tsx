@@ -58,6 +58,10 @@ export default function LoginPage() {
         });
         return;
       }
+      if (result.user.mustChangePassword) {
+        navigate("/compliance/settings/security?mode=force-password-change", { replace: true });
+        return;
+      }
       navigate(nextPath, { replace: true });
     } catch (err) {
       if (err instanceof ApiError) {

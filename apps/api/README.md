@@ -6,6 +6,7 @@
 cd apps/api
 cp .env.example .env
 npm install
+# Set explicit non-default ADMIN_EMAIL and ADMIN_PASSWORD in .env before running the seed.
 npm run migrate:dev -- --name init_auth
 npm run seed
 npm run dev
@@ -16,6 +17,7 @@ For this auth upgrade, run migration + seed after pulling changes:
 ```bash
 cd apps/api
 npm install
+# Ensure ADMIN_EMAIL and ADMIN_PASSWORD are set to explicit non-default values in .env.
 npm run migrate:dev -- --name mfa_totp_support
 npm run seed
 ```
@@ -24,9 +26,9 @@ API base path: `http://localhost:4000/api`
 
 ## Seeded Admin
 
-- Default email: `admin@example.com`
-- Password comes from `ADMIN_PASSWORD` (or fallback from `.env.example`)
-- Change the admin password after first login.
+- No default admin credentials are created anymore.
+- Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` explicitly before bootstrap or `npm run seed`.
+- `SEED_DEFAULT_PASSWORD` is optional and defaults to the explicit admin password when omitted.
 
 ## Mail Outbox (dev)
 

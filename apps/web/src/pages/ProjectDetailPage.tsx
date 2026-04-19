@@ -885,13 +885,12 @@ export default function ProjectDetailPage() {
         participant={editingExternalParticipant}
         onSave={async (input) => {
           if (!canUpdate) {
-            return;
+            return false;
           }
           if (editingExternalParticipant) {
-            await updateExternalParticipant(project.id, editingExternalParticipant.id, input);
-            return;
+            return updateExternalParticipant(project.id, editingExternalParticipant.id, input);
           }
-          await addExternalParticipant(project.id, input);
+          return addExternalParticipant(project.id, input);
         }}
       />
 

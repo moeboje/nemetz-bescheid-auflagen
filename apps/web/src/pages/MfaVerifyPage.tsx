@@ -43,7 +43,11 @@ export default function MfaVerifyPage() {
     setError("");
 
     try {
-      await verifyMfa(mfaToken, value.trim());
+      const user = await verifyMfa(mfaToken, value.trim());
+      if (user.mustChangePassword) {
+        navigate("/compliance/settings/security?mode=force-password-change", { replace: true });
+        return;
+      }
       navigate(nextPath, { replace: true });
     } catch (err) {
       if (err instanceof ApiError) {

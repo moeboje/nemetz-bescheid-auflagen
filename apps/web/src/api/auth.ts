@@ -26,6 +26,7 @@ export type ApiUser = {
   mfaEnabled?: boolean;
   mfaEnforced?: boolean;
   mfaVerifiedAt?: string | null;
+  effectivePermissions?: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -63,10 +64,21 @@ export type MfaStatus = {
   verifiedAt?: string;
 };
 
+export type PasswordPolicy = {
+  passwordMinLength: number;
+  passwordRequireNumberOrSpecial: boolean;
+};
+
 function defaultRoleLabel(role: UserRole) {
   switch (role) {
     case "ADMIN":
       return "Admin";
+    case "COMPLIANCE_MANAGER":
+      return "Compliance Manager";
+    case "COMPLIANCE_EDITOR":
+      return "Compliance Editor";
+    case "READ_ONLY":
+      return "Read Only";
     case "COMPLIANCE":
       return "Compliance";
     case "USER":
@@ -108,6 +120,7 @@ export function mapApiUserToUser(user: ApiUser): User {
     mfaEnabled: user.mfaEnabled ?? false,
     mfaEnforced: user.mfaEnforced ?? false,
     mfaVerifiedAt: user.mfaVerifiedAt ?? undefined,
+    effectivePermissions: Array.isArray(user.effectivePermissions) ? user.effectivePermissions : [],
     createdAt: user.createdAt,
     updatedAt: user.updatedAt
   };
@@ -162,6 +175,12 @@ export async function getMfaStatus() {
   return payload;
 }
 
+export async function getPasswordPolicy() {
+  return apiRequest<PasswordPolicy>("/auth/password/policy", {
+    method: "GET"
+  });
+}
+
 export async function setupMfaTotp() {
   return apiRequest<{ ok: boolean; otpauthUrl: string; expiresAt: string; qrDataUrl?: string }>("/auth/mfa/totp/setup", {
     method: "POST"
@@ -200,4 +219,13 @@ export async function resetPassword(input: ResetPasswordInput) {
     method: "POST",
     body: input
   });
+}
+
+export async function changePassword(input: { currentPassword: string; newPassword: string }) {
+  const payload = await apiRequest<{ ok: boolean; user: ApiUser }>("/auth/password/change", {
+    method: "POST",
+    body: input
+  });
+
+  return mapApiUserToUser(payload.user);
 }

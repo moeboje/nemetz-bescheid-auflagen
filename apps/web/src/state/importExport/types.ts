@@ -36,5 +36,9 @@ export type ExportPayload = {
     name: string;
     buildLabel?: string;
   };
+  meta?: {
+    warnings?: string[];
+    omittedDomains?: string[];
+  };
   data: ExportDataBundle;
 };

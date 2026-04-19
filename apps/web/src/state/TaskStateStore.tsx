@@ -209,44 +209,6 @@ function hasTaskStateEntries(value: TaskStateMap) {
   return Object.keys(value).length > 0;
 }
 
-function toUpdatedAtMillis(value: string | undefined) {
-  if (!value) {
-    return null;
-  }
-
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function pickPreferredTaskStateEntry(current: TaskStateEntry, incoming: TaskStateEntry) {
-  const currentUpdatedAt = toUpdatedAtMillis(current.updatedAt);
-  const incomingUpdatedAt = toUpdatedAtMillis(incoming.updatedAt);
-
-  if (currentUpdatedAt !== null && incomingUpdatedAt !== null) {
-    if (incomingUpdatedAt > currentUpdatedAt) {
-      return incoming;
-    }
-    return current;
-  }
-
-  if (incomingUpdatedAt !== null && currentUpdatedAt === null) {
-    return incoming;
-  }
-
-  return current;
-}
-
-function mergeTaskStateMaps(current: TaskStateMap, incoming: TaskStateMap): TaskStateMap {
-  const merged: TaskStateMap = { ...current };
-
-  Object.entries(incoming).forEach(([taskInstanceId, entry]) => {
-    const existing = merged[taskInstanceId];
-    merged[taskInstanceId] = existing ? pickPreferredTaskStateEntry(existing, entry) : entry;
-  });
-
-  return merged;
-}
-
 function readLegacyTaskState() {
   return normalizeTaskStateMap(loadJSON<TaskStateMap>(STORAGE_KEYS.taskState, { fallback: {} }) ?? {});
 }
@@ -289,10 +251,9 @@ export function TaskStateProvider({ children }: { children: React.ReactNode }) {
     try {
       serverTaskState = normalizeTaskStateMap(await listTaskState());
     } catch {
-      const fallback = hasTaskStateEntries(legacyTaskState) ? legacyTaskState : {};
-      setTaskState(fallback);
+      setTaskState({});
       legacyCleanupReadyRef.current = false;
-      return fallback;
+      return {};
     }
 
     if (!hasTaskStateEntries(legacyTaskState)) {
@@ -311,10 +272,9 @@ export function TaskStateProvider({ children }: { children: React.ReactNode }) {
       clearLegacyTaskState();
       return mergedTaskState;
     } catch {
-      const fallback = mergeTaskStateMaps(serverTaskState, legacyTaskState);
-      setTaskState(fallback);
+      setTaskState(serverTaskState);
       legacyCleanupReadyRef.current = false;
-      return fallback;
+      return serverTaskState;
     }
   }, [authUser]);
 

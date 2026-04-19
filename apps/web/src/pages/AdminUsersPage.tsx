@@ -14,6 +14,7 @@ import AdminSubnav from "../components/AdminSubnav";
 type ArchivedFilter = "false" | "true" | "all";
 type SortField = "name" | "email" | "createdAt" | "lastLoginAt";
 type SortDirection = "asc" | "desc";
+type PasswordMode = "link" | "manual" | "auto";
 
 type UserFormState = {
   firstName: string;
@@ -26,6 +27,8 @@ type UserFormState = {
   externalOrgId: string;
   notes: string;
   initialPassword: string;
+  passwordMode: PasswordMode;
+  mustChangePassword: boolean;
 };
 
 type ConfirmationState = {
@@ -39,6 +42,8 @@ type ResetState = {
   displayName: string;
   isArchived: boolean;
   isSelf: boolean;
+  passwordMode: PasswordMode;
+  temporaryPassword: string;
 };
 
 type ExternalOrgQuickForm = {
@@ -54,12 +59,14 @@ const emptyForm: UserFormState = {
   lastName: "",
   email: "",
   phone: "",
-  role: "USER",
+  role: "COMPLIANCE_EDITOR",
   type: "INTERNAL",
   titleOrPosition: "",
   externalOrgId: "",
   notes: "",
-  initialPassword: ""
+  initialPassword: "",
+  passwordMode: "link",
+  mustChangePassword: false
 };
 
 const emptyExternalOrgQuickForm: ExternalOrgQuickForm = {
@@ -72,8 +79,9 @@ const emptyExternalOrgQuickForm: ExternalOrgQuickForm = {
 
 const fallbackRoleOptions = [
   { key: "ADMIN", label: t("users.role.admin") },
-  { key: "COMPLIANCE", label: t("users.role.compliance") },
-  { key: "USER", label: t("users.role.user") },
+  { key: "COMPLIANCE_MANAGER", label: "Compliance Manager" },
+  { key: "COMPLIANCE_EDITOR", label: "Compliance Editor" },
+  { key: "READ_ONLY", label: "Read Only" },
   { key: "EXTERNAL", label: t("users.role.external") }
 ];
 
@@ -201,7 +209,7 @@ export default function AdminUsersPage() {
       ];
     }
 
-    const activeRoles = roles.filter((role) => !role.isArchived);
+    const activeRoles = roles.filter((role) => !role.isArchived && (role.isAssignable ?? true));
     const seen = new Set<string>(["ALL"]);
 
     activeRoles.forEach((role) => {
@@ -223,7 +231,7 @@ export default function AdminUsersPage() {
   }, [roleFilter, roles]);
 
   const formRoleOptions = useMemo(() => {
-    const activeRoles = roles.filter((role) => !role.isArchived);
+    const activeRoles = roles.filter((role) => !role.isArchived && (role.isAssignable ?? true));
     const fromStore = activeRoles.map((role) => ({ value: role.key, label: role.labelDe }));
     const fallback = fallbackRoleOptions.map((entry) => ({ value: entry.key, label: entry.label }));
 
@@ -347,7 +355,9 @@ export default function AdminUsersPage() {
       titleOrPosition: user.titleOrPosition ?? "",
       externalOrgId: user.externalOrgId ?? "",
       notes: user.notes ?? "",
-      initialPassword: ""
+      initialPassword: "",
+      passwordMode: "link",
+      mustChangePassword: Boolean(user.mustChangePassword)
     });
     setEditingId(user.id);
     setFormError("");
@@ -381,6 +391,10 @@ export default function AdminUsersPage() {
       return t("admin.users.validation.externalOrgRequired");
     }
 
+    if (!editingId && form.passwordMode === "manual" && !form.initialPassword.trim()) {
+      return "Bitte ein temporaeres Passwort eingeben.";
+    }
+
     return "";
   };
 
@@ -409,7 +423,8 @@ export default function AdminUsersPage() {
           type: form.type,
           titleOrPosition: form.titleOrPosition,
           externalOrgId: form.type === "EXTERNAL" ? form.externalOrgId : undefined,
-          notes: form.notes
+          notes: form.notes,
+          mustChangePassword: form.mustChangePassword
         });
         setSuccessMessage(t("admin.users.success.updated"));
       } else {
@@ -423,16 +438,19 @@ export default function AdminUsersPage() {
           titleOrPosition: form.titleOrPosition,
           externalOrgId: form.type === "EXTERNAL" ? form.externalOrgId : undefined,
           notes: form.notes,
-          initialPassword: form.initialPassword.trim() || undefined
+          initialPassword: form.passwordMode === "manual" ? form.initialPassword.trim() || undefined : undefined,
+          passwordMode: form.passwordMode
         });
 
-        const devValue = created.resetLink || created.outboxFile || "";
+        const devValue = created.temporaryPassword || created.resetLink || created.outboxFile || "";
         setInviteDevValue(devValue);
 
         setSuccessMessage(
-          created.user.invitedAt
-            ? t("admin.users.success.createdInvite")
-            : t("admin.users.success.created")
+          created.temporaryPassword
+            ? "Benutzer wurde angelegt. Das temporaere Passwort wird einmalig angezeigt."
+            : created.user.invitedAt
+              ? t("admin.users.success.createdInvite")
+              : t("admin.users.success.created")
         );
       }
 
@@ -473,7 +491,11 @@ export default function AdminUsersPage() {
   };
 
   const openResetModal = (input: { userId: string; displayName: string; isArchived: boolean; isSelf: boolean }) => {
-    setResetState(input);
+    setResetState({
+      ...input,
+      passwordMode: "link",
+      temporaryPassword: ""
+    });
     setResetError("");
     setResetDevValue("");
     setSuccessMessage("");
@@ -489,16 +511,27 @@ export default function AdminUsersPage() {
       return;
     }
 
+    if (resetState.passwordMode === "manual" && !resetState.temporaryPassword.trim()) {
+      setResetError("Bitte ein temporaeres Passwort eingeben.");
+      return;
+    }
+
     setIsResetSubmitting(true);
     setResetError("");
     setSuccessMessage("");
 
     try {
-      const result = await requestReset(resetState.userId);
-      const devValue = result.resetLink || result.outboxFile || "";
+      const result = await requestReset(resetState.userId, {
+        passwordMode: resetState.passwordMode,
+        temporaryPassword:
+          resetState.passwordMode === "manual" ? resetState.temporaryPassword.trim() || undefined : undefined
+      });
+      const devValue = result.temporaryPassword || result.resetLink || result.outboxFile || "";
       setResetDevValue(devValue);
       setSuccessMessage(
-        result.resetLink
+        result.temporaryPassword
+          ? "Temporaeres Passwort wurde gesetzt und wird einmalig angezeigt."
+          : result.resetLink
           ? t("admin.users.reset.successWithLink").replace("{link}", result.resetLink)
           : result.outboxFile
             ? t("admin.users.reset.successWithOutbox").replace("{path}", result.outboxFile)
@@ -778,6 +811,10 @@ export default function AdminUsersPage() {
 
               if (isLocked(row.lockedUntil)) {
                 return <Badge variant="danger">{t("users.status.locked")}</Badge>;
+              }
+
+              if (row.mustChangePassword) {
+                return <Badge variant="warning">Passwortwechsel offen</Badge>;
               }
 
               return <Badge variant="success">{t("users.status.active")}</Badge>;
@@ -1067,19 +1104,61 @@ export default function AdminUsersPage() {
 
           {!editingId ? (
             <div className="formField">
-              <span className="fieldLabel">{t("admin.users.form.initialPassword")}</span>
-              <Input
-                type="password"
-                placeholder={t("admin.users.form.initialPassword")}
-                value={form.initialPassword}
+              <span className="fieldLabel">Initialzugang</span>
+              <Select
+                options={[
+                  { value: "link", label: "Reset-Link erzeugen" },
+                  { value: "manual", label: "Temporaeres Passwort setzen" },
+                  { value: "auto", label: "Temporaeres Passwort generieren" }
+                ]}
+                value={form.passwordMode}
                 onChange={(event) =>
-                  setForm((prev) => ({ ...prev, initialPassword: event.target.value }))
+                  setForm((prev) => ({
+                    ...prev,
+                    passwordMode: event.target.value as PasswordMode,
+                    initialPassword: event.target.value === "manual" ? prev.initialPassword : ""
+                  }))
                 }
                 disabled={isSubmitting}
               />
-              <p className="placeholderText">{t("admin.users.form.initialPasswordHint")}</p>
+              {form.passwordMode === "manual" ? (
+                <>
+                  <Input
+                    type="password"
+                    placeholder={t("admin.users.form.initialPassword")}
+                    value={form.initialPassword}
+                    onChange={(event) =>
+                      setForm((prev) => ({ ...prev, initialPassword: event.target.value }))
+                    }
+                    disabled={isSubmitting}
+                  />
+                  <p className="placeholderText">Das Passwort wird nur beim Anlegen verwendet und der Benutzer muss es beim naechsten Login aendern.</p>
+                </>
+              ) : form.passwordMode === "auto" ? (
+                <p className="placeholderText">Es wird ein sicheres temporaeres Passwort generiert und einmalig angezeigt.</p>
+              ) : (
+                <p className="placeholderText">{t("admin.users.form.initialPasswordHint")}</p>
+              )}
             </div>
-          ) : null}
+          ) : (
+            <div className="formField">
+              <span className="fieldLabel">Passwortwechsel beim naechsten Login</span>
+              <Select
+                options={[
+                  { value: "false", label: "Nein" },
+                  { value: "true", label: "Ja" }
+                ]}
+                value={String(form.mustChangePassword)}
+                onChange={(event) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    mustChangePassword: event.target.value === "true"
+                  }))
+                }
+                disabled={isSubmitting}
+              />
+            </div>
+          )}
 
           {formError ? <p className="validationText">{formError}</p> : null}
         </div>
@@ -1138,6 +1217,53 @@ export default function AdminUsersPage() {
 
           {resetState?.isSelf ? <p className="placeholderText">{t("admin.users.reset.modal.selfWarning")}</p> : null}
           {resetState?.isArchived ? <p className="validationText">{t("admin.users.reset.error.archived")}</p> : null}
+
+          {resetState ? (
+            <div className="formField">
+              <span className="fieldLabel">Reset-Modus</span>
+              <Select
+                options={[
+                  { value: "link", label: "Reset-Link erzeugen" },
+                  { value: "manual", label: "Temporaeres Passwort setzen" },
+                  { value: "auto", label: "Temporaeres Passwort generieren" }
+                ]}
+                value={resetState.passwordMode}
+                onChange={(event) =>
+                  setResetState((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          passwordMode: event.target.value as PasswordMode,
+                          temporaryPassword: event.target.value === "manual" ? prev.temporaryPassword : ""
+                        }
+                      : prev
+                  )
+                }
+                disabled={isResetSubmitting || Boolean(resetState.isArchived)}
+              />
+            </div>
+          ) : null}
+
+          {resetState?.passwordMode === "manual" ? (
+            <div className="formField">
+              <span className="fieldLabel">Temporaeres Passwort</span>
+              <Input
+                type="password"
+                value={resetState.temporaryPassword}
+                onChange={(event) =>
+                  setResetState((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          temporaryPassword: event.target.value
+                        }
+                      : prev
+                  )
+                }
+                disabled={isResetSubmitting || Boolean(resetState.isArchived)}
+              />
+            </div>
+          ) : null}
 
           {resetDevValue ? (
             <div className="formField">

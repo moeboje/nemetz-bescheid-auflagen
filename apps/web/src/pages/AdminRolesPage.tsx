@@ -277,10 +277,27 @@ export default function AdminRolesPage() {
             render: (row: AdminRole) => row.descriptionDe || t("common.notAvailable")
           },
           {
-            key: "system",
-            header: t("admin.roles.table.system"),
+            key: "permissions",
+            header: t("admin.roles.table.permissions"),
             render: (row: AdminRole) =>
-              row.isSystem ? <Badge variant="neutral">{t("admin.roles.systemRole")}</Badge> : t("common.notAvailable")
+              row.permissionLabels && row.permissionLabels.length > 0
+                ? row.permissionLabels.join(", ")
+                : t("admin.roles.permissions.none")
+          },
+          {
+            key: "flags",
+            header: t("admin.roles.table.flags"),
+            render: (row: AdminRole) => (
+              <div className="tableBadges">
+                {row.isSystem ? <Badge variant="neutral">{t("admin.roles.systemRole")}</Badge> : null}
+                {row.isAssignable === false ? (
+                  <Badge variant="warning">{t("admin.roles.nonAssignable")}</Badge>
+                ) : null}
+                {row.isDeprecated ? (
+                  <Badge variant="warning">{t("admin.roles.deprecated")}</Badge>
+                ) : null}
+              </div>
+            )
           },
           {
             key: "status",

@@ -689,7 +689,11 @@ export function createProjectChecklistsRouter(prisma: PrismaClient) {
         }
 
         await prisma.$transaction(async (tx) => {
-          await tx.$executeRaw(Prisma.sql`DELETE FROM "ProjectChecklist"`);
+          if (projectIds.length > 0) {
+            await tx.$executeRaw(
+              Prisma.sql`DELETE FROM "ProjectChecklist" WHERE "projectId" IN (${Prisma.join(projectIds)})`
+            );
+          }
 
           for (const checklist of normalized) {
             await replaceProjectChecklistSnapshot(tx, checklist);
@@ -700,6 +704,25 @@ export function createProjectChecklistsRouter(prisma: PrismaClient) {
           ok: true,
           projectChecklists: await listProjectChecklistSnapshots(prisma)
         });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  router.delete(
+    "/admin/internal/project-checklists/bulk-delete",
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        applyNoStoreHeaders(res);
+
+        const user = await requireAdminRouteUser(req, res, prisma);
+        if (!user) {
+          return;
+        }
+
+        await prisma.$executeRaw(Prisma.sql`DELETE FROM "ProjectChecklist"`);
+        res.json({ ok: true });
       } catch (error) {
         next(error);
       }

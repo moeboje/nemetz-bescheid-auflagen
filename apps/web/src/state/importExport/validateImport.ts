@@ -231,17 +231,6 @@ function validateUsers(
       pushMessage(errors, "import.validation.invalidId", `${path}.id`);
     }
 
-    const hasLegacyDisplayName = isNonEmptyString(object.displayName);
-    const hasRequiredFields =
-      isNonEmptyString(object.firstName) &&
-      isNonEmptyString(object.lastName) &&
-      isNonEmptyString(object.companyRole) &&
-      isNonEmptyString(object.email);
-
-    if (!hasLegacyDisplayName && !hasRequiredFields) {
-      pushMessage(errors, "import.validation.invalidObject", path);
-    }
-
     if (isNonEmptyString(object.email) && !isValidEmail(object.email)) {
       pushMessage(errors, "import.validation.invalidObject", `${path}.email`);
     }
@@ -495,8 +484,8 @@ export function validateImport(value: unknown): ImportValidationResult {
     pushMessage(warnings, "import.validation.attachmentsMissingContent");
   }
 
-  if (!hasValue(data.users)) {
-    pushMessage(warnings, "import.validation.missingOptionalKey", "data.users");
+  if (hasValue(data.users)) {
+    pushMessage(warnings, "import.validation.usersIgnoredOnImport", "data.users");
   }
   if (!hasValue(data.projects)) {
     pushMessage(warnings, "import.validation.missingOptionalKey", "data.projects");

@@ -16,7 +16,9 @@ type ExternalParticipantModalProps = {
   open: boolean;
   onClose: () => void;
   participant?: ExternalParticipant;
-  onSave: (input: Omit<ExternalParticipant, "id" | "createdAt" | "updatedAt">) => void | Promise<void>;
+  onSave: (
+    input: Omit<ExternalParticipant, "id" | "createdAt" | "updatedAt">
+  ) => boolean | Promise<boolean>;
 };
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -54,7 +56,7 @@ export default function ExternalParticipantModal({
     if (isSaveDisabled) {
       return;
     }
-    await onSave({
+    const saved = await onSave({
       type: form.type,
       organization: form.organization || undefined,
       name: form.name,
@@ -64,7 +66,9 @@ export default function ExternalParticipantModal({
       archivedAt: participant?.archivedAt,
       isArchived: participant?.isArchived ?? false
     });
-    onClose();
+    if (saved) {
+      onClose();
+    }
   };
 
   return (

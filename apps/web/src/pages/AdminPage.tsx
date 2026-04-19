@@ -13,6 +13,7 @@ import {
 } from "@nemetz/ui";
 import { ApiError } from "../api/client";
 import {
+  bulkDeleteProjectChecklists,
   bulkReplaceProjectChecklists,
   listProjectChecklists
 } from "../api/projectChecklists";
@@ -43,6 +44,7 @@ import { runIntegrityScan, type IntegrityFinding } from "../state/diagnostics/in
 import {
   buildExportPayload,
   downloadExportPayload,
+  GENERIC_EXPORT_LIMITATION_META,
   resetAllPersistedData
 } from "../state/importExport/exportPayload";
 import {
@@ -285,7 +287,6 @@ export default function AdminPage() {
     archiveUser,
     restoreUser,
     searchUsers,
-    replaceUsers,
     resetUsers
   } = useUsers();
   const { projects, updateProject, replaceProjects, resetProjects } = useProjects();
@@ -739,15 +740,32 @@ export default function AdminPage() {
     await replaceDeadlines([]);
     await replaceObligations([]);
     await replaceLegalDocs([]);
-    await bulkReplaceProjectChecklists([]);
+    await bulkDeleteProjectChecklists();
     await replaceProjects([]);
   }, [
+    bulkDeleteProjectChecklists,
     replaceDeadlines,
     replaceLegalDocs,
     replaceObligations,
     replaceProjects,
     replaceTaskState
   ]);
+
+  const applyImportedProjectChecklists = useCallback(
+    async (projectChecklists: ProjectChecklist[] | undefined) => {
+      if (!projectChecklists) {
+        return;
+      }
+
+      if (projectChecklists.length === 0) {
+        await bulkDeleteProjectChecklists();
+        return;
+      }
+
+      await bulkReplaceProjectChecklists(projectChecklists);
+    },
+    [bulkDeleteProjectChecklists]
+  );
 
   const applyFullDomainReplaceInDependencyOrder = useCallback(
     async (input: {
@@ -763,7 +781,7 @@ export default function AdminPage() {
       await replaceScopes(input.scopes);
       await replaceAuthorities(input.authorities);
       await replaceProjects(input.projects);
-      await bulkReplaceProjectChecklists(input.projectChecklists ?? []);
+      await applyImportedProjectChecklists(input.projectChecklists);
       await replaceLegalDocs(input.legalDocs);
       await replaceObligations(input.obligations);
       await replaceDeadlines(input.deadlines);
@@ -776,7 +794,8 @@ export default function AdminPage() {
       replaceObligations,
       replaceProjects,
       replaceScopes,
-      replaceTaskState
+      replaceTaskState,
+      applyImportedProjectChecklists
     ]
   );
 
@@ -800,8 +819,9 @@ export default function AdminPage() {
         deadlines,
         taskState,
         auditLog: entries,
-        users,
         notifications
+      }, {
+        meta: GENERIC_EXPORT_LIMITATION_META
       });
       downloadExportPayload(payload);
 
@@ -945,9 +965,7 @@ export default function AdminPage() {
         if (imported.obligations) {
           await replaceObligations(imported.obligations);
         }
-        if (imported.projectChecklists) {
-          await bulkReplaceProjectChecklists(imported.projectChecklists);
-        }
+        await applyImportedProjectChecklists(imported.projectChecklists);
         if (imported.deadlines) {
           await replaceDeadlines(normalizedEvidenceStorage.deadlines ?? imported.deadlines);
         }
@@ -956,7 +974,6 @@ export default function AdminPage() {
         }
       }
       replaceAuditLog(imported.auditLog ?? []);
-      replaceUsers(imported.users ?? users);
       replaceNotifications(imported.notifications ?? []);
 
       setPendingImport(null);
@@ -964,6 +981,9 @@ export default function AdminPage() {
       setImportErrors([]);
 
       const warnings: ImportValidationMessage[] = [];
+      if (imported.users) {
+        warnings.push({ key: "import.validation.usersIgnoredOnImport", path: "data.users" });
+      }
       if (normalizedEvidenceStorage.missingContentCount > 0) {
         warnings.push({ key: "admin.dataManagement.importMissingFiles" });
       }
