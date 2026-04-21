@@ -913,6 +913,22 @@
   gap: 2px;
 }
 
+.topbarUserMenu {
+  position: relative;
+}
+
+.topbarUserBadgeButton {
+  background: var(--color-surface);
+  cursor: pointer;
+  text-align: left;
+  min-width: 220px;
+}
+
+.topbarUserBadgeButtonOpen {
+  border-color: var(--color-primary, var(--color-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary, #4f46e5) 15%, transparent);
+}
+
 .topbarUserName {
   font-size: var(--font-size-sm);
   color: var(--color-text);
@@ -921,6 +937,42 @@
 .topbarUserRole {
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
+}
+
+.topbarUserMenuPopover {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 40;
+  min-width: 220px;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg, 0 12px 28px rgba(15, 23, 42, 0.18));
+  display: grid;
+  gap: var(--space-1);
+}
+
+.topbarMenuItem {
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font: inherit;
+}
+
+.topbarMenuItem:hover,
+.topbarMenuItem:focus-visible {
+  background: var(--color-surface-subtle, rgba(15, 23, 42, 0.06));
+  outline: none;
+}
+
+.topbarMenuItemDanger {
+  color: var(--color-danger, #b42318);
 }
 
 .topbarBellWrapper {
@@ -982,6 +1034,43 @@
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--color-warning, #7a5a00) 10%, white);
   color: var(--color-text);
+}
+
+.sectionActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.permissionGrid {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.permissionGroup {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-subtle, var(--color-surface));
+}
+
+.permissionList {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.permissionCheckbox {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+  color: var(--color-text);
+}
+
+.permissionCheckbox input {
+  margin-top: 3px;
 }
 
 .errorBoundaryPage {
@@ -1119,6 +1208,21 @@
 
   .topbarUserBadge {
     width: 100%;
+  }
+
+  .topbarUserMenu {
+    width: 100%;
+  }
+
+  .topbarUserBadgeButton {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .topbarUserMenuPopover {
+    left: 0;
+    right: 0;
+    min-width: 0;
   }
 
   .topbarActionGroup {

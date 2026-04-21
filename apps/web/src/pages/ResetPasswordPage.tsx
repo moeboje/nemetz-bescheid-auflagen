@@ -1,28 +1,60 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button, Card, Input } from "@nemetz/ui";
 import { t } from "../i18n";
+import { getPasswordPolicy, type PasswordPolicy } from "../api/auth";
 import { ApiError } from "../api/client";
 import { useAuth } from "../state/AuthStore";
 
-function isStrongPassword(value: string) {
-  if (value.length < 12) {
-    return false;
+function getPasswordPolicyErrorMessage(password: string, policy: PasswordPolicy | null) {
+  if (!policy) {
+    return "";
   }
-  return /[0-9]|[^A-Za-z0-9]/.test(value);
+
+  const normalizedPassword = password.trim();
+  if (normalizedPassword.length < policy.passwordMinLength) {
+    return `Das neue Passwort muss mindestens ${policy.passwordMinLength} Zeichen lang sein.`;
+  }
+
+  if (policy.passwordRequireNumberOrSpecial && !/[0-9]|[^A-Za-z0-9]/.test(normalizedPassword)) {
+    return "Das neue Passwort muss eine Zahl oder ein Sonderzeichen enthalten.";
+  }
+
+  return "";
 }
 
 export default function ResetPasswordPage() {
   const { resetPassword } = useAuth();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const token = useMemo(() => searchParams.get("token")?.trim() ?? "", [searchParams]);
+  const [token, setToken] = useState(() => searchParams.get("token")?.trim() ?? "");
 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  const [passwordPolicy, setPasswordPolicy] = useState<PasswordPolicy | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    void getPasswordPolicy()
+      .then((policy) => {
+        if (isMounted) {
+          setPasswordPolicy(policy);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setPasswordPolicy(null);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -32,8 +64,9 @@ export default function ResetPasswordPage() {
       return;
     }
 
-    if (!isStrongPassword(newPassword)) {
-      setError(t("auth.reset.error.weak"));
+    const passwordPolicyError = getPasswordPolicyErrorMessage(newPassword, passwordPolicy);
+    if (passwordPolicyError) {
+      setError(passwordPolicyError);
       return;
     }
 
@@ -47,6 +80,10 @@ export default function ResetPasswordPage() {
 
     try {
       await resetPassword(token, newPassword);
+      if (window.location.search.includes("token=")) {
+        window.history.replaceState(window.history.state, document.title, window.location.pathname);
+      }
+      setToken("");
       setSubmitted(true);
       setTimeout(() => {
         navigate("/login", { replace: true });

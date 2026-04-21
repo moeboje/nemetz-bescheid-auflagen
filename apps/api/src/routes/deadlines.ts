@@ -10,6 +10,7 @@ import {
   requireAdminRouteUser,
   requireInternalRouteUser
 } from "./routeAuth.js";
+import { enqueueDeadlineAssignmentNotificationsForChange } from "../notifications.js";
 
 type AttachmentKindDto = "PHOTO" | "DOCUMENT" | "REPORT";
 type AttachmentStorageDto = "indexeddb" | "none";
@@ -705,8 +706,17 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
         return;
       }
 
-      const deadline = await prisma.deadline.create({
-        data: toDeadlineCreateInput(normalized.deadline)
+      const deadline = await prisma.$transaction(async (tx) => {
+        const created = await tx.deadline.create({
+          data: toDeadlineCreateInput(normalized.deadline)
+        });
+
+        await enqueueDeadlineAssignmentNotificationsForChange(tx, created.id, {
+          ownerUserId: null,
+          deputyUserId: null
+        });
+
+        return created;
       });
 
       res.status(201).json({
@@ -793,11 +803,20 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
         return;
       }
 
-      const updated = await prisma.deadline.update({
-        where: {
-          id: existing.id
-        },
-        data: toDeadlineUpdateInput(normalized.deadline)
+      const updated = await prisma.$transaction(async (tx) => {
+        const next = await tx.deadline.update({
+          where: {
+            id: existing.id
+          },
+          data: toDeadlineUpdateInput(normalized.deadline)
+        });
+
+        await enqueueDeadlineAssignmentNotificationsForChange(tx, existing.id, {
+          ownerUserId: existingRecord.ownerUserId,
+          deputyUserId: existingRecord.deputyUserId
+        });
+
+        return next;
       });
 
       res.json({

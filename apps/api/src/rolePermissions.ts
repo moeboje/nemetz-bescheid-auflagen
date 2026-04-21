@@ -1,5 +1,5 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
-import { normalizeRoleKey, parsePermissionKeys, type PermissionKey } from "./accessControl.js";
+import { normalizeRoleKey, normalizeRolePermissionKeys, parsePermissionKeys, type PermissionKey } from "./accessControl.js";
 
 type RawRolePermissionRow = {
   key: string;
@@ -55,7 +55,9 @@ export async function getStoredRolePermissionState(
   return {
     roleExists: Boolean(row),
     hasStoredPermissions,
-    permissionKeys: hasStoredPermissions ? parsePermissionKeys(parseRawPermissions(row.permissionsJson)) : []
+    permissionKeys: hasStoredPermissions
+      ? normalizeRolePermissionKeys(parsePermissionKeys(parseRawPermissions(row.permissionsJson)))
+      : []
   };
 }
 
@@ -75,7 +77,10 @@ export async function getStoredRolePermissionMap(prisma: PrismaClient, roleKeys:
   `);
 
   return new Map(
-    rows.map((row) => [row.key, parsePermissionKeys(parseRawPermissions(row.permissionsJson))] as const)
+    rows.map(
+      (row) =>
+        [row.key, normalizeRolePermissionKeys(parsePermissionKeys(parseRawPermissions(row.permissionsJson)))] as const
+    )
   );
 }
 
@@ -89,7 +94,7 @@ export async function setStoredRolePermissionKeys(
     return;
   }
 
-  const serialized = JSON.stringify(permissionKeys);
+  const serialized = JSON.stringify(normalizeRolePermissionKeys(permissionKeys));
   await prisma.$executeRaw(Prisma.sql`
     UPDATE "Role"
     SET "permissionsJson" = ${serialized}::jsonb

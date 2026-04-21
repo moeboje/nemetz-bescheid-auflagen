@@ -82,6 +82,7 @@ function extractApiErrorMessage(error: unknown, fallbackKey: string) {
 export default function AdminAuthoritiesPage() {
   const runtimeConfig = useRuntimeConfig();
   const { permissions } = useAuthorization();
+  const canManageAuthorities = permissions.canManageAuthoritiesAdmin;
   const {
     authorities,
     contacts,
@@ -232,6 +233,9 @@ export default function AdminAuthoritiesPage() {
   };
 
   const openCreateAuthorityModal = () => {
+    if (!canManageAuthorities) {
+      return;
+    }
     setPageError("");
     setSuccessMessage("");
     setAuthorityForm(emptyAuthorityForm);
@@ -241,6 +245,9 @@ export default function AdminAuthoritiesPage() {
   };
 
   const openEditAuthorityModal = (authorityId: string) => {
+    if (!canManageAuthorities) {
+      return;
+    }
     const authority = authorities.find((entry) => entry.id === authorityId);
     if (!authority) {
       return;
@@ -258,6 +265,9 @@ export default function AdminAuthoritiesPage() {
   };
 
   const openCreateContactModal = () => {
+    if (!canManageAuthorities) {
+      return;
+    }
     setPageError("");
     setSuccessMessage("");
     setContactForm({
@@ -270,6 +280,9 @@ export default function AdminAuthoritiesPage() {
   };
 
   const openEditContactModal = (contactId: string) => {
+    if (!canManageAuthorities) {
+      return;
+    }
     const contact = contacts.find((entry) => entry.id === contactId);
     if (!contact) {
       return;
@@ -297,6 +310,9 @@ export default function AdminAuthoritiesPage() {
   };
 
   const handleSaveAuthority = async () => {
+    if (!canManageAuthorities) {
+      return;
+    }
     if (authorityNameError) {
       setFormError(authorityNameError);
       return;
@@ -335,6 +351,9 @@ export default function AdminAuthoritiesPage() {
   };
 
   const handleSaveContact = async () => {
+    if (!canManageAuthorities) {
+      return;
+    }
     if (contactAuthorityError || contactNameError || contactEmailError) {
       setFormError(contactAuthorityError || contactNameError || contactEmailError);
       return;
@@ -391,6 +410,9 @@ export default function AdminAuthoritiesPage() {
   };
 
   const handleConfirmArchiveRestore = async () => {
+    if (!canManageAuthorities) {
+      return;
+    }
     if (!confirmation) {
       return;
     }
@@ -434,7 +456,7 @@ export default function AdminAuthoritiesPage() {
     }
   };
 
-  if (!permissions.canViewAdmin) {
+  if (!permissions.canViewAuthoritiesAdmin) {
     return <Navigate to="/compliance/dashboard" replace />;
   }
 
@@ -486,7 +508,7 @@ export default function AdminAuthoritiesPage() {
               />
               <span>{t("admin.authorities.showArchived")}</span>
             </label>
-            <Button onClick={openCreateAuthorityModal}>{t("admin.authorities.action.new")}</Button>
+            {canManageAuthorities ? <Button onClick={openCreateAuthorityModal}>{t("admin.authorities.action.new")}</Button> : null}
           </div>
         </div>
 
@@ -508,39 +530,43 @@ export default function AdminAuthoritiesPage() {
                 >
                   {t("admin.authorities.action.showContacts")}
                 </Button>
-                <IconButton ariaLabel={t("common.edit")} onClick={() => openEditAuthorityModal(row.id)}>
-                  <EditIcon />
-                </IconButton>
-                {row.isArchived ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() =>
-                      setConfirmation({
-                        entity: "authority",
-                        id: row.id,
-                        label: row.name,
-                        mode: "restore"
-                      })
-                    }
-                  >
-                    {t("common.restore")}
-                  </Button>
-                ) : (
-                  <IconButton
-                    ariaLabel={t("common.archive")}
-                    onClick={() =>
-                      setConfirmation({
-                        entity: "authority",
-                        id: row.id,
-                        label: row.name,
-                        mode: "archive"
-                      })
-                    }
-                  >
-                    <ArchiveIcon />
-                  </IconButton>
-                )}
+                {canManageAuthorities ? (
+                  <>
+                    <IconButton ariaLabel={t("common.edit")} onClick={() => openEditAuthorityModal(row.id)}>
+                      <EditIcon />
+                    </IconButton>
+                    {row.isArchived ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setConfirmation({
+                            entity: "authority",
+                            id: row.id,
+                            label: row.name,
+                            mode: "restore"
+                          })
+                        }
+                      >
+                        {t("common.restore")}
+                      </Button>
+                    ) : (
+                      <IconButton
+                        ariaLabel={t("common.archive")}
+                        onClick={() =>
+                          setConfirmation({
+                            entity: "authority",
+                            id: row.id,
+                            label: row.name,
+                            mode: "archive"
+                          })
+                        }
+                      >
+                        <ArchiveIcon />
+                      </IconButton>
+                    )}
+                  </>
+                ) : null}
               </div>
             )}
           />
@@ -567,9 +593,11 @@ export default function AdminAuthoritiesPage() {
               />
               <span>{t("admin.contacts.showArchived")}</span>
             </label>
-            <Button onClick={openCreateContactModal} disabled={!selectedAuthority || Boolean(selectedAuthority?.isArchived)}>
-              {t("admin.contacts.action.new")}
-            </Button>
+            {canManageAuthorities ? (
+              <Button onClick={openCreateContactModal} disabled={!selectedAuthority || Boolean(selectedAuthority?.isArchived)}>
+                {t("admin.contacts.action.new")}
+              </Button>
+            ) : null}
           </div>
         </div>
 
@@ -587,48 +615,50 @@ export default function AdminAuthoritiesPage() {
             data={visibleContacts}
             getRowKey={(row) => row.id}
             rowActions={(row) => (
-              <div className="tableActions">
-                <IconButton ariaLabel={t("common.edit")} onClick={() => openEditContactModal(row.id)}>
-                  <EditIcon />
-                </IconButton>
-                {row.isArchived ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() =>
-                      setConfirmation({
-                        entity: "contact",
-                        id: row.id,
-                        label: row.name,
-                        mode: "restore"
-                      })
-                    }
-                  >
-                    {t("common.restore")}
-                  </Button>
-                ) : (
-                  <IconButton
-                    ariaLabel={t("common.archive")}
-                    onClick={() =>
-                      setConfirmation({
-                        entity: "contact",
-                        id: row.id,
-                        label: row.name,
-                        mode: "archive"
-                      })
-                    }
-                  >
-                    <ArchiveIcon />
+              canManageAuthorities ? (
+                <div className="tableActions">
+                  <IconButton ariaLabel={t("common.edit")} onClick={() => openEditContactModal(row.id)}>
+                    <EditIcon />
                   </IconButton>
-                )}
-              </div>
+                  {row.isArchived ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        setConfirmation({
+                          entity: "contact",
+                          id: row.id,
+                          label: row.name,
+                          mode: "restore"
+                        })
+                      }
+                    >
+                      {t("common.restore")}
+                    </Button>
+                  ) : (
+                    <IconButton
+                      ariaLabel={t("common.archive")}
+                      onClick={() =>
+                        setConfirmation({
+                          entity: "contact",
+                          id: row.id,
+                          label: row.name,
+                          mode: "archive"
+                        })
+                      }
+                    >
+                      <ArchiveIcon />
+                    </IconButton>
+                  )}
+                </div>
+              ) : null
             )}
           />
         )}
       </div>
 
       <Modal
-        open={authorityModalOpen}
+        open={canManageAuthorities && authorityModalOpen}
         onClose={closeAuthorityModal}
         closeAriaLabel={t("modal.close")}
         header={editingAuthorityId ? t("admin.authorities.modal.edit") : t("admin.authorities.modal.new")}
@@ -667,7 +697,7 @@ export default function AdminAuthoritiesPage() {
       </Modal>
 
       <Modal
-        open={contactModalOpen}
+        open={canManageAuthorities && contactModalOpen}
         onClose={closeContactModal}
         closeAriaLabel={t("modal.close")}
         header={editingContactId ? t("admin.contacts.modal.edit") : t("admin.contacts.modal.new")}
@@ -796,7 +826,7 @@ export default function AdminAuthoritiesPage() {
       </Modal>
 
       <Modal
-        open={Boolean(confirmation)}
+        open={canManageAuthorities && Boolean(confirmation)}
         onClose={() => setConfirmation(null)}
         closeAriaLabel={t("modal.close")}
         header={

@@ -62,6 +62,8 @@ model User {
   updatedAt                DateTime              @updatedAt
   sessions                 Session[]
   resetTokens              PasswordResetToken[]
+  receivedNotifications    NotificationOutbox[]   @relation("NotificationRecipient")
+  triggeredNotificationAttempts NotificationDeliveryAttempt[] @relation("NotificationAttemptTriggerUser")
   mfaPendings              MfaPending[]
   mfaChallenges            MfaChallenge[]
   auditLogsAsActor         AuditLog[]            @relation("AuditActor")
@@ -516,6 +518,83 @@ model PasswordResetToken {
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+model NotificationOutbox {
+  id                String   @id @default(cuid())
+  eventType         String
+  entityType        String?
+  entityId          String?
+  recipientUserId   String?
+  recipientEmail    String
+  recipientName     String?
+  subject           String
+  payloadJson       Json
+  status            String   @default("PENDING")
+  scheduledFor      DateTime @default(now())
+  claimedAt         DateTime?
+  claimToken        String?
+  sentAt            DateTime?
+  attemptCount      Int      @default(0)
+  lastAttemptAt     DateTime?
+  lastError         String?
+  providerReference String?
+  idempotencyKey    String   @unique
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  recipientUser     User?    @relation("NotificationRecipient", fields: [recipientUserId], references: [id], onDelete: SetNull)
+  deliveryAttempts  NotificationDeliveryAttempt[]
+
+  @@index([status, scheduledFor])
+  @@index([claimedAt])
+  @@index([recipientUserId, createdAt])
+  @@index([entityType, entityId])
+}
+
+model NotificationDeliveryAttempt {
+  id                String               @id @default(cuid())
+  notificationId    String
+  attemptNumber     Int
+  outcome           String
+  startedAt         DateTime
+  finishedAt        DateTime
+  httpStatus        Int?
+  errorSummary      String?
+  providerReference String?
+  triggeredByUserId String?
+  createdAt         DateTime             @default(now())
+  notification      NotificationOutbox   @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  triggeredByUser   User?                @relation("NotificationAttemptTriggerUser", fields: [triggeredByUserId], references: [id], onDelete: SetNull)
+
+  @@index([notificationId, createdAt])
+  @@index([outcome, createdAt])
+  @@index([triggeredByUserId])
+}
+
+model NotificationSettings {
+  id                       String   @id
+  defaultDueSoonDays       Int      @default(7)
+  deadlineDueSoonEnabled   Boolean  @default(true)
+  assignmentAssignedEnabled Boolean @default(true)
+  dailyDigestEnabled       Boolean  @default(false)
+  weeklyDigestEnabled      Boolean  @default(false)
+  dailyDigestHourLocal     Int      @default(7)
+  weeklyDigestWeekday      Int      @default(1)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+}
+
+model NotificationWorkerStatus {
+  workerKey         String   @id
+  lastStartedAt     DateTime?
+  lastFinishedAt    DateTime?
+  lastSuccessfulAt  DateTime?
+  lastOutcome       String?
+  lastError         String?
+  lastClaimedCount  Int      @default(0)
+  lastProcessedCount Int     @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 }
 
 model AuditLog {

@@ -25,6 +25,10 @@ const expectedAppTables = [
   "MfaChallenge",
   "Session",
   "PasswordResetToken",
+  "NotificationOutbox",
+  "NotificationDeliveryAttempt",
+  "NotificationSettings",
+  "NotificationWorkerStatus",
   "AuditLog",
   "PortalSnapshot"
 ] as const;

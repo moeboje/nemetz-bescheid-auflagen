@@ -341,6 +341,33 @@
 - keine weiteren Review-Fixes, keine neue Import-/Recovery-Architektur, keine UX-Neugestaltung.
 - keine neuen Dependencies, keine Rueckkehr zu localStorage- oder Snapshot-Pfaden fuer migrierte Domänen.
 
+## 2r. Gezielter Review-Fixlauf 2026-04-19 fuer Rollen-/Permission-Handling und Admin-Fehlermeldungen
+- Dies ist keine neue Persistenzphase, keine neue Feature-Phase und keine neue Rollenarchitektur.
+- Ziel dieses Laufs ist ausschliesslich die Behebung von drei klar abgegrenzten Review-Findings.
+- Zulaessiger Umfang:
+- `authorities.manage` muss serverseitig Leserechte fuer `GET /authorities` wirksam einschliessen; `authorities.view` darf fuer bestehende Custom Roles beim Bearbeiten nicht verloren gehen.
+- Admin-Unterbereichsrechte duerfen nicht ohne `admin.access` gespeichert werden; betroffen sind nur echte Admin-Subsection-Permissions, keine allgemeinen Lookup-/Read-Permissions wie `authorities.view`.
+- 409-Konflikte in der Admin-Benutzerverwaltung duerfen nicht pauschal als E-Mail-Konflikt angezeigt werden; E-Mail-Konflikte bleiben spezifisch, andere Konflikte nutzen serverseitige Message oder einen passenden kontextbezogenen Fallback.
+- Nicht-Ziele:
+- keine View-only-Implementierung fuer `AdminAuthoritiesPage`.
+- keine neuen Berechtigungen, keine neue Error-Handling-Architektur, keine UX-Neugestaltung.
+- keine Aenderungen ausserhalb der betroffenen Rollen-/Permission- und Admin-Fehlermeldungs-Pfade.
+
+## 2s. Gezielter Review-Fixlauf 2026-04-20 fuer Notification-Admin ATTENTION und race-sichere Admin-Transitions
+- Dies ist keine neue Persistenzphase, keine neue Feature-Phase und keine PowerAutomate-Erweiterung.
+- Ziel dieses Laufs ist ausschliesslich die Behebung von zwei Review-Findings in der bestehenden Notification-Admin-Logik.
+- Zulaessiger Umfang:
+- der ATTENTION-Filter in `apps/api/src/adminNotifications.ts` darf nur noch actionable/problematische Eintraege enthalten.
+- `FAILED` und `RETRY` bleiben in ATTENTION; `CLAIMED` nur dann, wenn `claimedAt` gemaess bestehender Lease-Konfiguration stale ist.
+- frische `CLAIMED`-Eintraege duerfen im ATTENTION-Filter nicht mehr erscheinen.
+- `retryAdminNotification` und `cancelAdminNotification` duerfen keine Worker-Claims mehr durch blinde Updates nach `id` ueberschreiben.
+- fuer Retry/Cancel wird derselbe erlaubte Status-/Claim-Zustand beim Schreiben per bedingtem Update abgesichert; bei zwischenzeitlicher Worker-Uebernahme oder Statusaenderung wird ein sauberer Konflikt zurueckgegeben.
+- Lease-/Stale-Definition bleibt an `config.notificationClaimLeaseSeconds` gebunden; keine neue Magic Number und keine Frontend-Gegensteuerung fuer ATTENTION.
+- Nicht-Ziele:
+- keine neue Notification-Funktion, keine Dispatcher- oder Locking-Neuarchitektur.
+- keine Aenderungen an PowerAutomate, E-Mail-Templates oder der Admin-UI ausser der bereits serverseitig korrigierten ATTENTION-Semantik.
+- keine Prisma-Schema- oder Persistenzaenderung ausserhalb der bestehenden Notification-Admin-Logik und ihrer Tests.
+
 ## 3. Ist-Zustand
 - Browser-persistiert fachlich aktiv ist aktuell nur noch `taskState`; zusätzliche UI-/Recovery-Daten liegen weiterhin via `apps/web/src/state/persistence.ts` lokal.
 - `ScopesStore`, `AuthoritiesStore`, `ProjectsStore`, `LegalDocsStore`, `ObligationsStore` und `DeadlinesStore` sind bereits API-backed und löschen ihre alten Domänen-Storage-Keys aktiv.
@@ -719,3 +746,29 @@
 - `cd apps/web && npm run build`
 - falls der Fix API-bezogen anschlaegt zusaetzlich `cd apps/api && npm run build`
 - manueller lokaler Browser-Smoke fuer `/compliance/dashboard`, `/compliance/projects`, `/compliance/legal-docs`, `/compliance/tasks`, `/compliance/deadlines` und `/admin` oder `/compliance/admin`.
+
+## 12. Review-Fixlauf 2026-04-19 fuer Admin-Reset und Behoerden-Leserechte
+- Dies ist keine neue Persistenzphase, keine neue Rollenarchitektur und kein neues Feature-Paket.
+- Ziel dieses Laufs ist ausschliesslich die Behebung von zwei Review-Findings:
+- der Admin-Reset-Endpunkt und das bestehende Admin-Reset-Modal muessen Legacy-Modi (`link`, `manual`, `auto`) weiterhin unterstuetzen; die neue direkte Passwortsetzung bleibt additiv.
+- `authorities.view` muss im Admin-UI als Leserecht fuer `Admin > Behoerden` respektiert werden, waehrend Schreibaktionen weiter `authorities.manage` brauchen.
+- Verifizierter Ist-Zustand vor Umsetzung:
+- `apps/api/src/app.ts` verlangt im Admin-Reset aktuell immer `newPassword` und invalidiert damit die alten Reset-Varianten.
+- `apps/web/src/pages/AdminUsersPage.tsx` bildet aktuell nur den neuen Direct-Set-Flow ab.
+- `apps/web/src/state/AuthorizationStore.tsx` koppelt `canViewAuthoritiesAdmin` derzeit faelschlich an `authorities.manage`.
+- `apps/web/src/pages/AdminAuthoritiesPage.tsx` zeigt Schreibaktionen aktuell ohne getrennte View-/Manage-Grenze an.
+- Zulaessiger Umfang:
+- nur die betroffenen Stellen in API, Admin-Users-UI/API-Client/Store, AuthorizationStore und Admin-Authorities-UI.
+- bestehende Audit-, Passwort-Policy-, Session-Revoke- und Rollenlogik nur soweit anpassen, wie fuer die beiden Findings notwendig.
+- API- und Build-Verifikation fuer `apps/api` und `apps/web`; Tests nur im vorhandenen Stil und nur fuer diese Findings erweitern.
+- Nicht-Ziele:
+- keine neue E-Mail- oder PowerAutomate-Implementierung.
+- keine neue Rechtearchitektur, keine Hilfe-/Checklist-/C2-Arbeiten, keine weiteren Admin- oder Persistenzthemen.
+
+## 12a. Review-Follow-up 2026-04-19 fuer assignable `authorities.view`
+- Dies ist weiterhin kein neuer Feature- oder Rollenarchitektur-Lauf.
+- Ziel dieses Mini-Fixlaufs ist ausschliesslich, `authorities.view` im normalen Custom-Role-Workflow wieder vergebbar zu machen.
+- Zulässiger Umfang:
+- nur Permission-Katalog-/Filterlogik des Role-Editors sowie direkte API-Tests fuer Create/Update von Custom Roles.
+- Nicht-Ziele:
+- keine weiteren Rechteaenderungen ausser der Wiederfreigabe von `authorities.view` im vorhandenen Admin-Rollenworkflow.

@@ -37,7 +37,10 @@ export const PERMISSION_KEYS = [
   "roles.view",
   "roles.manage",
   "security.view",
-  "security.manage"
+  "security.manage",
+  "notifications.view",
+  "notifications.retry",
+  "notifications.settings.manage"
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
@@ -52,7 +55,29 @@ export type RoleCatalogEntry = {
   permissionKeys: PermissionKey[];
 };
 
+export type PermissionCatalogEntry = {
+  key: PermissionKey;
+  label: string;
+  group: string;
+  requiresAdminAccess: boolean;
+};
+
 const permissionKeySet = new Set<string>(PERMISSION_KEYS);
+const hiddenRoleEditorPermissionKeys = new Set<PermissionKey>();
+const adminSubsectionPermissionKeys = new Set<PermissionKey>([
+  "authorities.manage",
+  "externalOrgs.view",
+  "externalOrgs.manage",
+  "users.view",
+  "users.manage",
+  "roles.view",
+  "roles.manage",
+  "security.view",
+  "security.manage",
+  "notifications.view",
+  "notifications.retry",
+  "notifications.settings.manage"
+]);
 
 const internalReadPermissions: PermissionKey[] = [
   "dashboard.view",
@@ -191,19 +216,19 @@ export function getDefaultPermissionKeys(
   } = {}
 ) {
   if (String(userType ?? "").trim().toUpperCase() === "EXTERNAL") {
-    return [...externalPermissions];
+    return normalizeRolePermissionKeys([...externalPermissions]);
   }
 
   const entry = getRoleCatalogEntry(roleKey);
   if (entry) {
-    return [...entry.permissionKeys];
+    return normalizeRolePermissionKeys([...entry.permissionKeys]);
   }
 
   if (options.useLegacyInternalFallback) {
-    return [...legacyInternalPermissions];
+    return normalizeRolePermissionKeys([...legacyInternalPermissions]);
   }
 
-  return [...editorPermissions];
+  return normalizeRolePermissionKeys([...editorPermissions]);
 }
 
 export function parsePermissionKeys(value: unknown) {
@@ -227,7 +252,7 @@ export function resolvePermissionKeys(args: {
 }) {
   const hasStoredPermissionKeys = args.hasStoredPermissionKeys ?? args.storedPermissionKeys !== undefined;
   if (hasStoredPermissionKeys) {
-    return parsePermissionKeys(args.storedPermissionKeys);
+    return normalizeRolePermissionKeys(parsePermissionKeys(args.storedPermissionKeys));
   }
   return getDefaultPermissionKeys(args.roleKey, args.userType, {
     useLegacyInternalFallback: args.useLegacyInternalFallback
@@ -235,12 +260,53 @@ export function resolvePermissionKeys(args: {
 }
 
 export function hasPermission(permissionKeys: Iterable<string>, key: PermissionKey) {
-  for (const permission of permissionKeys) {
-    if (permission === key) {
-      return true;
-    }
+  const normalized = new Set(permissionKeys);
+  if (normalized.has(key)) {
+    return true;
   }
+
+  if (key === "authorities.view" && normalized.has("authorities.manage")) {
+    return true;
+  }
+
+  if (key === "externalOrgs.view" && normalized.has("externalOrgs.manage")) {
+    return true;
+  }
+
+  if (
+    key === "notifications.view" &&
+    (normalized.has("notifications.retry") || normalized.has("notifications.settings.manage"))
+  ) {
+    return true;
+  }
+
   return false;
+}
+
+export function normalizeRolePermissionKeys(permissionKeys: PermissionKey[]) {
+  const normalized = new Set(permissionKeys);
+
+  if (normalized.has("authorities.manage")) {
+    normalized.add("authorities.view");
+  }
+
+  if (normalized.has("externalOrgs.manage")) {
+    normalized.add("externalOrgs.view");
+  }
+
+  if (normalized.has("notifications.retry") || normalized.has("notifications.settings.manage")) {
+    normalized.add("notifications.view");
+  }
+
+  return PERMISSION_KEYS.filter((permissionKey) => normalized.has(permissionKey));
+}
+
+export function permissionRequiresAdminAccess(permissionKey: PermissionKey) {
+  return adminSubsectionPermissionKeys.has(permissionKey);
+}
+
+export function rolePermissionsRequireAdminAccess(permissionKeys: PermissionKey[]) {
+  return permissionKeys.some((permissionKey) => permissionRequiresAdminAccess(permissionKey));
 }
 
 export function describePermission(permissionKey: PermissionKey) {
@@ -323,9 +389,83 @@ export function describePermission(permissionKey: PermissionKey) {
       return "Sicherheit ansehen";
     case "security.manage":
       return "Sicherheit verwalten";
+    case "notifications.view":
+      return "Benachrichtigungen ansehen";
+    case "notifications.retry":
+      return "Benachrichtigungen erneut senden / abbrechen";
+    case "notifications.settings.manage":
+      return "Benachrichtigungseinstellungen verwalten";
     default:
       return permissionKey;
   }
+}
+
+function getPermissionGroup(permissionKey: PermissionKey) {
+  if (
+    permissionKey === "admin.access" ||
+    permissionKey.startsWith("users.") ||
+    permissionKey.startsWith("roles.") ||
+    permissionKey.startsWith("security.") ||
+    permissionKey.startsWith("notifications.")
+  ) {
+    return "Administration";
+  }
+  if (permissionKey.startsWith("dashboard.") || permissionKey.startsWith("reports.")) {
+    return "Dashboard & Reports";
+  }
+  if (
+    permissionKey.startsWith("masterData.") ||
+    permissionKey.startsWith("authorities.") ||
+    permissionKey.startsWith("externalOrgs.")
+  ) {
+    return "Stammdaten";
+  }
+  if (permissionKey.startsWith("projects.")) {
+    return "Projekte";
+  }
+  if (permissionKey.startsWith("legalDocs.")) {
+    return "Rechtsdokumente";
+  }
+  if (permissionKey.startsWith("obligations.")) {
+    return "Auflagen";
+  }
+  if (permissionKey.startsWith("deadlines.")) {
+    return "Fristen";
+  }
+  if (permissionKey.startsWith("tasks.")) {
+    return "Aufgaben";
+  }
+  return "Weitere";
+}
+
+export function getPermissionCatalog(): PermissionCatalogEntry[] {
+  return PERMISSION_KEYS.map((key) => ({
+    key,
+    label: describePermission(key),
+    group: getPermissionGroup(key),
+    requiresAdminAccess: permissionRequiresAdminAccess(key)
+  }));
+}
+
+export function getEditablePermissionCatalog(): PermissionCatalogEntry[] {
+  return getPermissionCatalog().filter((entry) => !hiddenRoleEditorPermissionKeys.has(entry.key));
+}
+
+export function getEditableRolePermissionKeys(permissionKeys: PermissionKey[]) {
+  return permissionKeys.filter((permissionKey) => !hiddenRoleEditorPermissionKeys.has(permissionKey));
+}
+
+export function getHiddenRoleEditorPermissionKeys(permissionKeys: PermissionKey[]) {
+  return permissionKeys.filter((permissionKey) => hiddenRoleEditorPermissionKeys.has(permissionKey));
+}
+
+export function mergeEditableRolePermissionKeys(args: {
+  existingPermissionKeys: PermissionKey[];
+  requestedPermissionKeys: PermissionKey[];
+}) {
+  const preservedHiddenPermissionKeys = getHiddenRoleEditorPermissionKeys(args.existingPermissionKeys);
+  const editablePermissionKeys = getEditableRolePermissionKeys(args.requestedPermissionKeys);
+  return normalizeRolePermissionKeys([...preservedHiddenPermissionKeys, ...editablePermissionKeys]);
 }
 
 export function mapRequestToPermission(input: { method: string; path: string }) {

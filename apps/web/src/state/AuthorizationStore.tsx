@@ -4,6 +4,19 @@ import { useUsers } from "./UsersStore";
 
 export type AuthorizationPermissions = {
   canViewAdmin: boolean;
+  canViewUsersAdmin: boolean;
+  canManageUsersAdmin: boolean;
+  canViewRolesAdmin: boolean;
+  canManageRolesAdmin: boolean;
+  canViewSecurityAdmin: boolean;
+  canManageSecurityAdmin: boolean;
+  canViewNotificationsAdmin: boolean;
+  canRetryNotificationsAdmin: boolean;
+  canManageNotificationSettingsAdmin: boolean;
+  canViewAuthoritiesAdmin: boolean;
+  canManageAuthoritiesAdmin: boolean;
+  canViewExternalOrgsAdmin: boolean;
+  canManageExternalOrgsAdmin: boolean;
   canEditMasterData: boolean;
   canCreateProject: boolean;
   canEditProject: boolean;
@@ -37,16 +50,58 @@ export function AuthorizationProvider({ children }: { children: React.ReactNode 
     const permissionKeys = Array.isArray(currentUser?.effectivePermissions) ? currentUser.effectivePermissions : [];
     const permissionSet = new Set(permissionKeys);
     const hasPermission = (key: string) => permissionSet.has(key);
-    const isAdmin = hasPermission("admin.access");
+    const hasAdminAccess = hasPermission("admin.access");
+    const canViewUsersAdmin =
+      hasAdminAccess && (hasPermission("users.view") || hasPermission("users.manage"));
+    const canManageUsersAdmin = hasAdminAccess && hasPermission("users.manage");
+    const canViewRolesAdmin =
+      hasAdminAccess && (hasPermission("roles.view") || hasPermission("roles.manage"));
+    const canManageRolesAdmin = hasAdminAccess && hasPermission("roles.manage");
+    const canViewSecurityAdmin =
+      hasAdminAccess && (hasPermission("security.view") || hasPermission("security.manage"));
+    const canManageSecurityAdmin = hasAdminAccess && hasPermission("security.manage");
+    const canViewNotificationsAdmin =
+      hasAdminAccess &&
+      (hasPermission("notifications.view") ||
+        hasPermission("notifications.retry") ||
+        hasPermission("notifications.settings.manage"));
+    const canRetryNotificationsAdmin = hasAdminAccess && hasPermission("notifications.retry");
+    const canManageNotificationSettingsAdmin =
+      hasAdminAccess && hasPermission("notifications.settings.manage");
+    const canViewAuthoritiesAdmin =
+      hasAdminAccess && (hasPermission("authorities.view") || hasPermission("authorities.manage"));
+    const canManageAuthoritiesAdmin = hasAdminAccess && hasPermission("authorities.manage");
+    const canViewExternalOrgsAdmin =
+      hasAdminAccess && (hasPermission("externalOrgs.view") || hasPermission("externalOrgs.manage"));
+    const canManageExternalOrgsAdmin = hasAdminAccess && hasPermission("externalOrgs.manage");
 
     return {
       actor: {
         userId: currentUser?.id,
-        isAdmin,
+        isAdmin: hasAdminAccess,
         isExternal
       },
       permissions: {
-        canViewAdmin: hasPermission("admin.access"),
+        canViewAdmin:
+          canViewUsersAdmin ||
+          canViewRolesAdmin ||
+          canViewSecurityAdmin ||
+          canViewNotificationsAdmin ||
+          canViewAuthoritiesAdmin ||
+          canViewExternalOrgsAdmin,
+        canViewUsersAdmin,
+        canManageUsersAdmin,
+        canViewRolesAdmin,
+        canManageRolesAdmin,
+        canViewSecurityAdmin,
+        canManageSecurityAdmin,
+        canViewNotificationsAdmin,
+        canRetryNotificationsAdmin,
+        canManageNotificationSettingsAdmin,
+        canViewAuthoritiesAdmin,
+        canManageAuthoritiesAdmin,
+        canViewExternalOrgsAdmin,
+        canManageExternalOrgsAdmin,
         canEditMasterData: hasPermission("masterData.manage"),
         canCreateProject: hasPermission("projects.create"),
         canEditProject: hasPermission("projects.edit"),

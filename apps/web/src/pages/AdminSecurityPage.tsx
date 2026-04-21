@@ -67,11 +67,12 @@ export default function AdminSecurityPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const canManageSecurity = permissions.canManageSecurityAdmin;
 
   const warningItems = useMemo(() => overview.warnings, [overview.warnings]);
 
   useEffect(() => {
-    if (!permissions.canViewAdmin) {
+    if (!permissions.canViewSecurityAdmin) {
       return;
     }
 
@@ -89,13 +90,17 @@ export default function AdminSecurityPage() {
       .finally(() => {
         setIsLoading(false);
       });
-  }, [permissions.canViewAdmin]);
+  }, [permissions.canViewSecurityAdmin]);
 
-  if (!permissions.canViewAdmin) {
+  if (!permissions.canViewSecurityAdmin) {
     return <Navigate to="/compliance/dashboard" replace />;
   }
 
   const handleSave = async () => {
+    if (!canManageSecurity) {
+      return;
+    }
+
     setIsSaving(true);
     setError("");
     setSuccess("");
@@ -131,7 +136,7 @@ export default function AdminSecurityPage() {
     <div className="page">
       <div className="pageHeader">
         <h1 className="pageTitle">Admin Sicherheit</h1>
-        <Button onClick={() => void handleSave()} disabled={isSaving || isLoading}>
+        <Button onClick={() => void handleSave()} disabled={isSaving || isLoading || !canManageSecurity}>
           {isSaving ? "Speichern..." : "Speichern"}
         </Button>
       </div>
@@ -172,7 +177,7 @@ export default function AdminSecurityPage() {
                       passwordMinLength: Number.parseInt(event.target.value || "0", 10)
                     }))
                   }
-                  disabled={isSaving}
+                  disabled={isSaving || !canManageSecurity}
                 />
               </div>
 
@@ -187,7 +192,7 @@ export default function AdminSecurityPage() {
                       maxFailedLoginAttempts: Number.parseInt(event.target.value || "0", 10)
                     }))
                   }
-                  disabled={isSaving}
+                  disabled={isSaving || !canManageSecurity}
                 />
               </div>
 
@@ -202,7 +207,7 @@ export default function AdminSecurityPage() {
                       lockoutMinutes: Number.parseInt(event.target.value || "0", 10)
                     }))
                   }
-                  disabled={isSaving}
+                  disabled={isSaving || !canManageSecurity}
                 />
               </div>
 
@@ -217,7 +222,7 @@ export default function AdminSecurityPage() {
                       sessionTtlDays: Number.parseInt(event.target.value || "0", 10)
                     }))
                   }
-                  disabled={isSaving}
+                  disabled={isSaving || !canManageSecurity}
                 />
               </div>
 
@@ -235,7 +240,7 @@ export default function AdminSecurityPage() {
                       passwordRequireNumberOrSpecial: event.target.value === "true"
                     }))
                   }
-                  disabled={isSaving}
+                  disabled={isSaving || !canManageSecurity}
                 />
               </div>
 
@@ -253,7 +258,7 @@ export default function AdminSecurityPage() {
                       allowExternalUsers: event.target.value === "true"
                     }))
                   }
-                  disabled={isSaving}
+                  disabled={isSaving || !canManageSecurity}
                 />
               </div>
             </div>

@@ -19,7 +19,8 @@ COPY --from=build /app/apps/api/node_modules ./node_modules
 COPY --from=build /app/apps/api/prisma ./prisma
 COPY --from=build /app/apps/api/dist ./dist
 COPY apps/api/start-container.sh ./start-container.sh
-RUN chmod +x ./start-container.sh && mkdir -p ./storage/uploads ./storage/mail-outbox
+COPY apps/api/start-notification-worker.sh ./start-notification-worker.sh
+RUN chmod +x ./start-container.sh ./start-notification-worker.sh && mkdir -p ./storage/uploads
 
 ENV NODE_ENV=production
 EXPOSE 4000

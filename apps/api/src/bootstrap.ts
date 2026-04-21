@@ -6,6 +6,7 @@ import { resolveExplicitAdminCredentials } from "./adminCredentials.js";
 import { ROLE_CATALOG } from "./accessControl.js";
 import { setStoredRolePermissionKeys } from "./rolePermissions.js";
 import { ensureSecuritySettings } from "./securitySettings.js";
+import { ensureNotificationSettings } from "./notificationSettings.js";
 
 const systemRoles = ROLE_CATALOG;
 
@@ -64,6 +65,7 @@ async function run() {
   const config = loadConfig();
   await ensureSystemRoles();
   await ensureSecuritySettings(prisma, config);
+  await ensureNotificationSettings(prisma);
   await ensureInitialAdminUser();
 }
 

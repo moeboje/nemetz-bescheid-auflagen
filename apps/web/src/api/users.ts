@@ -52,6 +52,24 @@ export type UserCreateInput = {
 
 export type UserUpdateInput = Partial<UserCreateInput>;
 
+export type UserPasswordResetMode = "link" | "manual" | "auto" | "direct";
+
+export type UserPasswordResetInput = {
+  passwordMode?: UserPasswordResetMode;
+  temporaryPassword?: string;
+  newPassword?: string;
+  mustChangePassword?: boolean;
+};
+
+export type UserPasswordResetResult = {
+  ok: boolean;
+  user?: User;
+  resetLink?: string;
+  temporaryPassword?: string;
+  notificationStatus?: "SENT" | "FAILED";
+  notificationError?: string;
+};
+
 type ApiUserLookup = {
   id: string;
   firstName?: string;
@@ -237,8 +255,21 @@ export async function listAdminUsers(query: AdminUsersQuery = {}): Promise<Admin
 
 export async function createUser(
   input: UserCreateInput
-): Promise<{ user: User; resetLink?: string; outboxFile?: string; temporaryPassword?: string }> {
-  const payload = await apiRequest<{ ok: boolean; user: ApiUser; resetLink?: string; outboxFile?: string; temporaryPassword?: string }>(
+): Promise<{
+  user: User;
+  resetLink?: string;
+  temporaryPassword?: string;
+  notificationStatus?: "SENT" | "FAILED";
+  notificationError?: string;
+}> {
+  const payload = await apiRequest<{
+    ok: boolean;
+    user: ApiUser;
+    resetLink?: string;
+    temporaryPassword?: string;
+    notificationStatus?: "SENT" | "FAILED";
+    notificationError?: string;
+  }>(
     "/admin/users",
     {
       method: "POST",
@@ -249,8 +280,9 @@ export async function createUser(
   return {
     user: mapApiUserToUser(payload.user),
     resetLink: payload.resetLink,
-    outboxFile: payload.outboxFile,
-    temporaryPassword: payload.temporaryPassword
+    temporaryPassword: payload.temporaryPassword,
+    notificationStatus: payload.notificationStatus,
+    notificationError: payload.notificationError
   };
 }
 
@@ -278,15 +310,31 @@ export async function restoreUser(id: string): Promise<User> {
 
 export async function requestUserPasswordReset(
   id: string,
-  input?: { passwordMode?: "link" | "manual" | "auto"; temporaryPassword?: string }
-): Promise<{ ok: boolean; resetLink?: string; outboxFile?: string; temporaryPassword?: string }> {
-  return apiRequest<{ ok: boolean; resetLink?: string; outboxFile?: string; temporaryPassword?: string }>(
+  input?: UserPasswordResetInput
+): Promise<UserPasswordResetResult> {
+  const payload = await apiRequest<{
+    ok: boolean;
+    user?: ApiUser;
+    resetLink?: string;
+    temporaryPassword?: string;
+    notificationStatus?: "SENT" | "FAILED";
+    notificationError?: string;
+  }>(
     `/admin/users/${id}/reset-password`,
     {
       method: "POST",
       body: input
     }
   );
+
+  return {
+    ok: payload.ok,
+    user: payload.user ? mapApiUserToUser(payload.user) : undefined,
+    resetLink: payload.resetLink,
+    temporaryPassword: payload.temporaryPassword,
+    notificationStatus: payload.notificationStatus,
+    notificationError: payload.notificationError
+  };
 }
 
 export async function unlockUser(id: string): Promise<User> {

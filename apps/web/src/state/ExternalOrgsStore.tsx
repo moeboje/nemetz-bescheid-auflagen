@@ -3,6 +3,7 @@ import {
   archiveExternalOrganization,
   createExternalOrganization,
   listExternalOrganizations,
+  listExternalOrganizationsLookup,
   restoreExternalOrganization,
   updateExternalOrganization,
   type ExternalOrganization,
@@ -47,29 +48,32 @@ function sortExternalOrgs(rows: ExternalOrganization[]) {
 export function ExternalOrgsProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const [externalOrgs, setExternalOrgs] = useState<ExternalOrganization[]>([]);
-  const canManageExternalOrgs =
-    Array.isArray(user?.effectivePermissions) && user.effectivePermissions.includes("externalOrgs.manage");
+  const permissionKeys = Array.isArray(user?.effectivePermissions) ? user.effectivePermissions : [];
+  const hasAdminAccess = permissionKeys.includes("admin.access");
+  const canLookupExternalOrgs =
+    hasAdminAccess &&
+    (permissionKeys.includes("externalOrgs.view") ||
+      permissionKeys.includes("externalOrgs.manage") ||
+      permissionKeys.includes("users.manage"));
 
   const loadExternalOrgs = useCallback(async (query: ExternalOrganizationsQuery = {}) => {
     return listExternalOrganizations(query);
   }, []);
 
   const reloadExternalOrgs = useCallback(async () => {
-    if (!user || !canManageExternalOrgs) {
+    if (!user || !canLookupExternalOrgs) {
       setExternalOrgs([]);
       return [];
     }
 
-    const payload = await listExternalOrganizations({
-      archived: "false"
-    });
+    const payload = await listExternalOrganizationsLookup();
     const next = sortExternalOrgs(payload.items);
     setExternalOrgs(next);
     return next;
-  }, [canManageExternalOrgs, user]);
+  }, [canLookupExternalOrgs, user]);
 
   useEffect(() => {
-    if (!user || !canManageExternalOrgs) {
+    if (!user || !canLookupExternalOrgs) {
       setExternalOrgs([]);
       return;
     }
@@ -77,7 +81,7 @@ export function ExternalOrgsProvider({ children }: { children: React.ReactNode }
     void reloadExternalOrgs().catch(() => {
       setExternalOrgs([]);
     });
-  }, [canManageExternalOrgs, reloadExternalOrgs, user]);
+  }, [canLookupExternalOrgs, reloadExternalOrgs, user]);
 
   const createExternalOrgEntry = useCallback(
     async (input: {

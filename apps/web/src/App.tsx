@@ -30,7 +30,9 @@ import AdminRolesPage from "./pages/AdminRolesPage";
 import AdminExternalOrgsPage from "./pages/AdminExternalOrgsPage";
 import AdminAuthoritiesPage from "./pages/AdminAuthoritiesPage";
 import AdminSecurityPage from "./pages/AdminSecurityPage";
+import AdminNotificationsPage from "./pages/AdminNotificationsPage";
 import MfaVerifyPage from "./pages/MfaVerifyPage";
+import AccountPage from "./pages/AccountPage";
 import SecuritySettingsPage from "./pages/SecuritySettingsPage";
 import {
   AdminIcon,
@@ -68,6 +70,11 @@ import { ExternalOrgsProvider } from "./state/ExternalOrgsStore";
 const MODULE_PREFIX = "compliance";
 const MODULE_BASE_PATH = `/${MODULE_PREFIX}`;
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "nemetz.sidebarCollapsed";
+
+function isPersonalSecurityRoute(pathname: string) {
+  const normalizedPath = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+  return normalizedPath.endsWith("/account/security") || normalizedPath.endsWith("/settings/security");
+}
 
 function isTasksReportPrintRoute(pathname: string) {
   const normalizedPath = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
@@ -116,7 +123,7 @@ function RequireGuest({ children }: { children: React.ReactNode }) {
 
   if (user) {
     if (user.mustChangePassword) {
-      return <Navigate to={`${MODULE_BASE_PATH}/settings/security?mode=force-password-change`} replace />;
+      return <Navigate to={`${MODULE_BASE_PATH}/account/security?mode=force-password-change`} replace />;
     }
     return <Navigate to={`${MODULE_BASE_PATH}/dashboard`} replace />;
   }
@@ -127,9 +134,9 @@ function RequireGuest({ children }: { children: React.ReactNode }) {
 function AppLayout() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { logout } = useAuth();
+  const { user, logout } = useAuth();
   const { currentUser } = useUsers();
-  const { permissions } = useAuthorization();
+  const { hasPermission, permissions } = useAuthorization();
   const { activeCount } = useNotifications();
   const runtimeConfig = useRuntimeConfig();
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState<boolean>(() =>
@@ -140,9 +147,37 @@ function AppLayout() {
     typeof window !== "undefined" ? window.matchMedia("(max-width: 960px)").matches : false
   );
   const [isLogoutPending, setIsLogoutPending] = React.useState(false);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = React.useState(false);
+  const accountMenuRef = React.useRef<HTMLDivElement | null>(null);
   const safeMode = isSafeModeActive(location.search);
   const reportsEnabled = runtimeConfig.features.enableReports;
   const notificationsEnabled = runtimeConfig.features.enableNotifications;
+  const currentAccountUser = user ?? currentUser;
+  const canAccessLegacyAdmin =
+    hasPermission("admin.access") &&
+    permissions.canManageUsersAdmin &&
+    permissions.canManageRolesAdmin &&
+    permissions.canManageExternalOrgsAdmin &&
+    permissions.canManageAuthoritiesAdmin &&
+    permissions.canManageSecurityAdmin;
+  const restrictedFallback = currentAccountUser?.isExternal
+    ? `${MODULE_BASE_PATH}/tasks`
+    : `${MODULE_BASE_PATH}/dashboard`;
+  const accountPath = `${MODULE_BASE_PATH}/account`;
+  const personalSecurityPath = `${MODULE_BASE_PATH}/account/security`;
+  const defaultAdminPath = permissions.canViewUsersAdmin
+    ? `${MODULE_BASE_PATH}/admin/users`
+    : permissions.canViewRolesAdmin
+    ? `${MODULE_BASE_PATH}/admin/roles`
+    : permissions.canViewNotificationsAdmin
+    ? `${MODULE_BASE_PATH}/admin/notifications`
+    : permissions.canViewExternalOrgsAdmin
+    ? `${MODULE_BASE_PATH}/admin/external-orgs`
+    : permissions.canViewAuthoritiesAdmin
+    ? `${MODULE_BASE_PATH}/admin/authorities`
+    : permissions.canViewSecurityAdmin
+    ? `${MODULE_BASE_PATH}/admin/security`
+    : `${MODULE_BASE_PATH}/admin`;
 
   React.useEffect(() => {
     saveToStorage(SIDEBAR_COLLAPSED_STORAGE_KEY, sidebarCollapsed);
@@ -166,6 +201,7 @@ function AppLayout() {
 
   React.useEffect(() => {
     setMobileSidebarOpen(false);
+    setIsAccountMenuOpen(false);
   }, [location.pathname, location.search]);
 
   React.useEffect(() => {
@@ -175,7 +211,27 @@ function AppLayout() {
   }, [isMobileNavigation]);
 
   React.useEffect(() => {
+    if (!isAccountMenuOpen) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (accountMenuRef.current?.contains(event.target as Node)) {
+        return;
+      }
+      setIsAccountMenuOpen(false);
+    };
+
+    window.addEventListener("mousedown", handlePointerDown);
+    return () => window.removeEventListener("mousedown", handlePointerDown);
+  }, [isAccountMenuOpen]);
+
+  React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && isAccountMenuOpen) {
+        setIsAccountMenuOpen(false);
+        return;
+      }
       if (event.key === "Escape" && isMobileNavigation && mobileSidebarOpen) {
         setMobileSidebarOpen(false);
         return;
@@ -186,7 +242,7 @@ function AppLayout() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isMobileNavigation, mobileSidebarOpen, sidebarCollapsed]);
+  }, [isAccountMenuOpen, isMobileNavigation, mobileSidebarOpen, sidebarCollapsed]);
 
   const handleLogout = async () => {
     setIsLogoutPending(true);
@@ -272,18 +328,13 @@ function AppLayout() {
     {
       key: "admin",
       label: t("nav.admin"),
-      path: `${MODULE_BASE_PATH}/admin`,
+      path: canAccessLegacyAdmin ? `${MODULE_BASE_PATH}/admin` : defaultAdminPath,
       icon: <AdminIcon />,
       visible: permissions.canViewAdmin
     }
   ];
 
-  const restrictedFallback = currentUser?.isExternal
-    ? `${MODULE_BASE_PATH}/tasks`
-    : `${MODULE_BASE_PATH}/dashboard`;
-  const personalSecurityPath = `${MODULE_BASE_PATH}/settings/security`;
-
-  if (currentUser?.mustChangePassword && !location.pathname.endsWith("/settings/security")) {
+  if (user?.mustChangePassword && !isPersonalSecurityRoute(location.pathname)) {
     return <Navigate to={`${personalSecurityPath}?mode=force-password-change`} replace />;
   }
 
@@ -348,34 +399,56 @@ function AppLayout() {
           }
           right={
             <div className="topbarRight">
-              <div className="topbarUserBadge">
-                <span className="topbarUserName">
-                  {currentUser ? getUserDisplayName(currentUser) : t("topbar.userDemo")}
-                </span>
-                {currentUser ? (
-                  <span className="topbarUserRole">
-                    {getRoleLabel(currentUser.companyRole, currentUser.isExternal)}
+              <div className="topbarUserMenu" ref={accountMenuRef}>
+                <button
+                  type="button"
+                  className={`topbarUserBadge topbarUserBadgeButton ${isAccountMenuOpen ? "topbarUserBadgeButtonOpen" : ""}`}
+                  aria-haspopup="menu"
+                  aria-expanded={isAccountMenuOpen}
+                  aria-label={t("account.menu.label")}
+                  onClick={() => setIsAccountMenuOpen((value) => !value)}
+                >
+                  <span className="topbarUserName">
+                    {currentAccountUser ? getUserDisplayName(currentAccountUser) : t("topbar.userDemo")}
                   </span>
+                  {currentAccountUser ? (
+                    <span className="topbarUserRole">
+                      {getRoleLabel(currentAccountUser.companyRole, currentAccountUser.isExternal)}
+                    </span>
+                  ) : null}
+                </button>
+
+                {isAccountMenuOpen ? (
+                  <div className="topbarUserMenuPopover" role="menu" aria-label={t("account.menu.label")}>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="topbarMenuItem"
+                      onClick={() => navigate(accountPath)}
+                    >
+                      {t("account.menu.overview")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="topbarMenuItem"
+                      onClick={() => navigate(personalSecurityPath)}
+                    >
+                      {t("account.menu.security")}
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="topbarMenuItem topbarMenuItemDanger"
+                      onClick={() => void handleLogout()}
+                      disabled={isLogoutPending}
+                    >
+                      {isLogoutPending ? t("auth.logout.pending") : t("auth.logout")}
+                    </button>
+                  </div>
                 ) : null}
               </div>
               <div className="topbarActionGroup">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  className="topbarActionButton"
-                  onClick={() => void handleLogout()}
-                  disabled={isLogoutPending}
-                >
-                  {isLogoutPending ? t("auth.logout.pending") : t("auth.logout")}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="topbarActionButton"
-                  onClick={() => navigate(personalSecurityPath)}
-                >
-                  Kontosicherheit
-                </Button>
                 {notificationsEnabled ? (
                   <IconButton
                     ariaLabel={t("topbar.notifications")}
@@ -451,28 +524,40 @@ function AppLayout() {
           />
           <Route
             path="admin"
-            element={permissions.canViewAdmin ? <AdminPage /> : <Navigate to={restrictedFallback} replace />}
+            element={
+              permissions.canViewAdmin ? (
+                canAccessLegacyAdmin ? <AdminPage /> : <Navigate to={defaultAdminPath} replace />
+              ) : (
+                <Navigate to={restrictedFallback} replace />
+              )
+            }
           />
           <Route
             path="admin/users"
-            element={permissions.canViewAdmin ? <AdminUsersPage /> : <Navigate to={restrictedFallback} replace />}
+            element={permissions.canViewUsersAdmin ? <AdminUsersPage /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route
             path="admin/roles"
-            element={permissions.canViewAdmin ? <AdminRolesPage /> : <Navigate to={restrictedFallback} replace />}
+            element={permissions.canViewRolesAdmin ? <AdminRolesPage /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route
             path="admin/external-orgs"
-            element={permissions.canViewAdmin ? <AdminExternalOrgsPage /> : <Navigate to={restrictedFallback} replace />}
+            element={permissions.canViewExternalOrgsAdmin ? <AdminExternalOrgsPage /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route
             path="admin/authorities"
-            element={permissions.canViewAdmin ? <AdminAuthoritiesPage /> : <Navigate to={restrictedFallback} replace />}
+            element={permissions.canViewAuthoritiesAdmin ? <AdminAuthoritiesPage /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route
             path="admin/security"
-            element={permissions.canViewAdmin ? <AdminSecurityPage /> : <Navigate to={restrictedFallback} replace />}
+            element={permissions.canViewSecurityAdmin ? <AdminSecurityPage /> : <Navigate to={restrictedFallback} replace />}
           />
+          <Route
+            path="admin/notifications"
+            element={permissions.canViewNotificationsAdmin ? <AdminNotificationsPage /> : <Navigate to={restrictedFallback} replace />}
+          />
+          <Route path="account" element={<AccountPage />} />
+          <Route path="account/security" element={<SecuritySettingsPage />} />
           <Route path="compliance-summary" element={<ComplianceSummaryPage />} />
           <Route
             path="reports"
@@ -484,7 +569,7 @@ function AppLayout() {
           />
           <Route path="about" element={<AboutPage />} />
           <Route path="help" element={<HelpPage />} />
-          <Route path="settings/security" element={<SecuritySettingsPage />} />
+          <Route path="settings/security" element={<Navigate to={personalSecurityPath} replace />} />
         </Route>
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/ui-demo" element={<UiDemoPage />} />
@@ -528,28 +613,40 @@ function AppLayout() {
         />
         <Route
           path="/admin"
-          element={permissions.canViewAdmin ? <AdminPage /> : <Navigate to={restrictedFallback} replace />}
+          element={
+            permissions.canViewAdmin ? (
+              canAccessLegacyAdmin ? <AdminPage /> : <Navigate to={defaultAdminPath} replace />
+            ) : (
+              <Navigate to={restrictedFallback} replace />
+            )
+          }
         />
         <Route
           path="/admin/users"
-          element={permissions.canViewAdmin ? <AdminUsersPage /> : <Navigate to={restrictedFallback} replace />}
+          element={permissions.canViewUsersAdmin ? <AdminUsersPage /> : <Navigate to={restrictedFallback} replace />}
         />
         <Route
           path="/admin/roles"
-          element={permissions.canViewAdmin ? <AdminRolesPage /> : <Navigate to={restrictedFallback} replace />}
+          element={permissions.canViewRolesAdmin ? <AdminRolesPage /> : <Navigate to={restrictedFallback} replace />}
         />
         <Route
           path="/admin/external-orgs"
-          element={permissions.canViewAdmin ? <AdminExternalOrgsPage /> : <Navigate to={restrictedFallback} replace />}
+          element={permissions.canViewExternalOrgsAdmin ? <AdminExternalOrgsPage /> : <Navigate to={restrictedFallback} replace />}
         />
         <Route
           path="/admin/authorities"
-          element={permissions.canViewAdmin ? <AdminAuthoritiesPage /> : <Navigate to={restrictedFallback} replace />}
+          element={permissions.canViewAuthoritiesAdmin ? <AdminAuthoritiesPage /> : <Navigate to={restrictedFallback} replace />}
         />
         <Route
           path="/admin/security"
-          element={permissions.canViewAdmin ? <AdminSecurityPage /> : <Navigate to={restrictedFallback} replace />}
+          element={permissions.canViewSecurityAdmin ? <AdminSecurityPage /> : <Navigate to={restrictedFallback} replace />}
         />
+        <Route
+          path="/admin/notifications"
+          element={permissions.canViewNotificationsAdmin ? <AdminNotificationsPage /> : <Navigate to={restrictedFallback} replace />}
+        />
+        <Route path="/account" element={<AccountPage />} />
+        <Route path="/account/security" element={<SecuritySettingsPage />} />
         <Route path="/compliance-summary" element={<ComplianceSummaryPage />} />
         <Route
           path="/reports"
@@ -561,7 +658,7 @@ function AppLayout() {
         />
         <Route path="/about" element={<AboutPage />} />
         <Route path="/help" element={<HelpPage />} />
-        <Route path="/settings/security" element={<SecuritySettingsPage />} />
+        <Route path="/settings/security" element={<Navigate to={personalSecurityPath} replace />} />
         <Route path="*" element={<Navigate to={`${MODULE_BASE_PATH}/dashboard`} replace />} />
       </Routes>
     </AppShell>

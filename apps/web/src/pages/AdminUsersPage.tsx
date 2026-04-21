@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { Badge, Button, Card, DataTable, IconButton, Input, Modal, Select } from "@nemetz/ui";
 import { ApiError } from "../api/client";
+import { getPasswordPolicy, type PasswordPolicy } from "../api/auth";
 import { t } from "../i18n";
 import { useUsers, type UserType, type AdminUsersQuery } from "../state/UsersStore";
 import { useAuthorization } from "../state/AuthorizationStore";
@@ -14,7 +15,8 @@ import AdminSubnav from "../components/AdminSubnav";
 type ArchivedFilter = "false" | "true" | "all";
 type SortField = "name" | "email" | "createdAt" | "lastLoginAt";
 type SortDirection = "asc" | "desc";
-type PasswordMode = "link" | "manual" | "auto";
+type CreatePasswordMode = "link" | "manual" | "auto";
+type ResetPasswordMode = CreatePasswordMode | "direct";
 
 type UserFormState = {
   firstName: string;
@@ -27,7 +29,7 @@ type UserFormState = {
   externalOrgId: string;
   notes: string;
   initialPassword: string;
-  passwordMode: PasswordMode;
+  passwordMode: CreatePasswordMode;
   mustChangePassword: boolean;
 };
 
@@ -40,10 +42,14 @@ type ConfirmationState = {
 type ResetState = {
   userId: string;
   displayName: string;
+  email: string;
   isArchived: boolean;
   isSelf: boolean;
-  passwordMode: PasswordMode;
+  passwordMode: ResetPasswordMode;
   temporaryPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+  mustChangePassword: boolean;
 };
 
 type ExternalOrgQuickForm = {
@@ -85,6 +91,8 @@ const fallbackRoleOptions = [
   { key: "EXTERNAL", label: t("users.role.external") }
 ];
 
+const NUMBER_OR_SPECIAL_PATTERN = /[0-9]|[^A-Za-z0-9]/;
+
 function isValidEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
@@ -116,15 +124,105 @@ function isLocked(lockedUntil?: string) {
   return Number.isFinite(timestamp) && timestamp > Date.now();
 }
 
-function extractApiErrorMessage(error: unknown, fallbackKey: string) {
-  if (error instanceof ApiError) {
-    if (error.status === 409) {
-      return t("users.validation.uniqueEmail");
-    }
+function formatPasswordPolicyHint(policy: PasswordPolicy | null) {
+  if (!policy) {
+    return "";
+  }
 
-    if (typeof error.message === "string" && error.message.trim()) {
-      return error.message;
-    }
+  const numberOrSpecialHint = policy.passwordRequireNumberOrSpecial
+    ? t("admin.users.password.policyHint.requireNumberOrSpecial")
+    : "";
+
+  return t("admin.users.password.policyHint")
+    .replace("{minLength}", String(policy.passwordMinLength))
+    .replace("{numberOrSpecialHint}", numberOrSpecialHint);
+}
+
+function getManagedPasswordValidationError(password: string, policy: PasswordPolicy | null) {
+  const normalized = password.trim();
+  if (!normalized || !policy) {
+    return "";
+  }
+
+  if (normalized.length < policy.passwordMinLength) {
+    return t("admin.users.validation.passwordPolicy");
+  }
+
+  if (policy.passwordRequireNumberOrSpecial && !NUMBER_OR_SPECIAL_PATTERN.test(normalized)) {
+    return t("admin.users.validation.passwordPolicy");
+  }
+
+  return "";
+}
+
+function getApiErrorDetails(error: unknown) {
+  if (!(error instanceof ApiError)) {
+    return null;
+  }
+
+  const payload =
+    error.payload && typeof error.payload === "object" && !Array.isArray(error.payload)
+      ? (error.payload as Record<string, unknown>)
+      : null;
+  const errorCode = typeof payload?.errorCode === "string" ? payload.errorCode.trim() : "";
+  const message =
+    typeof payload?.message === "string"
+      ? payload.message.trim()
+      : typeof error.message === "string"
+        ? error.message.trim()
+        : "";
+
+  return {
+    status: error.status,
+    errorCode,
+    message
+  };
+}
+
+function extractUserAdminErrorMessage(
+  error: unknown,
+  fallbackKey: string,
+  options: {
+    emailConflictKey?: string;
+    externalOrgConflictKey?: string;
+  } = {}
+) {
+  const details = getApiErrorDetails(error);
+  if (!details) {
+    return t(fallbackKey);
+  }
+
+  if (
+    options.emailConflictKey &&
+    (details.errorCode === "USER_EMAIL_CONFLICT" || /email already exists/i.test(details.message))
+  ) {
+    return t(options.emailConflictKey);
+  }
+
+  if (
+    options.externalOrgConflictKey &&
+    (details.errorCode === "EXTERNAL_ORG_CONFLICT" || /external organization already exists/i.test(details.message))
+  ) {
+    return t(options.externalOrgConflictKey);
+  }
+
+  if (/known placeholder passwords are not allowed/i.test(details.message)) {
+    return t("admin.users.validation.passwordPlaceholder");
+  }
+
+  if (
+    /password must be at least/i.test(details.message) ||
+    /password must include at least one number or special character/i.test(details.message)
+  ) {
+    return t("admin.users.validation.passwordPolicy");
+  }
+
+  if (/admins must use personal security settings/i.test(details.message)) {
+    return t("admin.users.reset.error.self");
+  }
+
+  if (details.message) {
+    return details.message;
   }
 
   return t(fallbackKey);
@@ -162,6 +260,7 @@ export default function AdminUsersPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [passwordPolicy, setPasswordPolicy] = useState<PasswordPolicy | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -185,6 +284,9 @@ export default function AdminUsersPage() {
   const [isExternalOrgQuickSubmitting, setIsExternalOrgQuickSubmitting] = useState(false);
 
   const totalPages = Math.max(1, Math.ceil(total / Math.max(pageSize, 1)));
+  const passwordPolicyHint = useMemo(() => formatPasswordPolicyHint(passwordPolicy), [passwordPolicy]);
+  const canManageUsers = permissions.canManageUsersAdmin;
+  const canManageExternalOrgs = permissions.canManageExternalOrgsAdmin;
 
   const roleLabelMap = useMemo(
     () =>
@@ -319,7 +421,31 @@ export default function AdminUsersPage() {
     });
   }, [reloadExternalOrgs, reloadRoles]);
 
-  if (!permissions.canViewAdmin) {
+  useEffect(() => {
+    if (!canManageUsers) {
+      setPasswordPolicy(null);
+      return;
+    }
+
+    let active = true;
+    void getPasswordPolicy()
+      .then((policy) => {
+        if (active) {
+          setPasswordPolicy(policy);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setPasswordPolicy(null);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [canManageUsers]);
+
+  if (!permissions.canViewUsersAdmin) {
     return <Navigate to="/compliance/dashboard" replace />;
   }
 
@@ -330,16 +456,21 @@ export default function AdminUsersPage() {
   };
 
   const openCreateModal = () => {
+    if (!canManageUsers) {
+      return;
+    }
     setForm(emptyForm);
     setEditingId(null);
     setFormError("");
     setModalOpen(true);
     clearTransientMessages();
     setResetError("");
-    setResetDevValue("");
   };
 
   const openEditModal = (userId: string) => {
+    if (!canManageUsers) {
+      return;
+    }
     const user = rows.find((row) => row.id === userId);
     if (!user) {
       return;
@@ -364,7 +495,6 @@ export default function AdminUsersPage() {
     setModalOpen(true);
     clearTransientMessages();
     setResetError("");
-    setResetDevValue("");
   };
 
   const closeModal = () => {
@@ -392,7 +522,14 @@ export default function AdminUsersPage() {
     }
 
     if (!editingId && form.passwordMode === "manual" && !form.initialPassword.trim()) {
-      return "Bitte ein temporaeres Passwort eingeben.";
+      return t("admin.users.validation.initialPasswordRequired");
+    }
+
+    if (!editingId && form.passwordMode === "manual") {
+      const passwordValidationError = getManagedPasswordValidationError(form.initialPassword, passwordPolicy);
+      if (passwordValidationError) {
+        return passwordValidationError;
+      }
     }
 
     return "";
@@ -442,12 +579,14 @@ export default function AdminUsersPage() {
           passwordMode: form.passwordMode
         });
 
-        const devValue = created.temporaryPassword || created.resetLink || created.outboxFile || "";
+        const devValue = created.temporaryPassword || created.resetLink || "";
         setInviteDevValue(devValue);
 
         setSuccessMessage(
-          created.temporaryPassword
-            ? "Benutzer wurde angelegt. Das temporaere Passwort wird einmalig angezeigt."
+          created.notificationStatus === "FAILED"
+            ? t("admin.users.success.createdInviteDispatchFailed")
+            : created.temporaryPassword
+            ? t("admin.users.success.createdTemporaryPassword")
             : created.user.invitedAt
               ? t("admin.users.success.createdInvite")
               : t("admin.users.success.created")
@@ -457,7 +596,11 @@ export default function AdminUsersPage() {
       await Promise.all([fetchUsers(), reloadUsers()]);
       closeModal();
     } catch (error) {
-      setFormError(extractApiErrorMessage(error, "admin.users.error.save"));
+      setFormError(
+        extractUserAdminErrorMessage(error, "admin.users.error.save", {
+          emailConflictKey: "users.validation.uniqueEmail"
+        })
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -484,63 +627,130 @@ export default function AdminUsersPage() {
       await Promise.all([fetchUsers(), reloadUsers()]);
       setConfirmation(null);
     } catch (error) {
-      setLoadError(extractApiErrorMessage(error, "admin.users.error.action"));
+      setLoadError(extractUserAdminErrorMessage(error, "admin.users.error.action"));
     } finally {
       setIsConfirmSubmitting(false);
     }
   };
 
-  const openResetModal = (input: { userId: string; displayName: string; isArchived: boolean; isSelf: boolean }) => {
+  const openResetModal = (input: { userId: string; displayName: string; email: string; isArchived: boolean; isSelf: boolean }) => {
     setResetState({
       ...input,
       passwordMode: "link",
-      temporaryPassword: ""
+      temporaryPassword: "",
+      newPassword: "",
+      confirmPassword: "",
+      mustChangePassword: true
     });
     setResetError("");
     setResetDevValue("");
     setSuccessMessage("");
   };
 
+  const closeResetModal = () => {
+    setResetState(null);
+    setResetError("");
+    setResetDevValue("");
+  };
+
+  const getResetValidationError = useCallback(
+    (state: ResetState | null) => {
+      if (!state) {
+        return "";
+      }
+
+      if (state.isArchived) {
+        return t("admin.users.reset.error.archived");
+      }
+
+      if (state.isSelf) {
+        return t("admin.users.reset.error.self");
+      }
+
+      if (!state.email.trim() || !isValidEmail(state.email.trim())) {
+        return t("admin.users.reset.error.emailMissing");
+      }
+
+      if (state.passwordMode === "manual") {
+        if (!state.temporaryPassword.trim()) {
+          return t("admin.users.reset.error.temporaryPasswordRequired");
+        }
+
+        const passwordValidationError = getManagedPasswordValidationError(state.temporaryPassword, passwordPolicy);
+        if (passwordValidationError) {
+          return passwordValidationError;
+        }
+
+        return "";
+      }
+
+      if (state.passwordMode === "auto" || state.passwordMode === "link") {
+        return "";
+      }
+
+      if (!state.newPassword || !state.confirmPassword) {
+        return t("admin.users.reset.error.required");
+      }
+
+      if (state.newPassword !== state.confirmPassword) {
+        return t("admin.users.reset.error.mismatch");
+      }
+
+      const passwordValidationError = getManagedPasswordValidationError(state.newPassword, passwordPolicy);
+      if (passwordValidationError) {
+        return passwordValidationError;
+      }
+
+      return "";
+    },
+    [passwordPolicy]
+  );
+
   const handleResetPassword = async () => {
     if (!resetState) {
       return;
     }
 
-    if (resetState.isArchived) {
-      setResetError(t("admin.users.reset.error.archived"));
-      return;
-    }
-
-    if (resetState.passwordMode === "manual" && !resetState.temporaryPassword.trim()) {
-      setResetError("Bitte ein temporaeres Passwort eingeben.");
+    const validationError = getResetValidationError(resetState);
+    if (validationError) {
+      setResetError(validationError);
       return;
     }
 
     setIsResetSubmitting(true);
     setResetError("");
     setSuccessMessage("");
+    setResetDevValue("");
 
     try {
       const result = await requestReset(resetState.userId, {
         passwordMode: resetState.passwordMode,
         temporaryPassword:
-          resetState.passwordMode === "manual" ? resetState.temporaryPassword.trim() || undefined : undefined
+          resetState.passwordMode === "manual" ? resetState.temporaryPassword.trim() || undefined : undefined,
+        newPassword: resetState.passwordMode === "direct" ? resetState.newPassword : undefined,
+        mustChangePassword: resetState.passwordMode === "direct" ? resetState.mustChangePassword : undefined
       });
-      const devValue = result.temporaryPassword || result.resetLink || result.outboxFile || "";
+
+      if (resetState.passwordMode === "direct") {
+        setSuccessMessage(t("admin.users.reset.success"));
+        await Promise.all([fetchUsers(), reloadUsers()]);
+        closeResetModal();
+        return;
+      }
+
+      const devValue = result.temporaryPassword || result.resetLink || "";
       setResetDevValue(devValue);
       setSuccessMessage(
         result.temporaryPassword
-          ? "Temporaeres Passwort wurde gesetzt und wird einmalig angezeigt."
+          ? t("admin.users.reset.successWithTemporaryPassword")
           : result.resetLink
-          ? t("admin.users.reset.successWithLink").replace("{link}", result.resetLink)
-          : result.outboxFile
-            ? t("admin.users.reset.successWithOutbox").replace("{path}", result.outboxFile)
+            ? t("admin.users.reset.successWithLink").replace("{link}", result.resetLink)
             : t("admin.users.reset.success")
       );
 
-      await fetchUsers();
+      await Promise.all([fetchUsers(), reloadUsers()]);
     } catch (error) {
-      setResetError(extractApiErrorMessage(error, "admin.users.reset.error"));
+      setResetError(extractUserAdminErrorMessage(error, "admin.users.reset.error"));
     } finally {
       setIsResetSubmitting(false);
     }
@@ -555,7 +765,7 @@ export default function AdminUsersPage() {
       setSuccessMessage(t("admin.users.success.unlocked"));
       await Promise.all([fetchUsers(), reloadUsers()]);
     } catch (error) {
-      setLoadError(extractApiErrorMessage(error, "admin.users.error.action"));
+      setLoadError(extractUserAdminErrorMessage(error, "admin.users.error.action"));
     }
   };
 
@@ -568,7 +778,7 @@ export default function AdminUsersPage() {
       setSuccessMessage(enforced ? t("admin.users.mfa.enforcedOn") : t("admin.users.mfa.enforcedOff"));
       await Promise.all([fetchUsers(), reloadUsers()]);
     } catch (error) {
-      setLoadError(extractApiErrorMessage(error, "admin.users.error.action"));
+      setLoadError(extractUserAdminErrorMessage(error, "admin.users.error.action"));
     }
   };
 
@@ -581,7 +791,7 @@ export default function AdminUsersPage() {
       setSuccessMessage(t("admin.users.mfa.resetSuccess"));
       await Promise.all([fetchUsers(), reloadUsers()]);
     } catch (error) {
-      setLoadError(extractApiErrorMessage(error, "admin.users.error.action"));
+      setLoadError(extractUserAdminErrorMessage(error, "admin.users.error.action"));
     }
   };
 
@@ -599,6 +809,9 @@ export default function AdminUsersPage() {
   };
 
   const openQuickAddExternalOrg = () => {
+    if (!canManageExternalOrgs) {
+      return;
+    }
     setExternalOrgQuickError("");
     setExternalOrgQuickForm(emptyExternalOrgQuickForm);
     setExternalOrgQuickModalOpen(true);
@@ -615,6 +828,10 @@ export default function AdminUsersPage() {
   };
 
   const handleCreateQuickExternalOrg = async () => {
+    if (!canManageExternalOrgs) {
+      return;
+    }
+
     const validationError = validateQuickExternalOrg();
     if (validationError) {
       setExternalOrgQuickError(validationError);
@@ -638,7 +855,11 @@ export default function AdminUsersPage() {
       setExternalOrgQuickModalOpen(false);
       setSuccessMessage(t("admin.users.externalOrg.quickAddSuccess"));
     } catch (error) {
-      setExternalOrgQuickError(extractApiErrorMessage(error, "admin.externalOrgs.error.save"));
+      setExternalOrgQuickError(
+        extractUserAdminErrorMessage(error, "admin.externalOrgs.error.save", {
+          externalOrgConflictKey: "admin.externalOrgs.validation.uniqueName"
+        })
+      );
     } finally {
       setIsExternalOrgQuickSubmitting(false);
     }
@@ -648,7 +869,7 @@ export default function AdminUsersPage() {
     <div className="page">
       <div className="pageHeader">
         <h1 className="pageTitle">{t("admin.users.title")}</h1>
-        <Button onClick={openCreateModal}>{t("admin.users.action.new")}</Button>
+        {canManageUsers ? <Button onClick={openCreateModal}>{t("admin.users.action.new")}</Button> : null}
       </div>
 
       <AdminSubnav />
@@ -802,6 +1023,11 @@ export default function AdminUsersPage() {
             render: (row: (typeof rows)[number]) => formatDateTime(row.lastLoginAt)
           },
           {
+            key: "failedLogins",
+            header: t("admin.users.table.failedLogins"),
+            render: (row: (typeof rows)[number]) => String(row.failedLoginCount ?? 0)
+          },
+          {
             key: "status",
             header: t("admin.users.table.status"),
             render: (row: (typeof rows)[number]) => {
@@ -814,7 +1040,7 @@ export default function AdminUsersPage() {
               }
 
               if (row.mustChangePassword) {
-                return <Badge variant="warning">Passwortwechsel offen</Badge>;
+                return <Badge variant="warning">{t("admin.users.status.passwordChangeRequired")}</Badge>;
               }
 
               return <Badge variant="success">{t("users.status.active")}</Badge>;
@@ -837,6 +1063,10 @@ export default function AdminUsersPage() {
         data={rows}
         getRowKey={(row) => row.id}
         rowActions={(row) => {
+          if (!canManageUsers) {
+            return null;
+          }
+
           const displayName = `${row.firstName} ${row.lastName}`.trim();
           const rowLocked = isLocked(row.lockedUntil);
           const isSelf = authUser?.id === row.id;
@@ -883,11 +1113,12 @@ export default function AdminUsersPage() {
                   openResetModal({
                     userId: row.id,
                     displayName,
+                    email: row.email,
                     isArchived: row.isArchived,
                     isSelf
                   })
                 }
-                disabled={row.isArchived}
+                disabled={row.isArchived || isSelf}
               >
                 {t("admin.users.action.resetPassword")}
               </Button>
@@ -1071,15 +1302,17 @@ export default function AdminUsersPage() {
             <div className="formField">
               <div className="formFieldHeader">
                 <span className="fieldLabel">{t("admin.users.form.externalOrg")}</span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="fieldActionButton"
-                  onClick={openQuickAddExternalOrg}
-                  disabled={isSubmitting}
-                >
-                  {t("admin.users.externalOrg.quickAdd")}
-                </Button>
+                {canManageExternalOrgs ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="fieldActionButton"
+                    onClick={openQuickAddExternalOrg}
+                    disabled={isSubmitting}
+                  >
+                    {t("admin.users.externalOrg.quickAdd")}
+                  </Button>
+                ) : null}
               </div>
               <Select
                 options={externalOrgOptions}
@@ -1104,18 +1337,18 @@ export default function AdminUsersPage() {
 
           {!editingId ? (
             <div className="formField">
-              <span className="fieldLabel">Initialzugang</span>
+              <span className="fieldLabel">{t("admin.users.form.initialAccess")}</span>
               <Select
                 options={[
-                  { value: "link", label: "Reset-Link erzeugen" },
-                  { value: "manual", label: "Temporaeres Passwort setzen" },
-                  { value: "auto", label: "Temporaeres Passwort generieren" }
+                  { value: "link", label: t("admin.users.form.passwordMode.link") },
+                  { value: "manual", label: t("admin.users.form.passwordMode.manual") },
+                  { value: "auto", label: t("admin.users.form.passwordMode.auto") }
                 ]}
                 value={form.passwordMode}
                 onChange={(event) =>
                   setForm((prev) => ({
                     ...prev,
-                    passwordMode: event.target.value as PasswordMode,
+                    passwordMode: event.target.value as CreatePasswordMode,
                     initialPassword: event.target.value === "manual" ? prev.initialPassword : ""
                   }))
                 }
@@ -1132,21 +1365,22 @@ export default function AdminUsersPage() {
                     }
                     disabled={isSubmitting}
                   />
-                  <p className="placeholderText">Das Passwort wird nur beim Anlegen verwendet und der Benutzer muss es beim naechsten Login aendern.</p>
+                  <p className="placeholderText">{t("admin.users.form.manualPasswordHint")}</p>
+                  {passwordPolicyHint ? <p className="placeholderText">{passwordPolicyHint}</p> : null}
                 </>
               ) : form.passwordMode === "auto" ? (
-                <p className="placeholderText">Es wird ein sicheres temporaeres Passwort generiert und einmalig angezeigt.</p>
+                <p className="placeholderText">{t("admin.users.form.autoPasswordHint")}</p>
               ) : (
                 <p className="placeholderText">{t("admin.users.form.initialPasswordHint")}</p>
               )}
             </div>
           ) : (
             <div className="formField">
-              <span className="fieldLabel">Passwortwechsel beim naechsten Login</span>
+              <span className="fieldLabel">{t("admin.users.form.mustChangePasswordOnNextLogin")}</span>
               <Select
                 options={[
-                  { value: "false", label: "Nein" },
-                  { value: "true", label: "Ja" }
+                  { value: "false", label: t("common.no") },
+                  { value: "true", label: t("common.yes") }
                 ]}
                 value={String(form.mustChangePassword)}
                 onChange={(event) =>
@@ -1193,17 +1427,17 @@ export default function AdminUsersPage() {
 
       <Modal
         open={Boolean(resetState)}
-        onClose={() => setResetState(null)}
+        onClose={closeResetModal}
         closeAriaLabel={t("modal.close")}
         header={t("admin.users.reset.modal.title")}
         footer={
           <div className="modalFooter">
-            <Button variant="secondary" onClick={() => setResetState(null)}>
+            <Button variant="secondary" onClick={closeResetModal}>
               {t("common.cancel")}
             </Button>
             <Button
               onClick={handleResetPassword}
-              disabled={isResetSubmitting || Boolean(resetState?.isArchived)}
+              disabled={isResetSubmitting || Boolean(getResetValidationError(resetState))}
             >
               {isResetSubmitting ? t("admin.users.reset.pending") : t("admin.users.action.resetPassword")}
             </Button>
@@ -1215,30 +1449,41 @@ export default function AdminUsersPage() {
             {t("admin.users.reset.modal.description").replace("{name}", resetState?.displayName ?? "")}
           </p>
 
-          {resetState?.isSelf ? <p className="placeholderText">{t("admin.users.reset.modal.selfWarning")}</p> : null}
+          <div className="formField">
+            <span className="fieldLabel">{t("admin.users.reset.modal.email")}</span>
+            <Input value={resetState?.email ?? ""} disabled />
+          </div>
+
+          {resetState?.isSelf ? <p className="validationText">{t("admin.users.reset.error.self")}</p> : null}
           {resetState?.isArchived ? <p className="validationText">{t("admin.users.reset.error.archived")}</p> : null}
 
           {resetState ? (
             <div className="formField">
-              <span className="fieldLabel">Reset-Modus</span>
+              <span className="fieldLabel">{t("admin.users.reset.mode")}</span>
               <Select
                 options={[
-                  { value: "link", label: "Reset-Link erzeugen" },
-                  { value: "manual", label: "Temporaeres Passwort setzen" },
-                  { value: "auto", label: "Temporaeres Passwort generieren" }
+                  { value: "link", label: t("admin.users.form.passwordMode.link") },
+                  { value: "manual", label: t("admin.users.form.passwordMode.manual") },
+                  { value: "auto", label: t("admin.users.form.passwordMode.auto") },
+                  { value: "direct", label: t("admin.users.reset.mode.direct") }
                 ]}
                 value={resetState.passwordMode}
-                onChange={(event) =>
+                onChange={(event) => {
+                  setResetError("");
+                  setResetDevValue("");
                   setResetState((prev) =>
                     prev
                       ? {
                           ...prev,
-                          passwordMode: event.target.value as PasswordMode,
-                          temporaryPassword: event.target.value === "manual" ? prev.temporaryPassword : ""
+                          passwordMode: event.target.value as ResetPasswordMode,
+                          temporaryPassword: event.target.value === "manual" ? prev.temporaryPassword : "",
+                          newPassword: event.target.value === "direct" ? prev.newPassword : "",
+                          confirmPassword: event.target.value === "direct" ? prev.confirmPassword : "",
+                          mustChangePassword: event.target.value === "direct" ? prev.mustChangePassword : true
                         }
                       : prev
-                  )
-                }
+                  );
+                }}
                 disabled={isResetSubmitting || Boolean(resetState.isArchived)}
               />
             </div>
@@ -1246,9 +1491,10 @@ export default function AdminUsersPage() {
 
           {resetState?.passwordMode === "manual" ? (
             <div className="formField">
-              <span className="fieldLabel">Temporaeres Passwort</span>
+              <span className="fieldLabel">{t("admin.users.reset.temporaryPassword")}</span>
               <Input
                 type="password"
+                autoComplete="new-password"
                 value={resetState.temporaryPassword}
                 onChange={(event) =>
                   setResetState((prev) =>
@@ -1263,6 +1509,78 @@ export default function AdminUsersPage() {
                 disabled={isResetSubmitting || Boolean(resetState.isArchived)}
               />
             </div>
+          ) : null}
+
+          {resetState?.passwordMode === "direct" ? (
+            <>
+              {passwordPolicyHint ? <p className="placeholderText">{passwordPolicyHint}</p> : null}
+              <div className="formField">
+                <span className="fieldLabel">{t("auth.reset.newPassword")}</span>
+                <Input
+                  type="password"
+                  autoComplete="new-password"
+                  value={resetState.newPassword}
+                  onChange={(event) =>
+                    setResetState((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            newPassword: event.target.value
+                          }
+                        : prev
+                    )
+                  }
+                  disabled={isResetSubmitting || Boolean(resetState.isArchived)}
+                />
+              </div>
+
+              <div className="formField">
+                <span className="fieldLabel">{t("auth.reset.confirmPassword")}</span>
+                <Input
+                  type="password"
+                  autoComplete="new-password"
+                  value={resetState.confirmPassword}
+                  onChange={(event) =>
+                    setResetState((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            confirmPassword: event.target.value
+                          }
+                        : prev
+                    )
+                  }
+                  disabled={isResetSubmitting || Boolean(resetState.isArchived)}
+                />
+              </div>
+
+              <label className="checkboxRow">
+                <input
+                  type="checkbox"
+                  checked={resetState.mustChangePassword}
+                  onChange={(event) =>
+                    setResetState((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            mustChangePassword: event.target.checked
+                          }
+                        : prev
+                    )
+                  }
+                  disabled={isResetSubmitting || Boolean(resetState.isArchived)}
+                />
+                <span>{t("admin.users.reset.mustChangePassword")}</span>
+              </label>
+            </>
+          ) : null}
+
+          {resetState?.passwordMode === "manual" && passwordPolicyHint ? (
+            <p className="placeholderText">{passwordPolicyHint}</p>
+          ) : null}
+
+          {resetState?.passwordMode === "auto" ? (
+            <p className="placeholderText">{t("admin.users.form.autoPasswordHint")}</p>
           ) : null}
 
           {resetDevValue ? (
@@ -1280,7 +1598,7 @@ export default function AdminUsersPage() {
       </Modal>
 
       <Modal
-        open={externalOrgQuickModalOpen}
+        open={canManageExternalOrgs && externalOrgQuickModalOpen}
         onClose={() => setExternalOrgQuickModalOpen(false)}
         closeAriaLabel={t("modal.close")}
         header={t("admin.users.externalOrg.quickAddTitle")}

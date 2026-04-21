@@ -23,10 +23,10 @@ import {
   hashPassword,
   hashToken,
   parseCookies,
+  validateManagedPassword,
   validatePassword,
   verifyPassword
 } from "./security.js";
-import { writePasswordResetOutbox } from "./mailOutbox.js";
 import {
   buildOtpAuthUrl,
   generateRecoveryCodes,
@@ -38,11 +38,15 @@ import {
 import { createEntraStateStore, extractEmailFromClaims, isAllowedEmailDomain } from "./entra.js";
 import {
   describePermission,
+  getEditablePermissionCatalog,
+  getEditableRolePermissionKeys,
   getDefaultPermissionKeys,
+  mergeEditableRolePermissionKeys,
   getRoleCatalogEntry,
   hasPermission,
   normalizeRoleKey,
   parsePermissionKeys,
+  rolePermissionsRequireAdminAccess,
   resolvePermissionKeys,
   type PermissionKey
 } from "./accessControl.js";
@@ -58,6 +62,19 @@ import {
   sanitizeSecuritySettingsInput,
   saveSecuritySettings
 } from "./securitySettings.js";
+import { createAndDispatchPasswordResetNotification } from "./notifications.js";
+import {
+  cancelAdminNotification,
+  getAdminNotificationDetail,
+  getAdminNotificationOverview,
+  listAdminNotifications,
+  retryAdminNotification
+} from "./adminNotifications.js";
+import {
+  getEffectiveNotificationSettings,
+  sanitizeNotificationSettingsInput,
+  saveNotificationSettings
+} from "./notificationSettings.js";
 
 const SESSION_COOKIE_NAME = "nemetz_session";
 const DEFAULT_ADMIN_PAGE = 1;
@@ -137,6 +154,9 @@ type AdminUserListItemDto = {
   createdAt: string;
   updatedAt: string;
   lastLoginAt?: string;
+  lastPasswordResetAt?: string;
+  mustChangePassword: boolean;
+  failedLoginCount: number;
   lockedUntil?: string;
   mfaEnabled: boolean;
   mfaEnforced: boolean;
@@ -176,6 +196,19 @@ type AdminRoleDto = {
   updatedAt: string;
 };
 
+type AdminRoleLookupDto = {
+  id: string;
+  key: string;
+  labelDe: string;
+  descriptionDe?: string;
+  isSystem: boolean;
+  isAssignable: boolean;
+  isDeprecated: boolean;
+  isArchived: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type SecuritySettingsDto = {
   passwordMinLength: number;
   passwordRequireNumberOrSpecial: boolean;
@@ -209,6 +242,16 @@ type SecuritySummaryDto = {
   mfaEnabledUsers: number;
   adminsWithoutMfa: number;
   entraEnabled: boolean;
+};
+
+type NotificationSettingsDto = {
+  defaultDueSoonDays: number;
+  deadlineDueSoonEnabled: boolean;
+  assignmentAssignedEnabled: boolean;
+  dailyDigestEnabled: boolean;
+  weeklyDigestEnabled: boolean;
+  dailyDigestHourLocal: number;
+  weeklyDigestWeekday: number;
 };
 
 type ExternalOrganizationDto = {
@@ -375,6 +418,7 @@ function toAdminRole(role: {
     userType: "INTERNAL",
     storedPermissionKeys: role.permissionsJson
   });
+  const editablePermissionKeys = getEditableRolePermissionKeys(permissionKeys);
 
   return {
     id: role.id,
@@ -384,8 +428,34 @@ function toAdminRole(role: {
     isSystem: role.isSystem,
     isAssignable: catalogEntry?.isAssignable ?? !catalogEntry?.isDeprecated,
     isDeprecated: Boolean(catalogEntry?.isDeprecated),
-    permissionKeys,
-    permissionLabels: permissionKeys.map((permissionKey) => describePermission(permissionKey)),
+    permissionKeys: editablePermissionKeys,
+    permissionLabels: editablePermissionKeys.map((permissionKey) => describePermission(permissionKey)),
+    isArchived: role.isArchived,
+    createdAt: role.createdAt.toISOString(),
+    updatedAt: role.updatedAt.toISOString()
+  };
+}
+
+function toAdminRoleLookup(role: {
+  id: string;
+  key: string;
+  labelDe: string;
+  descriptionDe: string | null;
+  isSystem: boolean;
+  isArchived: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}): AdminRoleLookupDto {
+  const catalogEntry = getRoleCatalogEntry(role.key);
+
+  return {
+    id: role.id,
+    key: role.key,
+    labelDe: role.labelDe,
+    descriptionDe: role.descriptionDe ?? undefined,
+    isSystem: role.isSystem,
+    isAssignable: catalogEntry?.isAssignable ?? !catalogEntry?.isDeprecated,
+    isDeprecated: Boolean(catalogEntry?.isDeprecated),
     isArchived: role.isArchived,
     createdAt: role.createdAt.toISOString(),
     updatedAt: role.updatedAt.toISOString()
@@ -408,6 +478,18 @@ function toPasswordPolicyDto(value: SecuritySettingsDto): PasswordPolicyDto {
     passwordMinLength: value.passwordMinLength,
     passwordRequireNumberOrSpecial: value.passwordRequireNumberOrSpecial
   };
+}
+
+function toNotificationSettingsDto(value: NotificationSettingsDto) {
+  return {
+    defaultDueSoonDays: value.defaultDueSoonDays,
+    deadlineDueSoonEnabled: value.deadlineDueSoonEnabled,
+    assignmentAssignedEnabled: value.assignmentAssignedEnabled,
+    dailyDigestEnabled: value.dailyDigestEnabled,
+    weeklyDigestEnabled: value.weeklyDigestEnabled,
+    dailyDigestHourLocal: value.dailyDigestHourLocal,
+    weeklyDigestWeekday: value.weeklyDigestWeekday
+  } satisfies NotificationSettingsDto;
 }
 
 function toSecurityAuditEvent(entry: {
@@ -486,6 +568,9 @@ function toAdminUserListItem(user: PrismaUser | UserWithExternalOrg): AdminUserL
     createdAt: user.createdAt.toISOString(),
     updatedAt: user.updatedAt.toISOString(),
     lastLoginAt: toIsoString(user.lastLoginAt),
+    lastPasswordResetAt: toIsoString(user.lastPasswordResetAt),
+    mustChangePassword: user.mustChangePassword,
+    failedLoginCount: user.failedLoginCount,
     lockedUntil: toIsoString(user.lockedUntil),
     mfaEnabled: user.mfaEnabled,
     mfaEnforced: user.mfaEnforced,
@@ -666,6 +751,19 @@ function parsePasswordMode(value: unknown): "link" | "manual" | "auto" | null {
     return normalized;
   }
   return null;
+}
+
+function parseAdminResetPasswordMode(value: unknown): "link" | "manual" | "auto" | "direct" | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "direct") {
+    return normalized;
+  }
+
+  return parsePasswordMode(normalized);
 }
 
 function generateTemporaryPassword() {
@@ -1053,44 +1151,6 @@ async function audit(input: {
   });
 }
 
-function buildResetLink(appOrigin: string, rawToken: string) {
-  const trimmedOrigin = appOrigin.endsWith("/") ? appOrigin.slice(0, -1) : appOrigin;
-  return `${trimmedOrigin}/reset-password?token=${encodeURIComponent(rawToken)}`;
-}
-
-async function createPasswordResetToken(args: {
-  userId: string;
-  appOrigin: string;
-  ttlMinutes: number;
-  email: string;
-}) {
-  const rawToken = generateOpaqueToken(32);
-  const tokenHash = hashToken(rawToken);
-  const expiresAt = new Date(Date.now() + args.ttlMinutes * 60 * 1000);
-
-  await prisma.passwordResetToken.create({
-    data: {
-      userId: args.userId,
-      tokenHash,
-      expiresAt
-    }
-  });
-
-  const resetLink = buildResetLink(args.appOrigin, rawToken);
-  const outboxFile = await writePasswordResetOutbox({
-    toEmail: args.email,
-    resetLink,
-    expiresAt: expiresAt.toISOString(),
-    createdAt: new Date().toISOString()
-  });
-
-  return {
-    resetLink,
-    outboxFile,
-    expiresAt
-  };
-}
-
 function getRoleAndType(input: {
   role?: UserRole | null;
   type?: UserType | null;
@@ -1272,6 +1332,47 @@ function requireAdmin(req: AuthenticatedRequest, res: Response, next: NextFuncti
   }
 
   next();
+}
+
+function authorizeAdminPermissions(
+  req: AuthenticatedRequest,
+  res: Response,
+  permissionKeys: PermissionKey[]
+): req is AuthenticatedRequest & {
+  authUser: PrismaUser;
+  authSession: Session;
+} {
+  if (!authorizeAdmin(req, res)) {
+    return false;
+  }
+
+  if (permissionKeys.some((permissionKey) => hasPermission(req.authPermissionKeys ?? [], permissionKey))) {
+    return true;
+  }
+
+  res.status(403).json({
+    ok: false,
+    message: `Missing admin permission. Required one of: ${permissionKeys.join(", ")}`
+  });
+  return false;
+}
+
+function requireAdminPermissions(...permissionKeys: PermissionKey[]) {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (!authorizeAdminPermissions(req, res, permissionKeys)) {
+      return;
+    }
+
+    next();
+  };
+}
+
+function getRolePermissionValidationMessage(permissionKeys: PermissionKey[]) {
+  if (rolePermissionsRequireAdminAccess(permissionKeys) && !permissionKeys.includes("admin.access")) {
+    return "admin.access is required for admin sub-section permissions.";
+  }
+
+  return null;
 }
 
 function canAccessDocuments(permissionKeys: Iterable<string>) {
@@ -2911,29 +3012,32 @@ export function createApp(config: AppConfig = loadConfig()) {
         });
 
         if (user && !user.isArchived) {
-          const reset = await createPasswordResetToken({
-            userId: user.id,
-            appOrigin: config.appOrigin,
-            ttlMinutes: config.resetTokenTtlMinutes,
-            email: user.email
-          });
+          let resetMetadata: Record<string, unknown> = {};
 
-          await prisma.user.update({
-            where: { id: user.id },
-            data: {
-              lastPasswordResetAt: new Date()
-            }
-          });
+          try {
+            const reset = await createAndDispatchPasswordResetNotification(prisma, config, {
+              user,
+              ttlMinutes: config.resetTokenTtlMinutes
+            });
+
+            resetMetadata = {
+              expiresAt: reset.expiresAt.toISOString(),
+              notificationId: reset.notificationId,
+              deliveryStatus: reset.deliveryStatus
+            };
+          } catch (notificationError) {
+            resetMetadata = {
+              deliveryStatus: "FAILED",
+              deliveryError: notificationError instanceof Error ? notificationError.message : "Password reset dispatch failed."
+            };
+          }
 
           await audit({
             actorUserId: user.id,
             targetUserId: user.id,
             action: "RESET_REQUEST",
             req,
-            metadata: {
-              expiresAt: reset.expiresAt.toISOString(),
-              outboxFile: reset.outboxFile
-            }
+            metadata: resetMetadata
           });
         }
       }
@@ -2998,8 +3102,11 @@ export function createApp(config: AppConfig = loadConfig()) {
             lockedUntil: null
           }
         }),
-        prisma.passwordResetToken.update({
-          where: { id: resetToken.id },
+        prisma.passwordResetToken.updateMany({
+          where: {
+            userId: resetToken.userId,
+            usedAt: null
+          },
           data: {
             usedAt: now
           }
@@ -3107,7 +3214,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.get(
     "/users",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("users.view", "users.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       const includeArchived = isTrue(req.query.includeArchived);
@@ -3198,9 +3305,51 @@ export function createApp(config: AppConfig = loadConfig()) {
   });
 
   router.get(
+    "/admin/roles/catalog",
+    authMiddleware,
+    requireAdminPermissions("roles.view", "roles.manage"),
+    async (_req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        res.json({
+          permissions: getEditablePermissionCatalog()
+        });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  router.get(
+    "/admin/roles/lookup",
+    authMiddleware,
+    requireAdminPermissions("roles.view", "roles.manage", "users.view", "users.manage"),
+    async (_req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const roles = await prisma.role.findMany({
+          orderBy: [
+            {
+              isSystem: "desc"
+            },
+            {
+              key: "asc"
+            }
+          ]
+        });
+
+        res.json({
+          items: roles.map((row) => toAdminRoleLookup(row)),
+          total: roles.length
+        });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  router.get(
     "/admin/roles",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("roles.view", "roles.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const search = toOptionalTrimmedString(req.query.q ?? req.query.search)?.toLowerCase();
@@ -3248,7 +3397,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.post(
     "/admin/roles",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("roles.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const key = normalizeRoleKeyInput(req.body?.key);
@@ -3271,9 +3420,15 @@ export function createApp(config: AppConfig = loadConfig()) {
           return;
         }
 
-        const permissionKeys = parsePermissionKeys(req.body?.permissionKeys).length
-          ? parsePermissionKeys(req.body?.permissionKeys)
-          : getDefaultPermissionKeys("READ_ONLY", "INTERNAL");
+        const requestedPermissionKeys = parsePermissionKeys(req.body?.permissionKeys);
+        const permissionKeys = getEditableRolePermissionKeys(
+          requestedPermissionKeys.length ? requestedPermissionKeys : getDefaultPermissionKeys("READ_ONLY", "INTERNAL")
+        );
+        const permissionValidationMessage = getRolePermissionValidationMessage(permissionKeys);
+        if (permissionValidationMessage) {
+          res.status(400).json({ ok: false, message: permissionValidationMessage });
+          return;
+        }
 
         const created = await prisma.role.create({
           data: {
@@ -3311,7 +3466,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.patch(
     "/admin/roles/:id",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("roles.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const roleId = req.params.id;
@@ -3390,10 +3545,19 @@ export function createApp(config: AppConfig = loadConfig()) {
 
         let nextPermissionKeys = existingPermissionKeys;
         if (hasPermissionKeys) {
-          nextPermissionKeys = parsePermissionKeys(req.body?.permissionKeys);
+          nextPermissionKeys = mergeEditableRolePermissionKeys({
+            existingPermissionKeys,
+            requestedPermissionKeys: parsePermissionKeys(req.body?.permissionKeys)
+          });
           if (JSON.stringify(existingPermissionKeys) !== JSON.stringify(nextPermissionKeys)) {
             changedFields.push("permissionKeys");
           }
+        }
+
+        const permissionValidationMessage = getRolePermissionValidationMessage(nextPermissionKeys);
+        if (permissionValidationMessage) {
+          res.status(400).json({ ok: false, message: permissionValidationMessage });
+          return;
         }
 
         if (changedFields.length === 0) {
@@ -3444,7 +3608,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.post(
     "/admin/roles/:id/archive",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("roles.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const roleId = req.params.id;
@@ -3523,7 +3687,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.post(
     "/admin/roles/:id/restore",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("roles.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const roleId = req.params.id;
@@ -3585,7 +3749,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.get(
     "/admin/security",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("security.view", "security.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const settings = await getEffectiveSecuritySettings(prisma, config);
@@ -3731,7 +3895,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.patch(
     "/admin/security",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("security.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const current = await getEffectiveSecuritySettings(prisma, config);
@@ -3849,9 +4013,277 @@ export function createApp(config: AppConfig = loadConfig()) {
   );
 
   router.get(
+    "/admin/notifications/overview",
+    authMiddleware,
+    requireAdminPermissions("notifications.view", "notifications.retry", "notifications.settings.manage"),
+    async (_req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const overview = await getAdminNotificationOverview(prisma, config);
+        res.json({
+          ...overview,
+          settings: toNotificationSettingsDto(overview.settings)
+        });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  router.get(
+    "/admin/notifications",
+    authMiddleware,
+    requireAdminPermissions("notifications.view", "notifications.retry", "notifications.settings.manage"),
+    async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const result = await listAdminNotifications(prisma, config, {
+          q: toOptionalTrimmedString(req.query.q ?? req.query.search),
+          recipient: toOptionalTrimmedString(req.query.recipient),
+          status: toOptionalTrimmedString(req.query.status)?.toUpperCase(),
+          eventType: toOptionalTrimmedString(req.query.eventType)?.toUpperCase(),
+          entityType: toOptionalTrimmedString(req.query.entityType)?.toUpperCase(),
+          dateFrom: toOptionalTrimmedString(req.query.dateFrom),
+          dateTo: toOptionalTrimmedString(req.query.dateTo),
+          page: parsePositiveInteger(req.query.page, DEFAULT_ADMIN_PAGE, MAX_ADMIN_PAGE_SIZE),
+          pageSize: parsePositiveInteger(req.query.pageSize, DEFAULT_ADMIN_PAGE_SIZE, MAX_ADMIN_PAGE_SIZE)
+        });
+
+        res.json(result);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  router.get(
+    "/admin/notifications/settings",
+    authMiddleware,
+    requireAdminPermissions("notifications.view", "notifications.settings.manage"),
+    async (_req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const settings = await getEffectiveNotificationSettings(prisma);
+        res.json({
+          settings: toNotificationSettingsDto(settings)
+        });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  router.patch(
+    "/admin/notifications/settings",
+    authMiddleware,
+    requireAdminPermissions("notifications.settings.manage"),
+    async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const current = await getEffectiveNotificationSettings(prisma);
+        const rawInput = {
+          defaultDueSoonDays:
+            typeof req.body?.defaultDueSoonDays === "number"
+              ? req.body.defaultDueSoonDays
+              : typeof req.body?.defaultDueSoonDays === "string"
+                ? Number.parseInt(req.body.defaultDueSoonDays, 10)
+                : undefined,
+          deadlineDueSoonEnabled:
+            typeof req.body?.deadlineDueSoonEnabled === "boolean" ? req.body.deadlineDueSoonEnabled : undefined,
+          assignmentAssignedEnabled:
+            typeof req.body?.assignmentAssignedEnabled === "boolean" ? req.body.assignmentAssignedEnabled : undefined,
+          dailyDigestEnabled:
+            typeof req.body?.dailyDigestEnabled === "boolean" ? req.body.dailyDigestEnabled : undefined,
+          weeklyDigestEnabled:
+            typeof req.body?.weeklyDigestEnabled === "boolean" ? req.body.weeklyDigestEnabled : undefined,
+          dailyDigestHourLocal:
+            typeof req.body?.dailyDigestHourLocal === "number"
+              ? req.body.dailyDigestHourLocal
+              : typeof req.body?.dailyDigestHourLocal === "string"
+                ? Number.parseInt(req.body.dailyDigestHourLocal, 10)
+                : undefined,
+          weeklyDigestWeekday:
+            typeof req.body?.weeklyDigestWeekday === "number"
+              ? req.body.weeklyDigestWeekday
+              : typeof req.body?.weeklyDigestWeekday === "string"
+                ? Number.parseInt(req.body.weeklyDigestWeekday, 10)
+                : undefined
+        } satisfies Partial<NotificationSettingsDto>;
+
+        const nextSettings = sanitizeNotificationSettingsInput(rawInput, current);
+        const changedFields = Object.entries(nextSettings)
+          .filter(([key, value]) => current[key as keyof NotificationSettingsDto] !== value)
+          .map(([key]) => key);
+
+        if (changedFields.length === 0) {
+          res.json({
+            ok: true,
+            settings: toNotificationSettingsDto(current)
+          });
+          return;
+        }
+
+        await saveNotificationSettings(prisma, nextSettings);
+        await audit({
+          actorUserId: req.authUser?.id,
+          action: "NOTIFICATION_SETTINGS_UPDATED",
+          req,
+          metadata: {
+            changedFields,
+            nextSettings
+          }
+        });
+
+        res.json({
+          ok: true,
+          settings: toNotificationSettingsDto(nextSettings)
+        });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  router.get(
+    "/admin/notifications/:id",
+    authMiddleware,
+    requireAdminPermissions("notifications.view", "notifications.retry", "notifications.settings.manage"),
+    async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const notificationId = toOptionalTrimmedString(req.params.id);
+        if (!notificationId) {
+          res.status(400).json({ ok: false, message: "Notification id is required." });
+          return;
+        }
+
+        const detail = await getAdminNotificationDetail(prisma, config, notificationId);
+        if (!detail) {
+          res.status(404).json({ ok: false, message: "Notification not found." });
+          return;
+        }
+
+        res.json(detail);
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  router.post(
+    "/admin/notifications/:id/retry",
+    authMiddleware,
+    requireAdminPermissions("notifications.retry"),
+    async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const notificationId = toOptionalTrimmedString(req.params.id);
+        if (!notificationId) {
+          res.status(400).json({ ok: false, message: "Notification id is required." });
+          return;
+        }
+
+        const result = await retryAdminNotification(prisma, config, notificationId);
+        if (result.kind === "missing") {
+          res.status(404).json({ ok: false, message: "Notification not found." });
+          return;
+        }
+        if (result.kind === "conflict") {
+          res.status(409).json({ ok: false, message: result.message });
+          return;
+        }
+        if (result.kind === "forbidden" || result.kind === "invalid") {
+          res.status(400).json({ ok: false, message: result.message });
+          return;
+        }
+
+        await audit({
+          actorUserId: req.authUser?.id,
+          action: "NOTIFICATION_RETRY_REQUESTED",
+          req,
+          metadata: {
+            notificationId
+          }
+        });
+
+        res.json({
+          ok: true,
+          notification: result.entry
+        });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  router.post(
+    "/admin/notifications/:id/cancel",
+    authMiddleware,
+    requireAdminPermissions("notifications.retry"),
+    async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const notificationId = toOptionalTrimmedString(req.params.id);
+        if (!notificationId) {
+          res.status(400).json({ ok: false, message: "Notification id is required." });
+          return;
+        }
+
+        const result = await cancelAdminNotification(prisma, config, notificationId);
+        if (result.kind === "missing") {
+          res.status(404).json({ ok: false, message: "Notification not found." });
+          return;
+        }
+        if (result.kind === "conflict") {
+          res.status(409).json({ ok: false, message: result.message });
+          return;
+        }
+        if (result.kind === "invalid") {
+          res.status(400).json({ ok: false, message: result.message });
+          return;
+        }
+
+        await audit({
+          actorUserId: req.authUser?.id,
+          action: "NOTIFICATION_CANCELLED_BY_ADMIN",
+          req,
+          metadata: {
+            notificationId
+          }
+        });
+
+        res.json({
+          ok: true,
+          notification: result.entry
+        });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  router.get(
+    "/admin/external-orgs/lookup",
+    authMiddleware,
+    requireAdminPermissions("externalOrgs.view", "users.manage"),
+    async (_req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        const organizations = await prisma.externalOrganization.findMany({
+          where: {
+            isArchived: false
+          },
+          orderBy: {
+            name: "asc"
+          }
+        });
+
+        res.json({
+          items: organizations.map((row) => toExternalOrganization(row)),
+          total: organizations.length
+        });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  router.get(
     "/admin/external-orgs",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("externalOrgs.view"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const search = toOptionalTrimmedString(req.query.q ?? req.query.search)?.toLowerCase();
@@ -3887,7 +4319,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.post(
     "/admin/external-orgs",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("externalOrgs.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const name = ensureStringBody(req.body?.name).trim();
@@ -3950,7 +4382,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.patch(
     "/admin/external-orgs/:id",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("externalOrgs.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const externalOrgId = req.params.id;
@@ -4070,7 +4502,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.post(
     "/admin/external-orgs/:id/archive",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("externalOrgs.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const externalOrgId = req.params.id;
@@ -4134,7 +4566,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.post(
     "/admin/external-orgs/:id/restore",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("externalOrgs.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const externalOrgId = req.params.id;
@@ -4186,7 +4618,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.get(
     "/admin/users",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("users.view", "users.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const search = toOptionalTrimmedString(req.query.q ?? req.query.search);
@@ -4242,7 +4674,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.post(
     "/admin/users",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("users.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const securitySettings = await getEffectiveSecuritySettings(prisma, config);
@@ -4332,7 +4764,7 @@ export function createApp(config: AppConfig = loadConfig()) {
         } else {
           effectivePassword = generateTemporaryPassword();
         }
-        const passwordValidation = validatePassword(effectivePassword, {
+        const passwordValidation = validateManagedPassword(effectivePassword, {
           minLength: securitySettings.passwordMinLength,
           requireNumberOrSpecial: securitySettings.passwordRequireNumberOrSpecial
         });
@@ -4374,30 +4806,40 @@ export function createApp(config: AppConfig = loadConfig()) {
         });
 
         let resetLink: string | undefined;
-        let outboxFile: string | undefined;
         let temporaryPassword: string | undefined;
+        let notificationStatus: "SENT" | "FAILED" | undefined;
+        let notificationError: string | undefined;
 
         if (passwordMode === "link") {
-          const reset = await createPasswordResetToken({
-            userId: created.id,
-            appOrigin: config.appOrigin,
-            ttlMinutes: config.resetTokenTtlMinutes,
-            email: created.email
-          });
+          try {
+            const reset = await createAndDispatchPasswordResetNotification(prisma, config, {
+              user: created,
+              ttlMinutes: config.resetTokenTtlMinutes
+            });
 
-          resetLink = config.nodeEnv === "development" ? reset.resetLink : undefined;
-          outboxFile = config.nodeEnv === "development" ? reset.outboxFile : undefined;
+            resetLink = reset.resetLink;
+            notificationStatus = reset.deliveryStatus;
+            notificationError = reset.deliveryError;
 
-          await audit({
-            actorUserId: req.authUser?.id,
-            targetUserId: created.id,
-            action: "USER_INVITED",
-            req,
-            metadata: {
-              expiresAt: reset.expiresAt.toISOString(),
-              outboxFile: reset.outboxFile
-            }
-          });
+            await audit({
+              actorUserId: req.authUser?.id,
+              targetUserId: created.id,
+              action: "USER_INVITED",
+              req,
+              metadata: {
+                expiresAt: reset.expiresAt.toISOString(),
+                notificationId: reset.notificationId,
+                deliveryStatus: reset.deliveryStatus,
+                deliveryError: reset.deliveryError
+              }
+            });
+          } catch (notificationErrorValue) {
+            notificationStatus = "FAILED";
+            notificationError =
+              notificationErrorValue instanceof Error
+                ? notificationErrorValue.message
+                : "Initial invite dispatch failed.";
+          }
         } else if (passwordMode === "auto" && generatedPassword) {
           temporaryPassword = generatedPassword;
         }
@@ -4419,8 +4861,9 @@ export function createApp(config: AppConfig = loadConfig()) {
           ok: true,
           user: toSafeUser(created),
           resetLink,
-          outboxFile,
-          temporaryPassword
+          temporaryPassword,
+          notificationStatus,
+          notificationError
         });
       } catch (error) {
         next(error);
@@ -4431,7 +4874,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.patch(
     "/admin/users/:id",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("users.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const userId = req.params.id;
@@ -4768,7 +5211,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.post(
     "/admin/users/:id/archive",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("users.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const userId = req.params.id;
@@ -4835,7 +5278,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.post(
     "/admin/users/:id/restore",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("users.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const userId = req.params.id;
@@ -4878,9 +5321,10 @@ export function createApp(config: AppConfig = loadConfig()) {
     try {
       const securitySettings = await getEffectiveSecuritySettings(prisma, config);
       const userId = req.params.id;
-      const requestedPasswordMode = parsePasswordMode(req.body?.passwordMode);
-      const passwordMode = requestedPasswordMode ?? "link";
+      const requestedPasswordMode = parseAdminResetPasswordMode(req.body?.passwordMode);
       const temporaryPasswordInput = toOptionalTrimmedString(req.body?.temporaryPassword);
+      const newPassword = ensureStringBody(req.body?.newPassword);
+      const hasNewPassword = newPassword.trim().length > 0;
 
       const target = await prisma.user.findUnique({
         where: {
@@ -4893,21 +5337,42 @@ export function createApp(config: AppConfig = loadConfig()) {
         return;
       }
 
-      if (passwordMode === "link") {
-        const reset = await createPasswordResetToken({
-          userId: target.id,
-          appOrigin: config.appOrigin,
-          ttlMinutes: config.resetTokenTtlMinutes,
-          email: target.email
+      if (req.authUser?.id === target.id) {
+        res.status(400).json({
+          ok: false,
+          message: "Admins must use personal security settings to change their own password."
         });
+        return;
+      }
 
-        await prisma.user.update({
-          where: {
-            id: target.id
-          },
-          data: {
-            lastPasswordResetAt: new Date()
-          }
+      if (!target.email.trim()) {
+        res.status(400).json({
+          ok: false,
+          message: "User does not have a deliverable email address."
+        });
+        return;
+      }
+
+      if (String(target.type).trim().toUpperCase() === "EXTERNAL" && !(await getAllowExternalUsers(prisma))) {
+        res.status(400).json({
+          ok: false,
+          message: "External users cannot receive password reset emails while external access is disabled."
+        });
+        return;
+      }
+
+      if (requestedPasswordMode && requestedPasswordMode !== "direct" && hasNewPassword) {
+        res.status(400).json({ ok: false, message: "newPassword is only supported for direct password resets." });
+        return;
+      }
+
+      const passwordMode =
+        requestedPasswordMode === "direct" || hasNewPassword ? "direct" : requestedPasswordMode ?? "link";
+
+      if (passwordMode === "link") {
+        const reset = await createAndDispatchPasswordResetNotification(prisma, config, {
+          user: target,
+          ttlMinutes: config.resetTokenTtlMinutes
         });
 
         await audit({
@@ -4916,28 +5381,59 @@ export function createApp(config: AppConfig = loadConfig()) {
           action: "USER_PASSWORD_RESET_REQUESTED_BY_ADMIN",
           req,
           metadata: {
-            outboxFile: reset.outboxFile,
+            notificationId: reset.notificationId,
             expiresAt: reset.expiresAt.toISOString(),
+            deliveryStatus: reset.deliveryStatus,
+            deliveryError: reset.deliveryError,
             passwordMode
           }
         });
 
+        if (reset.deliveryStatus !== "SENT") {
+          res.status(502).json({
+            ok: false,
+            message: reset.deliveryError || "Reset link could not be delivered."
+          });
+          return;
+        }
+
         res.json({
           ok: true,
-          resetLink: config.nodeEnv === "development" ? reset.resetLink : undefined,
-          outboxFile: config.nodeEnv === "development" ? reset.outboxFile : undefined
+          resetLink: reset.resetLink
         });
         return;
       }
 
-      const temporaryPassword =
-        passwordMode === "auto" ? generateTemporaryPassword() : temporaryPasswordInput;
-      if (!temporaryPassword) {
-        res.status(400).json({ ok: false, message: "temporaryPassword is required for manual resets." });
-        return;
+      let effectivePassword: string;
+      let mustChangePassword = true;
+
+      if (passwordMode === "manual") {
+        if (!temporaryPasswordInput) {
+          res.status(400).json({ ok: false, message: "temporaryPassword is required for manual resets." });
+          return;
+        }
+        effectivePassword = temporaryPasswordInput;
+      } else if (passwordMode === "auto") {
+        effectivePassword = generateTemporaryPassword();
+      } else {
+        if (!newPassword.trim()) {
+          res.status(400).json({ ok: false, message: "newPassword is required." });
+          return;
+        }
+
+        if (hasOwn(req.body, "mustChangePassword")) {
+          const requestedMustChangePassword = parseBoolean(req.body?.mustChangePassword);
+          if (requestedMustChangePassword === null) {
+            res.status(400).json({ ok: false, message: "Invalid mustChangePassword value." });
+            return;
+          }
+          mustChangePassword = requestedMustChangePassword;
+        }
+
+        effectivePassword = newPassword;
       }
 
-      const passwordValidation = validatePassword(temporaryPassword, {
+      const passwordValidation = validateManagedPassword(effectivePassword, {
         minLength: securitySettings.passwordMinLength,
         requireNumberOrSpecial: securitySettings.passwordRequireNumberOrSpecial
       });
@@ -4947,17 +5443,25 @@ export function createApp(config: AppConfig = loadConfig()) {
       }
 
       const now = new Date();
-      const passwordHash = await hashPassword(temporaryPassword);
-      await prisma.$transaction([
+      const passwordHash = await hashPassword(effectivePassword);
+      const [updated] = await prisma.$transaction([
         prisma.user.update({
           where: {
             id: target.id
+          },
+          include: {
+            externalOrg: {
+              select: {
+                id: true,
+                name: true
+              }
+            }
           },
           data: {
             passwordHash,
             passwordUpdatedAt: now,
             lastPasswordResetAt: now,
-            mustChangePassword: true,
+            mustChangePassword,
             failedLoginCount: 0,
             lockedUntil: null
           }
@@ -4970,6 +5474,15 @@ export function createApp(config: AppConfig = loadConfig()) {
           data: {
             revokedAt: now
           }
+        }),
+        prisma.passwordResetToken.updateMany({
+          where: {
+            userId: target.id,
+            usedAt: null
+          },
+          data: {
+            usedAt: now
+          }
         })
       ]);
 
@@ -4980,26 +5493,39 @@ export function createApp(config: AppConfig = loadConfig()) {
         req,
         metadata: {
           passwordMode,
-          mustChangePassword: true
+          mustChangePassword
         }
       });
 
+      if (passwordMode === "direct") {
+        res.json({
+          ok: true,
+          user: toSafeUser(updated)
+        });
+        return;
+      }
+
       res.json({
         ok: true,
-        temporaryPassword: passwordMode === "auto" ? temporaryPassword : undefined
+        temporaryPassword: passwordMode === "auto" ? effectivePassword : undefined
       });
     } catch (error) {
       next(error);
     }
   };
 
-  router.post("/admin/users/:id/reset-password", authMiddleware, requireAdmin, handleAdminResetPassword);
-  router.post("/admin/users/:id/reset", authMiddleware, requireAdmin, handleAdminResetPassword);
+  router.post(
+    "/admin/users/:id/reset-password",
+    authMiddleware,
+    requireAdminPermissions("users.manage"),
+    handleAdminResetPassword
+  );
+  router.post("/admin/users/:id/reset", authMiddleware, requireAdminPermissions("users.manage"), handleAdminResetPassword);
 
   router.post(
     "/admin/users/:id/unlock",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("users.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const userId = req.params.id;
@@ -5045,7 +5571,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.post(
     "/admin/users/:id/reset-mfa",
     authMiddleware,
-    requireAdmin,
+    requireAdminPermissions("users.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const userId = req.params.id;

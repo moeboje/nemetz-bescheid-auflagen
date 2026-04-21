@@ -2,6 +2,17 @@ export type AppConfig = {
   port: number;
   databaseUrl: string;
   appOrigin: string;
+  notificationBaseUrl: string;
+  notificationDispatchEnabled: boolean;
+  notificationDryRun: boolean;
+  notificationFromLabel: string;
+  powerAutomateNotificationWebhookUrl: string;
+  powerAutomateNotificationSecret: string;
+  notificationMaxAttempts: number;
+  notificationDispatchBatchSize: number;
+  notificationDispatchTimeoutMs: number;
+  notificationClaimLeaseSeconds: number;
+  notificationTimeZone: string;
   sessionSecret: string;
   nodeEnv: "development" | "production" | "test";
   resetTokenTtlMinutes: number;
@@ -154,9 +165,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port: toInteger(env.PORT, 4000),
     databaseUrl: resolveDatabaseUrl(env, nodeEnv),
     appOrigin: env.APP_ORIGIN?.trim() || "http://localhost:5173",
+    notificationBaseUrl: env.NOTIFICATION_BASE_URL?.trim() || env.APP_ORIGIN?.trim() || "http://localhost:5173",
+    notificationDispatchEnabled: toBoolean(env.NOTIFICATION_DISPATCH_ENABLED, false),
+    notificationDryRun: toBoolean(env.NOTIFICATION_DRY_RUN, false),
+    notificationFromLabel: env.NOTIFICATION_FROM_LABEL?.trim() || "Nemetz Portal",
+    powerAutomateNotificationWebhookUrl: env.POWER_AUTOMATE_NOTIFICATION_WEBHOOK_URL?.trim() || "",
+    powerAutomateNotificationSecret: env.POWER_AUTOMATE_NOTIFICATION_SECRET?.trim() || "",
+    notificationMaxAttempts: toInteger(env.NOTIFICATION_MAX_ATTEMPTS, 5),
+    notificationDispatchBatchSize: toInteger(env.NOTIFICATION_DISPATCH_BATCH_SIZE, 25),
+    notificationDispatchTimeoutMs: toInteger(env.NOTIFICATION_DISPATCH_TIMEOUT_MS, 15_000),
+    notificationClaimLeaseSeconds: toInteger(env.NOTIFICATION_CLAIM_LEASE_SECONDS, 300),
+    notificationTimeZone: env.NOTIFICATION_TIMEZONE?.trim() || "Europe/Vienna",
     sessionSecret: env.SESSION_SECRET?.trim() || "dev-only-change-me",
     nodeEnv,
-    resetTokenTtlMinutes: toInteger(env.RESET_TOKEN_TTL_MINUTES, 30),
+    resetTokenTtlMinutes: toInteger(
+      env.PASSWORD_RESET_TOKEN_TTL_MINUTES?.trim() || env.RESET_TOKEN_TTL_MINUTES?.trim(),
+      120
+    ),
     sessionTtlDays: toInteger(env.SESSION_TTL_DAYS, 7),
     cookieSecure: toBoolean(env.COOKIE_SECURE, nodeEnv === "production"),
     basePath: normalizeBasePath(env.BASE_PATH),

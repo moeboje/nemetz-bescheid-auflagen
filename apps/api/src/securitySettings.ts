@@ -1,6 +1,8 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { AppConfig } from "./config.js";
 
+type DbClient = PrismaClient | Prisma.TransactionClient;
+
 export const SECURITY_SETTINGS_ID = "global";
 export const MIN_PASSWORD_LENGTH = 12;
 export const MAX_PASSWORD_LENGTH = 128;
@@ -104,7 +106,7 @@ export async function getEffectiveSecuritySettings(prisma: PrismaClient, config:
   );
 }
 
-export async function getAllowExternalUsers(prisma: PrismaClient) {
+export async function getAllowExternalUsers(prisma: DbClient) {
   const rows = await prisma.$queryRaw<Array<{ allowExternalUsers: boolean }>>(Prisma.sql`
     SELECT "allowExternalUsers"
     FROM "SecuritySettings"

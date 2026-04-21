@@ -45,7 +45,7 @@ export default function MfaVerifyPage() {
     try {
       const user = await verifyMfa(mfaToken, value.trim());
       if (user.mustChangePassword) {
-        navigate("/compliance/settings/security?mode=force-password-change", { replace: true });
+        navigate("/compliance/account/security?mode=force-password-change", { replace: true });
         return;
       }
       navigate(nextPath, { replace: true });

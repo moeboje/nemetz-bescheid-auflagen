@@ -14,7 +14,9 @@ import {
   unlockUser as apiUnlockUser,
   updateUser as apiUpdateUser,
   type AdminUsersListResult,
-  type AdminUsersQuery
+  type AdminUsersQuery,
+  type UserPasswordResetInput,
+  type UserPasswordResetResult
 } from "../api/users";
 import { useAuth } from "./AuthStore";
 
@@ -55,17 +57,20 @@ export type UsersContextValue = {
   currentUserId: string;
   currentUser: User | undefined;
   setCurrentUserId: (userId: string) => void;
-  addUser: (input: UserCreateInput) => Promise<{ user: User; resetLink?: string; outboxFile?: string; temporaryPassword?: string }>;
+  addUser: (input: UserCreateInput) => Promise<{
+    user: User;
+    resetLink?: string;
+    temporaryPassword?: string;
+    notificationStatus?: "SENT" | "FAILED";
+    notificationError?: string;
+  }>;
   updateUser: (id: string, patch: UserUpdatePatch) => Promise<User | null>;
   archiveUser: (id: string) => Promise<User | null>;
   restoreUser: (id: string) => Promise<User | null>;
   unlockUser: (id: string) => Promise<User | null>;
   setMfaEnforced: (id: string, enforced: boolean) => Promise<User | null>;
   resetMfa: (id: string) => Promise<User | null>;
-  requestReset: (
-    id: string,
-    input?: { passwordMode?: "link" | "manual" | "auto"; temporaryPassword?: string }
-  ) => Promise<{ ok: boolean; resetLink?: string; outboxFile?: string; temporaryPassword?: string }>;
+  requestReset: (id: string, input?: UserPasswordResetInput) => Promise<UserPasswordResetResult>;
   loadAdminUsers: (query?: AdminUsersQuery) => Promise<AdminUsersListResult>;
   getUser: (userId?: string | null) => User | undefined;
   getDisplayName: (userId?: string | null) => string;
@@ -330,8 +335,13 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
     return updated;
   }, []);
 
-  const requestReset = useCallback(async (id: string, input?: { passwordMode?: "link" | "manual" | "auto"; temporaryPassword?: string }) => {
-    return requestUserPasswordReset(id, input);
+  const requestReset = useCallback(async (id: string, input?: UserPasswordResetInput) => {
+    const result = await requestUserPasswordReset(id, input);
+    const updatedUser = result.user;
+    if (updatedUser) {
+      setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updatedUser) : user))));
+    }
+    return result;
   }, []);
 
   const loadAdminUsers = useCallback(async (query: AdminUsersQuery = {}) => {
