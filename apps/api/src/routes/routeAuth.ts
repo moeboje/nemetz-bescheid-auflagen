@@ -147,3 +147,25 @@ export async function requireAdminRouteUser(
 
   return user;
 }
+
+export async function requireAdminRoutePermissions(
+  req: Request,
+  res: Response,
+  prisma: PrismaClient,
+  ...permissionKeys: PermissionKey[]
+): Promise<RouteUser | null> {
+  const user = await requireAdminRouteUser(req, res, prisma);
+  if (!user) {
+    return null;
+  }
+
+  const missingPermission = permissionKeys.find(
+    (permissionKey) => !hasPermission(user.permissionKeys, permissionKey)
+  );
+  if (missingPermission) {
+    res.status(403).json({ ok: false, message: "Forbidden." });
+    return null;
+  }
+
+  return user;
+}

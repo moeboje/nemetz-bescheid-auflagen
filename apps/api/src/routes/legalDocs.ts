@@ -7,7 +7,7 @@ import {
 import { Router, type NextFunction, type Request, type Response } from "express";
 import {
   applyNoStoreHeaders,
-  requireAdminRouteUser,
+  requireAdminRoutePermissions,
   requireInternalRouteUser
 } from "./routeAuth.js";
 
@@ -62,6 +62,20 @@ type LegalDocRelationValidationResult =
       status: number;
       message: string;
     };
+
+const LEGAL_DOC_DOWNSTREAM_CONFLICT_MESSAGE =
+  "Legal documents cannot be replaced while obligations or linked deadlines exist. Import legal documents together with obligations and deadlines or clear downstream data first.";
+const LEGAL_DOC_BULK_SERIALIZATION_CONFLICT_MESSAGE =
+  "Legal documents changed while the bulk operation was running. Retry the import after reloading current data.";
+
+class LegalDocBulkMutationConflictError extends Error {
+  status = 409;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "LegalDocBulkMutationConflictError";
+  }
+}
 
 function hasOwn(value: unknown, key: string) {
   return typeof value === "object" && value !== null && Object.prototype.hasOwnProperty.call(value, key);
@@ -297,8 +311,70 @@ async function findLegalDocById(db: DbClient, id: string) {
   });
 }
 
+async function lockLegalDocParentsForBulkMutation(tx: Prisma.TransactionClient) {
+  await tx.$executeRaw(Prisma.sql`LOCK TABLE "LegalDocument" IN SHARE ROW EXCLUSIVE MODE`);
+  await tx.$queryRaw<Array<{ id: string }>>(
+    Prisma.sql`SELECT "id" FROM "LegalDocument" ORDER BY "id" FOR UPDATE`
+  );
+}
+
+async function getLegalDocsBulkMutationConflict(db: DbClient) {
+  const obligationCount = await db.obligation.count();
+  const linkedDeadlineCount = await db.deadline.count({
+    where: {
+      legalDocId: {
+        not: null
+      }
+    }
+  });
+
+  return obligationCount > 0 || linkedDeadlineCount > 0
+    ? LEGAL_DOC_DOWNSTREAM_CONFLICT_MESSAGE
+    : null;
+}
+
+function isSerializationConflict(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2034";
+}
+
+function sendLegalDocBulkMutationConflict(res: Response, error: unknown) {
+  if (!(error instanceof LegalDocBulkMutationConflictError)) {
+    return false;
+  }
+
+  res.status(error.status).json({ ok: false, message: error.message });
+  return true;
+}
+
+async function runLegalDocsBulkMutation(
+  prisma: PrismaClient,
+  mutate: (tx: Prisma.TransactionClient) => Promise<void>
+) {
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        await lockLegalDocParentsForBulkMutation(tx);
+        const mutationConflict = await getLegalDocsBulkMutationConflict(tx);
+        if (mutationConflict) {
+          throw new LegalDocBulkMutationConflictError(mutationConflict);
+        }
+
+        await mutate(tx);
+      },
+      {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable
+      }
+    );
+  } catch (error) {
+    if (isSerializationConflict(error)) {
+      throw new LegalDocBulkMutationConflictError(LEGAL_DOC_BULK_SERIALIZATION_CONFLICT_MESSAGE);
+    }
+    throw error;
+  }
+}
+
 async function replaceLegalDocsInDb(prisma: PrismaClient, legalDocs: LegalDocDto[]) {
-  await prisma.$transaction(async (tx) => {
+  await runLegalDocsBulkMutation(prisma, async (tx) => {
     await tx.legalDocument.deleteMany();
 
     for (const legalDoc of legalDocs) {
@@ -306,6 +382,12 @@ async function replaceLegalDocsInDb(prisma: PrismaClient, legalDocs: LegalDocDto
         data: toLegalDocCreateInput(legalDoc)
       });
     }
+  });
+}
+
+async function deleteLegalDocsInDb(prisma: PrismaClient) {
+  await runLegalDocsBulkMutation(prisma, async (tx) => {
+    await tx.legalDocument.deleteMany();
   });
 }
 
@@ -836,7 +918,7 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireAdminRouteUser(req, res, prisma);
+      const user = await requireAdminRoutePermissions(req, res, prisma, "legalDocs.edit", "legalDocs.archive");
       if (!user) {
         return;
       }
@@ -860,6 +942,9 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
         legalDocs: await listLegalDocsFromDb(prisma)
       });
     } catch (error) {
+      if (sendLegalDocBulkMutationConflict(res, error)) {
+        return;
+      }
       next(error);
     }
   });
@@ -868,17 +953,20 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireAdminRouteUser(req, res, prisma);
+      const user = await requireAdminRoutePermissions(req, res, prisma, "legalDocs.edit", "legalDocs.archive");
       if (!user) {
         return;
       }
 
-      await prisma.legalDocument.deleteMany();
+      await deleteLegalDocsInDb(prisma);
 
       res.json({
         ok: true
       });
     } catch (error) {
+      if (sendLegalDocBulkMutationConflict(res, error)) {
+        return;
+      }
       next(error);
     }
   });
@@ -887,7 +975,7 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireAdminRouteUser(req, res, prisma);
+      const user = await requireAdminRoutePermissions(req, res, prisma, "legalDocs.edit", "legalDocs.archive");
       if (!user) {
         return;
       }
@@ -915,6 +1003,9 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
         legalDocs: await listLegalDocsFromDb(prisma)
       });
     } catch (error) {
+      if (sendLegalDocBulkMutationConflict(res, error)) {
+        return;
+      }
       next(error);
     }
   });
@@ -923,7 +1014,7 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireAdminRouteUser(req, res, prisma);
+      const user = await requireAdminRoutePermissions(req, res, prisma, "legalDocs.edit", "legalDocs.archive");
       if (!user) {
         return;
       }

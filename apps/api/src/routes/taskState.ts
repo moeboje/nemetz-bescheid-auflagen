@@ -7,7 +7,7 @@ import {
 import { Router, type NextFunction, type Request, type Response } from "express";
 import {
   applyNoStoreHeaders,
-  requireAdminRouteUser,
+  requireAdminRoutePermissions,
   requireInternalRouteUser
 } from "./routeAuth.js";
 
@@ -781,7 +781,7 @@ export function createTaskStateRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireAdminRouteUser(req, res, prisma);
+      const user = await requireAdminRoutePermissions(req, res, prisma, "tasks.edit", "tasks.complete");
       if (!user) {
         return;
       }
@@ -829,7 +829,7 @@ export function createTaskStateRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireAdminRouteUser(req, res, prisma);
+      const user = await requireAdminRoutePermissions(req, res, prisma, "tasks.edit", "tasks.complete");
       if (!user) {
         return;
       }
@@ -850,7 +850,7 @@ export function createTaskStateRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireAdminRouteUser(req, res, prisma);
+      const user = await requireAdminRoutePermissions(req, res, prisma, "tasks.edit", "tasks.complete");
       if (!user) {
         return;
       }

@@ -7,7 +7,7 @@ import {
 import { Router, type NextFunction, type Request, type Response } from "express";
 import {
   applyNoStoreHeaders,
-  requireAdminRouteUser,
+  requireAdminRoutePermissions,
   requireInternalRouteUser
 } from "./routeAuth.js";
 import { enqueueDeadlineAssignmentNotificationsForChange } from "../notifications.js";
@@ -1071,7 +1071,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireAdminRouteUser(req, res, prisma);
+      const user = await requireAdminRoutePermissions(req, res, prisma, "deadlines.edit", "deadlines.archive");
       if (!user) {
         return;
       }
@@ -1103,7 +1103,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireAdminRouteUser(req, res, prisma);
+      const user = await requireAdminRoutePermissions(req, res, prisma, "deadlines.edit", "deadlines.archive");
       if (!user) {
         return;
       }
@@ -1122,7 +1122,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireAdminRouteUser(req, res, prisma);
+      const user = await requireAdminRoutePermissions(req, res, prisma, "deadlines.edit", "deadlines.archive");
       if (!user) {
         return;
       }
@@ -1158,7 +1158,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireAdminRouteUser(req, res, prisma);
+      const user = await requireAdminRoutePermissions(req, res, prisma, "deadlines.edit", "deadlines.archive");
       if (!user) {
         return;
       }

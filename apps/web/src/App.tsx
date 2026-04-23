@@ -159,7 +159,18 @@ function AppLayout() {
     permissions.canManageRolesAdmin &&
     permissions.canManageExternalOrgsAdmin &&
     permissions.canManageAuthoritiesAdmin &&
-    permissions.canManageSecurityAdmin;
+    permissions.canManageSecurityAdmin &&
+    hasPermission("masterData.manage") &&
+    hasPermission("projects.edit") &&
+    hasPermission("projects.archive") &&
+    hasPermission("legalDocs.edit") &&
+    hasPermission("legalDocs.archive") &&
+    hasPermission("obligations.edit") &&
+    hasPermission("obligations.archive") &&
+    hasPermission("deadlines.edit") &&
+    hasPermission("deadlines.archive") &&
+    hasPermission("tasks.edit") &&
+    hasPermission("tasks.complete");
   const restrictedFallback = currentAccountUser?.isExternal
     ? `${MODULE_BASE_PATH}/tasks`
     : `${MODULE_BASE_PATH}/dashboard`;

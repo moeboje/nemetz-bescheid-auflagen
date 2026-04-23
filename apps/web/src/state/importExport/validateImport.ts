@@ -431,6 +431,19 @@ function validateProjectReplaceDependencies(
   }
 }
 
+function validateLegalDocReplaceDependencies(
+  data: ExportDataBundle,
+  errors: ImportValidationMessage[]
+) {
+  if (!hasValue(data.legalDocs)) {
+    return;
+  }
+
+  if (!hasValue(data.obligations) || !hasValue(data.deadlines)) {
+    pushMessage(errors, "import.validation.legalDocReplaceRequiresDependents", "data.legalDocs");
+  }
+}
+
 export function validateImport(value: unknown): ImportValidationResult {
   const errors: ImportValidationMessage[] = [];
   const warnings: ImportValidationMessage[] = [];
@@ -476,6 +489,7 @@ export function validateImport(value: unknown): ImportValidationResult {
   validateOptionalArray(data.notifications, "data.notifications", errors);
   validateTaskState(data.taskState, errors, warnings);
   validateProjectReplaceDependencies(data, errors);
+  validateLegalDocReplaceDependencies(data, errors);
 
   const importedAttachmentCount =
     countEvidenceAttachmentsInEntityArray(data.deadlines) +

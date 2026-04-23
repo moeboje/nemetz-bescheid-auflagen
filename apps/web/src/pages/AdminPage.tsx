@@ -941,6 +941,18 @@ export default function AdminPage() {
         return;
       }
 
+      if (imported.legalDocs && (!imported.obligations || !imported.deadlines)) {
+        setImportErrors([
+          {
+            key: "import.validation.legalDocReplaceRequiresDependents",
+            path: "data.legalDocs"
+          }
+        ]);
+        setPendingImport(null);
+        setImportConfirmOpen(false);
+        return;
+      }
+
       if (sanitizedProjectImport) {
         await clearServerDomainsInDependencyOrder();
         await applyFullDomainReplaceInDependencyOrder({
@@ -956,6 +968,9 @@ export default function AdminPage() {
       } else {
         if (imported.deadlines) {
           await replaceDeadlines([]);
+        }
+        if (imported.legalDocs) {
+          await replaceObligations([]);
         }
         await replaceScopes(imported.scopes);
         await replaceAuthorities(imported.authorities);

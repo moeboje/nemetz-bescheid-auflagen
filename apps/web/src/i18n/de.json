@@ -1043,6 +1043,7 @@
   "import.validation.exportedAtMissing": "Export-Zeitpunkt fehlt.",
   "import.validation.appNameMissing": "App-Name fehlt im Import.",
   "import.validation.projectReplaceRequiresDependents": "Projekt-Import erfordert Rechtsdokumente, Auflagen, Fristen und TaskState im selben Paket.",
+  "import.validation.legalDocReplaceRequiresDependents": "Rechtsdokumente können nur zusammen mit abhängigen Auflagen und Fristen importiert werden, damit keine bestehenden Daten verloren gehen.",
   "import.validation.scopeReplaceBlockedByProjects": "Teilimport fuer Scopes ist blockiert, solange bereits Projekte auf dem Server existieren. Importiere das komplette Paket oder fuehre zuerst einen expliziten Reset aus.",
   "import.validation.authorityReplaceBlockedByDownstream": "Teilimport fuer Behoerden ist blockiert, solange bereits Projekte oder abhaengige serverseitige Daten existieren. Importiere das komplette Paket oder fuehre zuerst einen expliziten Reset aus.",
   "import.validation.missingOptionalKey": "Optionaler Datenblock fehlt.",

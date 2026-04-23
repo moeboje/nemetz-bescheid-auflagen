@@ -368,18 +368,21 @@ async function enqueueDeadlineEvent(
 }
 
 async function markClaimedNotification(
-  prisma: PrismaClient,
+  prisma: DbClient,
   entryId: string,
   claimToken: string,
   update: Prisma.NotificationOutboxUpdateManyMutationInput
 ) {
-  await prisma.notificationOutbox.updateMany({
+  const result = await prisma.notificationOutbox.updateMany({
     where: {
       id: entryId,
+      status: "CLAIMED",
       claimToken
     },
     data: update
   });
+
+  return result.count === 1;
 }
 
 async function postToPowerAutomate(
@@ -476,6 +479,38 @@ async function createDeliveryAttempt(
       providerReference: args.providerReference ?? null,
       triggeredByUserId: args.triggeredByUserId ?? null
     }
+  });
+}
+
+async function finalizeClaimedDispatch(
+  prisma: PrismaClient,
+  args: {
+    entry: NotificationOutbox;
+    claimToken: string;
+    update: Prisma.NotificationOutboxUpdateManyMutationInput;
+    attempt: {
+      attemptNumber: number;
+      startedAt: Date;
+      finishedAt: Date;
+      outcome: "SENT" | "RETRY" | "FAILED" | "CANCELLED";
+      httpStatus?: number;
+      errorSummary?: string;
+      providerReference?: string;
+      triggeredByUserId?: string;
+    };
+  }
+) {
+  return prisma.$transaction(async (tx) => {
+    const finalized = await markClaimedNotification(tx, args.entry.id, args.claimToken, args.update);
+    if (!finalized) {
+      return false;
+    }
+
+    await createDeliveryAttempt(tx, {
+      entry: args.entry,
+      ...args.attempt
+    });
+    return true;
   });
 }
 
@@ -649,20 +684,28 @@ async function dispatchClaimedEntry(
 
   const cancellationReason = await getDispatchCancellationReason(prisma, entry, allowExternalUsers);
   if (cancellationReason) {
-    await markClaimedNotification(prisma, entry.id, claimToken, {
-      status: "CANCELLED",
-      lastError: cancellationReason,
-      claimToken: null
-    });
-    await createDeliveryAttempt(prisma, {
+    const finalized = await finalizeClaimedDispatch(prisma, {
       entry,
-      attemptNumber: entry.attemptCount,
-      startedAt,
-      finishedAt: new Date(),
-      outcome: "CANCELLED",
-      errorSummary: cancellationReason,
-      triggeredByUserId: options?.triggeredByUserId
+      claimToken,
+      update: {
+        status: "CANCELLED",
+        lastError: cancellationReason,
+        claimToken: null
+      },
+      attempt: {
+        attemptNumber: entry.attemptCount,
+        startedAt,
+        finishedAt: new Date(),
+        outcome: "CANCELLED",
+        errorSummary: cancellationReason,
+        triggeredByUserId: options?.triggeredByUserId
+      }
     });
+    if (!finalized) {
+      return {
+        outcome: "lostClaim" as const
+      };
+    }
     return {
       outcome: "cancelled" as const
     };
@@ -672,23 +715,31 @@ async function dispatchClaimedEntry(
     const provider = await postToPowerAutomate(config, buildPowerAutomatePayload(config, entry, payload, options));
     const sentAt = new Date();
 
-    await markClaimedNotification(prisma, entry.id, claimToken, {
-      status: "SENT",
-      sentAt,
-      lastError: null,
-      providerReference: provider.providerReference ?? null,
-      claimToken: null
-    });
-    await createDeliveryAttempt(prisma, {
+    const finalized = await finalizeClaimedDispatch(prisma, {
       entry,
-      attemptNumber: entry.attemptCount,
-      startedAt,
-      finishedAt: sentAt,
-      outcome: "SENT",
-      httpStatus: provider.httpStatus,
-      providerReference: provider.providerReference,
-      triggeredByUserId: options?.triggeredByUserId
+      claimToken,
+      update: {
+        status: "SENT",
+        sentAt,
+        lastError: null,
+        providerReference: provider.providerReference ?? null,
+        claimToken: null
+      },
+      attempt: {
+        attemptNumber: entry.attemptCount,
+        startedAt,
+        finishedAt: sentAt,
+        outcome: "SENT",
+        httpStatus: provider.httpStatus,
+        providerReference: provider.providerReference,
+        triggeredByUserId: options?.triggeredByUserId
+      }
     });
+    if (!finalized) {
+      return {
+        outcome: "lostClaim" as const
+      };
+    }
 
     return {
       outcome: "sent" as const
@@ -701,21 +752,29 @@ async function dispatchClaimedEntry(
     const maxAttempts = options?.maxAttemptsOverride ?? config.notificationMaxAttempts;
 
     if (!retryable || entry.attemptCount >= maxAttempts) {
-      await markClaimedNotification(prisma, entry.id, claimToken, {
-        status: "FAILED",
-        lastError: normalizedError,
-        claimToken: null
-      });
-      await createDeliveryAttempt(prisma, {
+      const finalized = await finalizeClaimedDispatch(prisma, {
         entry,
-        attemptNumber: entry.attemptCount,
-        startedAt,
-        finishedAt: new Date(),
-        outcome: "FAILED",
-        httpStatus,
-        errorSummary: normalizedError,
-        triggeredByUserId: options?.triggeredByUserId
+        claimToken,
+        update: {
+          status: "FAILED",
+          lastError: normalizedError,
+          claimToken: null
+        },
+        attempt: {
+          attemptNumber: entry.attemptCount,
+          startedAt,
+          finishedAt: new Date(),
+          outcome: "FAILED",
+          httpStatus,
+          errorSummary: normalizedError,
+          triggeredByUserId: options?.triggeredByUserId
+        }
       });
+      if (!finalized) {
+        return {
+          outcome: "lostClaim" as const
+        };
+      }
       return {
         outcome: "failed" as const,
         error: normalizedError
@@ -723,29 +782,63 @@ async function dispatchClaimedEntry(
     }
 
     const retryAt = new Date(Date.now() + getRetryDelayMinutes(entry.attemptCount) * 60_000);
-    await markClaimedNotification(prisma, entry.id, claimToken, {
-      status: "RETRY",
-      scheduledFor: retryAt,
-      lastError: normalizedError,
-      claimToken: null,
-      claimedAt: null
-    });
-    await createDeliveryAttempt(prisma, {
+    const finalized = await finalizeClaimedDispatch(prisma, {
       entry,
-      attemptNumber: entry.attemptCount,
-      startedAt,
-      finishedAt: new Date(),
-      outcome: "RETRY",
-      httpStatus,
-      errorSummary: normalizedError,
-      triggeredByUserId: options?.triggeredByUserId
+      claimToken,
+      update: {
+        status: "RETRY",
+        scheduledFor: retryAt,
+        lastError: normalizedError,
+        claimToken: null,
+        claimedAt: null
+      },
+      attempt: {
+        attemptNumber: entry.attemptCount,
+        startedAt,
+        finishedAt: new Date(),
+        outcome: "RETRY",
+        httpStatus,
+        errorSummary: normalizedError,
+        triggeredByUserId: options?.triggeredByUserId
+      }
     });
+    if (!finalized) {
+      return {
+        outcome: "lostClaim" as const
+      };
+    }
 
     return {
       outcome: "retry" as const,
       error: normalizedError
     };
   }
+}
+
+export async function invalidateOlderPasswordResetTokens(
+  prisma: DbClient,
+  args: {
+    userId: string;
+    currentTokenId: string;
+    currentTokenCreatedAt: Date;
+    usedAt: Date;
+  }
+) {
+  return prisma.passwordResetToken.updateMany({
+    where: {
+      userId: args.userId,
+      usedAt: null,
+      id: {
+        not: args.currentTokenId
+      },
+      createdAt: {
+        lt: args.currentTokenCreatedAt
+      }
+    },
+    data: {
+      usedAt: args.usedAt
+    }
+  });
 }
 
 export async function createAndDispatchPasswordResetNotification(
@@ -816,7 +909,8 @@ export async function createAndDispatchPasswordResetNotification(
 
     return {
       entry,
-      tokenId: token.id
+      tokenId: token.id,
+      tokenCreatedAt: token.createdAt
     };
   });
 
@@ -855,17 +949,11 @@ export async function createAndDispatchPasswordResetNotification(
         httpStatus: provider.httpStatus,
         providerReference: provider.providerReference
       });
-      await tx.passwordResetToken.updateMany({
-        where: {
-          userId: args.user.id,
-          usedAt: null,
-          id: {
-            not: created.tokenId
-          }
-        },
-        data: {
-          usedAt: sentAt
-        }
+      await invalidateOlderPasswordResetTokens(tx, {
+        userId: args.user.id,
+        currentTokenId: created.tokenId,
+        currentTokenCreatedAt: created.tokenCreatedAt,
+        usedAt: sentAt
       });
       await tx.user.update({
         where: {

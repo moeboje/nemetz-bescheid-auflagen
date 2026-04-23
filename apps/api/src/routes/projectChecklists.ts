@@ -3,7 +3,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import {
   applyNoStoreHeaders,
-  requireAdminRouteUser,
+  requireAdminRoutePermissions,
   requireInternalRouteUser
 } from "./routeAuth.js";
 
@@ -627,7 +627,7 @@ export function createProjectChecklistsRouter(prisma: PrismaClient) {
       try {
         applyNoStoreHeaders(res);
 
-        const user = await requireAdminRouteUser(req, res, prisma);
+        const user = await requireAdminRoutePermissions(req, res, prisma, "projects.edit", "projects.archive");
         if (!user) {
           return;
         }
@@ -716,7 +716,7 @@ export function createProjectChecklistsRouter(prisma: PrismaClient) {
       try {
         applyNoStoreHeaders(res);
 
-        const user = await requireAdminRouteUser(req, res, prisma);
+        const user = await requireAdminRoutePermissions(req, res, prisma, "projects.edit", "projects.archive");
         if (!user) {
           return;
         }

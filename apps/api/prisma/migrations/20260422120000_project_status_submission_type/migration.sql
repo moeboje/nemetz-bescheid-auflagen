@@ -1,0 +1,51 @@
+-- CreateEnum
+DO $$
+BEGIN
+    CREATE TYPE "ProjectStatus" AS ENUM (
+        'DRAFT',
+        'INTERNAL_REVIEW',
+        'SUBMISSION_PREPARATION',
+        'UVP_PREPARATION',
+        'SUBMITTED',
+        'ADDITIONAL_INFORMATION_REQUEST',
+        'APPROVED',
+        'IN_IMPLEMENTATION'
+    );
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END
+$$;
+
+ALTER TYPE "ProjectStatus" ADD VALUE IF NOT EXISTS 'DRAFT';
+ALTER TYPE "ProjectStatus" ADD VALUE IF NOT EXISTS 'INTERNAL_REVIEW';
+ALTER TYPE "ProjectStatus" ADD VALUE IF NOT EXISTS 'SUBMISSION_PREPARATION';
+ALTER TYPE "ProjectStatus" ADD VALUE IF NOT EXISTS 'UVP_PREPARATION';
+ALTER TYPE "ProjectStatus" ADD VALUE IF NOT EXISTS 'SUBMITTED';
+ALTER TYPE "ProjectStatus" ADD VALUE IF NOT EXISTS 'ADDITIONAL_INFORMATION_REQUEST';
+ALTER TYPE "ProjectStatus" ADD VALUE IF NOT EXISTS 'APPROVED';
+ALTER TYPE "ProjectStatus" ADD VALUE IF NOT EXISTS 'IN_IMPLEMENTATION';
+
+-- CreateEnum
+DO $$
+BEGIN
+    CREATE TYPE "ProjectSubmissionType" AS ENUM (
+        'GEWERBE',
+        'AWG',
+        'UVP_UVE'
+    );
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END
+$$;
+
+ALTER TYPE "ProjectSubmissionType" ADD VALUE IF NOT EXISTS 'GEWERBE';
+ALTER TYPE "ProjectSubmissionType" ADD VALUE IF NOT EXISTS 'AWG';
+ALTER TYPE "ProjectSubmissionType" ADD VALUE IF NOT EXISTS 'UVP_UVE';
+
+-- AlterTable
+ALTER TABLE "Project"
+ADD COLUMN IF NOT EXISTS "status" "ProjectStatus",
+ADD COLUMN IF NOT EXISTS "submissionType" "ProjectSubmissionType";
+
+-- CreateIndex
+CREATE INDEX IF NOT EXISTS "Project_submissionType_idx" ON "Project"("submissionType");

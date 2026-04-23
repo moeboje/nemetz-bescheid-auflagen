@@ -9,6 +9,7 @@ import {
   createAndDispatchPasswordResetNotification,
   dispatchPendingNotifications,
   enqueueDeadlineAssignmentNotificationsForChange,
+  invalidateOlderPasswordResetTokens,
   runNotificationDispatchCycle
 } from "./notifications.js";
 import { prisma } from "./prisma.js";
@@ -17,6 +18,8 @@ import { hashPassword } from "./security.js";
 let notificationServer: http.Server;
 let webhookBaseUrl = "";
 const capturedNotifications: Array<Record<string, unknown>> = [];
+let slowResponseGate: Promise<void> | null = null;
+let notifySlowRequestReceived: (() => void) | null = null;
 
 const testConfig: AppConfig = {
   port: 0,
@@ -74,6 +77,7 @@ describe("Notifications", () => {
       });
 
       req.on("end", () => {
+        void (async () => {
         const body = chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
         if (req.url === "/fail") {
           res.writeHead(500, {
@@ -82,11 +86,63 @@ describe("Notifications", () => {
           res.end(JSON.stringify({ ok: false, message: "Simulated delivery failure" }));
           return;
         }
+        if (req.url === "/slow-reset") {
+          notifySlowRequestReceived?.();
+          await slowResponseGate;
+          capturedNotifications.push(body as Record<string, unknown>);
+          res.writeHead(200, {
+            "Content-Type": "application/json"
+          });
+          res.end(JSON.stringify({ ok: true, flowRunId: "flow-run-slow" }));
+          return;
+        }
+        if (req.url === "/cancel-before-success" || req.url === "/reclaim-before-success") {
+          const notificationId =
+            body && typeof body === "object" && "notificationId" in body
+              ? String((body as { notificationId?: unknown }).notificationId ?? "")
+              : "";
+          if (notificationId && req.url === "/cancel-before-success") {
+            await prisma.notificationOutbox.updateMany({
+              where: {
+                id: notificationId
+              },
+              data: {
+                status: "CANCELLED",
+                claimedAt: null,
+                claimToken: null,
+                lastError: "Cancelled during dispatch."
+              }
+            });
+          }
+          if (notificationId && req.url === "/reclaim-before-success") {
+            await prisma.notificationOutbox.updateMany({
+              where: {
+                id: notificationId
+              },
+              data: {
+                status: "CLAIMED",
+                claimedAt: new Date(),
+                claimToken: "replacement-claim-token"
+              }
+            });
+          }
+          res.writeHead(200, {
+            "Content-Type": "application/json"
+          });
+          res.end(JSON.stringify({ ok: true, flowRunId: "flow-run-race" }));
+          return;
+        }
         capturedNotifications.push(body as Record<string, unknown>);
         res.writeHead(200, {
           "Content-Type": "application/json"
         });
         res.end(JSON.stringify({ ok: true, flowRunId: "flow-run-1" }));
+        })().catch((error: unknown) => {
+          res.writeHead(500, {
+            "Content-Type": "application/json"
+          });
+          res.end(JSON.stringify({ ok: false, message: error instanceof Error ? error.message : "Test error" }));
+        });
       });
     });
 
@@ -104,6 +160,8 @@ describe("Notifications", () => {
 
   beforeEach(async () => {
     capturedNotifications.length = 0;
+    slowResponseGate = null;
+    notifySlowRequestReceived = null;
     await prisma.notificationDeliveryAttempt.deleteMany();
     await prisma.notificationWorkerStatus.deleteMany();
     await prisma.notificationSettings.deleteMany();
@@ -258,6 +316,122 @@ describe("Notifications", () => {
     assert.equal(row.attemptCount, 1);
   });
 
+  it("does not finalize a notification when the worker loses its claim to admin cancellation", async () => {
+    const recipient = await createUser("lost-claim-cancel@example.com");
+    const queued = await prisma.notificationOutbox.create({
+      data: {
+        eventType: "ASSIGNMENT_ASSIGNED",
+        entityType: "PROJECT",
+        entityId: "project-lost-claim-cancel",
+        recipientUserId: recipient.id,
+        recipientEmail: recipient.email,
+        recipientName: "Lost Claim Cancel",
+        subject: "Lost claim cancel",
+        payloadJson: {
+          title: "Lost claim cancel",
+          message: "This dispatch will lose its claim.",
+          severity: "INFO",
+          linkPath: "/compliance/projects/project-lost-claim-cancel"
+        },
+        status: "PENDING",
+        scheduledFor: new Date("2026-04-19T08:00:00.000Z"),
+        idempotencyKey: "lost-claim-cancel"
+      }
+    });
+
+    const result = await dispatchPendingNotifications(
+      prisma,
+      {
+        ...testConfig,
+        powerAutomateNotificationWebhookUrl: `${webhookBaseUrl}/cancel-before-success`
+      },
+      {
+        now: new Date("2026-04-19T08:00:00.000Z"),
+        batchSize: 1
+      }
+    );
+
+    assert.equal(result.claimed, 1);
+    assert.equal(result.sent, 0);
+    assert.equal(result.failed, 0);
+    assert.equal(result.retried, 0);
+    assert.equal(result.cancelled, 0);
+
+    const row = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        id: queued.id
+      }
+    });
+    assert.equal(row.status, "CANCELLED");
+    assert.equal(row.claimToken, null);
+    assert.equal(
+      await prisma.notificationDeliveryAttempt.count({
+        where: {
+          notificationId: queued.id
+        }
+      }),
+      0
+    );
+  });
+
+  it("does not finalize a notification when another worker has reclaimed it", async () => {
+    const recipient = await createUser("lost-claim-reclaim@example.com");
+    const queued = await prisma.notificationOutbox.create({
+      data: {
+        eventType: "ASSIGNMENT_ASSIGNED",
+        entityType: "PROJECT",
+        entityId: "project-lost-claim-reclaim",
+        recipientUserId: recipient.id,
+        recipientEmail: recipient.email,
+        recipientName: "Lost Claim Reclaim",
+        subject: "Lost claim reclaim",
+        payloadJson: {
+          title: "Lost claim reclaim",
+          message: "This dispatch will be reclaimed.",
+          severity: "INFO",
+          linkPath: "/compliance/projects/project-lost-claim-reclaim"
+        },
+        status: "PENDING",
+        scheduledFor: new Date("2026-04-19T08:00:00.000Z"),
+        idempotencyKey: "lost-claim-reclaim"
+      }
+    });
+
+    const result = await dispatchPendingNotifications(
+      prisma,
+      {
+        ...testConfig,
+        powerAutomateNotificationWebhookUrl: `${webhookBaseUrl}/reclaim-before-success`
+      },
+      {
+        now: new Date("2026-04-19T08:00:00.000Z"),
+        batchSize: 1
+      }
+    );
+
+    assert.equal(result.claimed, 1);
+    assert.equal(result.sent, 0);
+    assert.equal(result.failed, 0);
+    assert.equal(result.retried, 0);
+    assert.equal(result.cancelled, 0);
+
+    const row = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        id: queued.id
+      }
+    });
+    assert.equal(row.status, "CLAIMED");
+    assert.equal(row.claimToken, "replacement-claim-token");
+    assert.equal(
+      await prisma.notificationDeliveryAttempt.count({
+        where: {
+          notificationId: queued.id
+        }
+      }),
+      0
+    );
+  });
+
   it("revokes older password reset tokens only after a new reset link was delivered", async () => {
     const user = await createUser("reset-success@example.com");
     const existingToken = await prisma.passwordResetToken.create({
@@ -306,6 +480,144 @@ describe("Notifications", () => {
       }
     });
     assert.equal(outboxRow.status, "SENT");
+  });
+
+  it("keeps a newer reset token active when an older dispatch finishes later", async () => {
+    const user = await createUser("reset-parallel@example.com");
+    let releaseSlowResponse: () => void = () => {};
+    slowResponseGate = new Promise<void>((resolve) => {
+      releaseSlowResponse = resolve;
+    });
+    const slowRequestReceived = new Promise<void>((resolve) => {
+      notifySlowRequestReceived = resolve;
+    });
+
+    const olderDispatch = createAndDispatchPasswordResetNotification(
+      prisma,
+      {
+        ...testConfig,
+        powerAutomateNotificationWebhookUrl: `${webhookBaseUrl}/slow-reset`
+      },
+      {
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          isArchived: user.isArchived,
+          type: user.type
+        },
+        ttlMinutes: 120,
+        now: new Date("2026-04-19T08:00:00.000Z")
+      }
+    );
+
+    await slowRequestReceived;
+
+    const newerResult = await createAndDispatchPasswordResetNotification(prisma, testConfig, {
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        isArchived: user.isArchived,
+        type: user.type
+      },
+      ttlMinutes: 120,
+      now: new Date("2026-04-19T08:01:00.000Z")
+    });
+
+    releaseSlowResponse();
+    const olderResult = await olderDispatch;
+
+    assert.equal(newerResult.deliveryStatus, "SENT");
+    assert.equal(olderResult.deliveryStatus, "SENT");
+
+    const newerOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        id: newerResult.notificationId
+      }
+    });
+    const olderOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        id: olderResult.notificationId
+      }
+    });
+    const newerTokenId = newerOutbox.idempotencyKey.replace("password-reset:", "");
+    const olderTokenId = olderOutbox.idempotencyKey.replace("password-reset:", "");
+
+    const newerToken = await prisma.passwordResetToken.findUniqueOrThrow({
+      where: {
+        id: newerTokenId
+      }
+    });
+    const olderToken = await prisma.passwordResetToken.findUniqueOrThrow({
+      where: {
+        id: olderTokenId
+      }
+    });
+
+    assert.equal(newerToken.usedAt, null);
+    assert.ok(olderToken.usedAt);
+  });
+
+  it("does not use token id ordering to invalidate reset tokens with equal createdAt", async () => {
+    const user = await createUser("reset-equal-created-at@example.com");
+    const createdAt = new Date("2026-04-19T08:00:00.000Z");
+    const sameTimeLexicographicallyHigherToken = await prisma.passwordResetToken.create({
+      data: {
+        id: "reset-token-z",
+        userId: user.id,
+        tokenHash: `same-time-higher-${user.id}`,
+        expiresAt: new Date("2026-04-19T10:00:00.000Z"),
+        createdAt
+      }
+    });
+    const currentToken = await prisma.passwordResetToken.create({
+      data: {
+        id: "reset-token-a",
+        userId: user.id,
+        tokenHash: `same-time-current-${user.id}`,
+        expiresAt: new Date("2026-04-19T10:00:00.000Z"),
+        createdAt
+      }
+    });
+    const trulyOlderToken = await prisma.passwordResetToken.create({
+      data: {
+        id: "reset-token-old",
+        userId: user.id,
+        tokenHash: `truly-older-${user.id}`,
+        expiresAt: new Date("2026-04-19T10:00:00.000Z"),
+        createdAt: new Date("2026-04-19T07:59:59.999Z")
+      }
+    });
+
+    await invalidateOlderPasswordResetTokens(prisma, {
+      userId: user.id,
+      currentTokenId: currentToken.id,
+      currentTokenCreatedAt: currentToken.createdAt,
+      usedAt: new Date("2026-04-19T08:01:00.000Z")
+    });
+
+    const sameTimeAfter = await prisma.passwordResetToken.findUniqueOrThrow({
+      where: {
+        id: sameTimeLexicographicallyHigherToken.id
+      }
+    });
+    const currentAfter = await prisma.passwordResetToken.findUniqueOrThrow({
+      where: {
+        id: currentToken.id
+      }
+    });
+    const trulyOlderAfter = await prisma.passwordResetToken.findUniqueOrThrow({
+      where: {
+        id: trulyOlderToken.id
+      }
+    });
+
+    assert.equal(sameTimeAfter.usedAt, null);
+    assert.equal(currentAfter.usedAt, null);
+    assert.ok(trulyOlderAfter.usedAt);
   });
 
   it("keeps older password reset tokens active when delivery fails definitively", async () => {

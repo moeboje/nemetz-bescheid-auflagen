@@ -253,4 +253,110 @@ describe("Projects submission type", () => {
       "Invalid project submission type. Allowed values: GEWERBE, AWG, UVP_UVE."
     );
   });
+
+  it("blocks legal document bulk replace while downstream obligations exist", async () => {
+    const user = await createUser({
+      email: "legal-doc-bulk-downstream@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const company = await createCompany("LegalDoc Downstream Company");
+    const project = await prisma.project.create({
+      data: {
+        id: "project-legal-doc-downstream",
+        title: "Projekt mit Rechtsdokument",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+    const legalDoc = await prisma.legalDocument.create({
+      data: {
+        id: "legal-doc-with-obligation",
+        projectId: project.id,
+        type: "NOTICE",
+        title: "Bescheid mit Auflage",
+        attachments: []
+      }
+    });
+    await prisma.obligation.create({
+      data: {
+        id: "obligation-downstream",
+        legalDocId: legalDoc.id,
+        title: "Bestehende Auflage",
+        level: "MANDATORY",
+        scheduleType: "ONCE",
+        emailReminderEnabled: false,
+        evidenceRequirements: {}
+      }
+    });
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const response = await request("/admin/internal/legal-docs/bulk-replace", {
+      method: "PUT",
+      cookie,
+      body: []
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(await prisma.legalDocument.count(), 1);
+    assert.equal(await prisma.obligation.count(), 1);
+  });
+
+  it("blocks legal document bulk delete while linked deadlines exist", async () => {
+    const user = await createUser({
+      email: "legal-doc-bulk-delete-deadline@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const company = await createCompany("LegalDoc Deadline Company");
+    const project = await prisma.project.create({
+      data: {
+        id: "project-legal-doc-deadline",
+        title: "Projekt mit verlinkter Frist",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+    const legalDoc = await prisma.legalDocument.create({
+      data: {
+        id: "legal-doc-with-deadline",
+        projectId: project.id,
+        type: "NOTICE",
+        title: "Bescheid mit Frist",
+        attachments: []
+      }
+    });
+    await prisma.deadline.create({
+      data: {
+        id: "deadline-linked-to-legal-doc",
+        title: "Verlinkte Frist",
+        dueDate: "2026-05-01",
+        status: "OPEN",
+        projectId: project.id,
+        legalDocId: legalDoc.id,
+        emailReminderEnabled: false,
+        evidence: []
+      }
+    });
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const response = await request("/admin/internal/legal-docs/bulk-delete", {
+      method: "DELETE",
+      cookie
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(await prisma.legalDocument.count(), 1);
+    assert.equal(await prisma.deadline.count({ where: { legalDocId: legalDoc.id } }), 1);
+  });
 });

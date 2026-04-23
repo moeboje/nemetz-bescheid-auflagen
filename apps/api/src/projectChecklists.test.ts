@@ -346,6 +346,30 @@ describe("Project checklists", () => {
     );
   });
 
+  it("rejects project checklist bulk deletes for admins without project data-management permissions", async () => {
+    const roleKey = `LIMITED_ADMIN_BULK_${randomUUID().replace(/-/g, "_")}`;
+    await prisma.role.create({
+      data: {
+        key: roleKey,
+        labelDe: "Limited Admin Bulk",
+        permissionsJson: ["admin.access", "users.view"]
+      }
+    });
+    const user = await createUser({
+      email: "project-checklist-limited-admin@example.com",
+      password: "ValidPassword1!",
+      role: roleKey
+    });
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const response = await request("/admin/internal/project-checklists/bulk-delete", {
+      method: "DELETE",
+      cookie
+    });
+
+    assert.equal(response.status, 403);
+  });
+
   it("bulk-replace only updates the submitted project ids", async () => {
     const user = await createUser({
       email: "project-checklist-scope@example.com",
