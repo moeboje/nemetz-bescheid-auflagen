@@ -27,7 +27,7 @@ export default class ErrorBoundary extends React.Component<
   }
 
   componentDidCatch() {
-    // Intentionally no-op: UI fallback is the primary recovery path in prototype mode.
+    // Intentionally no-op: the fallback UI is the recovery surface for runtime failures.
   }
 
   private handleReload = () => {
@@ -38,6 +38,8 @@ export default class ErrorBoundary extends React.Component<
 
   private handleExportData = async () => {
     try {
+      // The boundary sits outside the local-only providers, so crash recovery falls back to
+      // the last persisted browser state instead of live in-memory overrides.
       const payload = await buildStorageExportPayload();
       downloadExportPayload(payload, "nemetz-compliance-recovery");
       this.setState({ exportError: "" });

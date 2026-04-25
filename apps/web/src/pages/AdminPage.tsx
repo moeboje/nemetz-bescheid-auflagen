@@ -14,8 +14,7 @@ import {
 import { ApiError } from "../api/client";
 import {
   bulkDeleteProjectChecklists,
-  bulkReplaceProjectChecklists,
-  listProjectChecklists
+  bulkReplaceProjectChecklists
 } from "../api/projectChecklists";
 import { useRuntimeConfig } from "../config/runtimeConfig";
 import { t } from "../i18n";
@@ -42,9 +41,8 @@ import { useNotifications } from "../state/NotificationsStore";
 import { sanitizeProjectRelations } from "../state/projectRelations";
 import { runIntegrityScan, type IntegrityFinding } from "../state/diagnostics/integrityScan";
 import {
-  buildExportPayload,
+  buildStorageExportPayload,
   downloadExportPayload,
-  GENERIC_EXPORT_LIMITATION_META,
   resetAllPersistedData
 } from "../state/importExport/exportPayload";
 import {
@@ -76,6 +74,8 @@ type AttachmentReference = {
   attachmentId: string;
   filename: string;
 };
+
+const CROSS_DOMAIN_RECOVERY_ACTIONS_BLOCKED = true;
 
 function collectAttachmentIdsFromEvidence(evidence: Evidence[] | undefined, target: Set<string>) {
   if (!Array.isArray(evidence)) {
@@ -801,27 +801,9 @@ export default function AdminPage() {
 
   const handleExport = async () => {
     try {
-      const projectChecklists = await listProjectChecklists();
-      const payload = buildExportPayload({
-        scopes: {
-          companies,
-          sites,
-          facilities
-        },
-        authorities: {
-          authorities,
-          contacts
-        },
-        projects,
-        projectChecklists,
-        legalDocs,
-        obligations,
-        deadlines,
-        taskState,
+      const payload = await buildStorageExportPayload({
         auditLog: entries,
         notifications
-      }, {
-        meta: GENERIC_EXPORT_LIMITATION_META
       });
       downloadExportPayload(payload);
 
@@ -834,6 +816,16 @@ export default function AdminPage() {
   };
 
   const handleImportFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (CROSS_DOMAIN_RECOVERY_ACTIONS_BLOCKED) {
+      setPendingImport(null);
+      setImportConfirmOpen(false);
+      setImportErrors([]);
+      setImportWarnings([]);
+      setDataManagementMessage(t("admin.dataManagement.serverRecoveryBlocked"));
+      event.target.value = "";
+      return;
+    }
+
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) {
@@ -874,6 +866,15 @@ export default function AdminPage() {
   };
 
   const handleConfirmImport = async () => {
+    if (CROSS_DOMAIN_RECOVERY_ACTIONS_BLOCKED) {
+      setPendingImport(null);
+      setImportConfirmOpen(false);
+      setImportErrors([]);
+      setImportWarnings([]);
+      setDataManagementMessage(t("admin.dataManagement.serverRecoveryBlocked"));
+      return;
+    }
+
     if (!pendingImport) {
       return;
     }
@@ -1034,6 +1035,14 @@ export default function AdminPage() {
   };
 
   const handleConfirmReset = async () => {
+    if (CROSS_DOMAIN_RECOVERY_ACTIONS_BLOCKED) {
+      setResetConfirmOpen(false);
+      setImportErrors([]);
+      setImportWarnings([]);
+      setDataManagementMessage(t("admin.dataManagement.serverRecoveryBlocked"));
+      return;
+    }
+
     resetAllPersistedData();
     await clearServerDomainsInDependencyOrder();
     await resetScopes();
@@ -1068,6 +1077,12 @@ export default function AdminPage() {
   };
 
   const handleConfirmDemoScenario = async () => {
+    if (CROSS_DOMAIN_RECOVERY_ACTIONS_BLOCKED) {
+      setDemoConfirmOpen(false);
+      setDataManagementMessage(t("admin.dataManagement.serverRecoveryBlocked"));
+      return;
+    }
+
     const seed = createDemoScenarioSeed();
     if (demoMode === "replace") {
       await clearServerDomainsInDependencyOrder();
@@ -1610,8 +1625,12 @@ export default function AdminPage() {
               </Button>
             </div>
             <p className="placeholderText">{t("admin.dataManagement.description")}</p>
+            <p className="placeholderText">{t("admin.dataManagement.exportScopeHint")}</p>
             <p className="placeholderText">{t("admin.dataManagement.exportFilesHint")}</p>
             <p className="placeholderText">{t("admin.demo.description")}</p>
+            {CROSS_DOMAIN_RECOVERY_ACTIONS_BLOCKED ? (
+              <p className="validationText">{t("admin.dataManagement.serverRecoveryBlocked")}</p>
+            ) : null}
             <p className="placeholderText">
               {t("admin.dataManagement.lastTickAt").replace("{date}", lastTickAt || t("common.notAvailable"))}
             </p>
@@ -1619,6 +1638,7 @@ export default function AdminPage() {
               <Button onClick={() => void handleExport()}>{t("admin.dataManagement.export")}</Button>
               <Button
                 variant="secondary"
+                disabled={CROSS_DOMAIN_RECOVERY_ACTIONS_BLOCKED}
                 onClick={() => fileInputRef.current?.click()}
               >
                 {t("admin.dataManagement.import")}
@@ -1626,13 +1646,21 @@ export default function AdminPage() {
               <Button variant="secondary" onClick={handleRunNotificationTick}>
                 {t("admin.dataManagement.runTick")}
               </Button>
-              <Button variant="secondary" onClick={() => setDemoConfirmOpen(true)}>
+              <Button
+                variant="secondary"
+                disabled={CROSS_DOMAIN_RECOVERY_ACTIONS_BLOCKED}
+                onClick={() => setDemoConfirmOpen(true)}
+              >
                 {t("admin.dataManagement.generateDemoScenario")}
               </Button>
               <Button variant="secondary" onClick={() => void handleCleanupTaskState()}>
                 {t("admin.dataManagement.cleanupTaskState")}
               </Button>
-              <Button variant="secondary" onClick={() => setResetConfirmOpen(true)}>
+              <Button
+                variant="secondary"
+                disabled={CROSS_DOMAIN_RECOVERY_ACTIONS_BLOCKED}
+                onClick={() => setResetConfirmOpen(true)}
+              >
                 {t("admin.dataManagement.reset")}
               </Button>
             </div>

@@ -809,16 +809,16 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         heading: "Worum geht es?",
         lines: [
-          "Die Datenverwaltung kombiniert Sicherung, Import, Demo-Datenerzeugung, TaskState-Cleanup und Benachrichtigungsaktualisierung.",
-          "Die Integritaetspruefung sucht inkonsistente Referenzen und bietet sichere Korrekturwege."
+          "Die Datenverwaltung bietet einen servergestuetzten Teil-Export fuer Fachdomänen sowie Werkzeuge fuer TaskState-Cleanup, Benachrichtigungsaktualisierung und Integritaetspruefung.",
+          "Der JSON-Export ist kein vollstaendiges Disaster-Recovery-Backup fuer alle serververwalteten Admin-, Benutzer- und Sicherheitseinstellungen."
         ]
       },
       {
         heading: "Schritt fuer Schritt",
         lines: [
           "Erstellen Sie vor groesseren Aenderungen immer zuerst einen Export.",
-          "Pruefen Sie Importfehler und Warnungen vor dem eigentlichen Einspielen.",
-          "Nutzen Sie Replace und Append bewusst und nie ohne fachliche Absicht.",
+          "Pruefen Sie genau, welche serverseitigen und lokalen Datenbloecke der Teil-Export nicht enthaelt.",
+          "Gesamt-Import, Gesamt-Reset und Demo-Replace bleiben bis zu einem serverseitig orchestrierten Recovery-Pfad gesperrt.",
           "Verwenden Sie Safe Mode oder den Recovery-Export nur fuer Fehlerisolierung und Wiederherstellung."
         ],
         ordered: true
@@ -827,7 +827,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
         heading: "Worauf achten?",
         lines: [
           "Evidence-Datei-Inhalte sind nicht vollstaendig im JSON-Export enthalten.",
-          "Ein Reset ist kein harmloser Testklick, sondern eine bewusste Ruecksetzung auf Demo- oder Ausgangsdaten."
+          "Benutzer, Rollen, externe Firmen, globale Security Settings sowie serverseitige Notification-Settings und Versandhistorie gehoeren nicht zu diesem generischen Export.",
+          "Ein lokaler ErrorBoundary-Reset betrifft nur Browserdaten zur Fehlerisolierung und ersetzt keinen serverseitigen Restore."
         ]
       }
     ]
@@ -1090,7 +1091,7 @@ export const HELP_FAQ_ENTRIES: HelpFaqEntry[] = [
   {
     id: "faq-import",
     question: "Warum schlaegt ein Import fehl oder wird blockiert?",
-    answer: "Teilimporte werden geblockt, wenn Downstream-Daten fehlen oder bereits serverseitige Abhaengigkeiten bestehen. Lesen Sie Validierungsfehler und Warnungen vor dem Bestaetigen komplett.",
+    answer: "Der generische Gesamt-Import ist derzeit gesperrt, weil mehrere serverseitige Domänen sonst nicht atomar ersetzt wuerden. Verwenden Sie den JSON-Export nur als Teil-Export und nicht als vollstaendigen Restore-Mechanismus.",
     visibility: "authenticated",
     tags: ["Import", "Validierung", "Blocker"],
     relatedArticleSlugs: ["admin-data-management-and-recovery"]

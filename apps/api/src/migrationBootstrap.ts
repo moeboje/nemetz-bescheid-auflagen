@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { prisma } from "./prisma.js";
-import { loadProjectEnvFile } from "./config.js";
+import { loadConfig, loadProjectEnvFile } from "./config.js";
 
 export type BootstrapMode =
   | "fresh"
@@ -1144,7 +1144,6 @@ export const baselineStages = [
     introduced: projectStatusSubmissionTypeRequirements,
     requirements: mergeRequirements(
       schemaCompletionBaselineRequirements,
-      projectSubmissionProfileRequirements,
       projectChecklistRequirements,
       adminSecurityRequirements,
       notificationE1Requirements,
@@ -1157,7 +1156,6 @@ export const baselineStages = [
     introduced: notificationE2Requirements,
     requirements: mergeRequirements(
       schemaCompletionBaselineRequirements,
-      projectSubmissionProfileRequirements,
       projectChecklistRequirements,
       adminSecurityRequirements,
       notificationE1Requirements,
@@ -1169,7 +1167,6 @@ export const baselineStages = [
     introduced: notificationE1Requirements,
     requirements: mergeRequirements(
       schemaCompletionBaselineRequirements,
-      projectSubmissionProfileRequirements,
       projectChecklistRequirements,
       adminSecurityRequirements,
       notificationE1Requirements
@@ -1180,7 +1177,6 @@ export const baselineStages = [
     introduced: adminSecurityRequirements,
     requirements: mergeRequirements(
       schemaCompletionBaselineRequirements,
-      projectSubmissionProfileRequirements,
       projectChecklistRequirements,
       adminSecurityRequirements
     )
@@ -1190,7 +1186,6 @@ export const baselineStages = [
     introduced: projectChecklistRequirements,
     requirements: mergeRequirements(
       schemaCompletionBaselineRequirements,
-      projectSubmissionProfileRequirements,
       projectChecklistRequirements
     )
   },
@@ -1707,6 +1702,7 @@ async function detectMigrationBootstrapMode(): Promise<BootstrapMode> {
 
 async function run() {
   loadProjectEnvFile();
+  loadConfig();
   const mode = await detectMigrationBootstrapMode();
   process.stdout.write(mode);
 }

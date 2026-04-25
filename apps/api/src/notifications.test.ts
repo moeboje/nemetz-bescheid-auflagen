@@ -3,7 +3,7 @@ import http from "node:http";
 import { once } from "node:events";
 import { after, before, beforeEach, describe, it } from "node:test";
 import type { AddressInfo } from "node:net";
-import { Prisma } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { type AppConfig, resolveDatabaseUrl } from "./config.js";
 import {
   createAndDispatchPasswordResetNotification,
@@ -65,6 +65,11 @@ async function createUser(email: string) {
       passwordHash: await hashPassword("ValidPassword1!")
     }
   });
+}
+
+function fixedNow(value: string | Date) {
+  const fixed = value instanceof Date ? new Date(value) : new Date(value);
+  return () => new Date(fixed);
 }
 
 describe("Notifications", () => {
@@ -173,6 +178,40 @@ describe("Notifications", () => {
     await prisma.project.deleteMany();
     await prisma.user.deleteMany();
     await prisma.$executeRaw(Prisma.sql`DELETE FROM "SecuritySettings"`);
+  });
+
+  it("stores password reset token expiry relative to the token creation time", async () => {
+    const user = await createUser("reset-full-ttl@example.com");
+    const ttlMinutes = 120;
+
+    const result = await createAndDispatchPasswordResetNotification(prisma, testConfig, {
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        isArchived: user.isArchived,
+        type: user.type
+      },
+      ttlMinutes,
+      now: fixedNow("2026-04-19T08:00:00.000Z")
+    });
+
+    assert.equal(result.deliveryStatus, "SENT");
+
+    const outboxRow = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        id: result.notificationId
+      }
+    });
+    const token = await prisma.passwordResetToken.findUniqueOrThrow({
+      where: {
+        id: outboxRow.idempotencyKey.replace("password-reset:", "")
+      }
+    });
+
+    assert.equal(token.expiresAt.getTime() - token.createdAt.getTime(), ttlMinutes * 60_000);
+    assert.equal(result.expiresAt.toISOString(), token.expiresAt.toISOString());
   });
 
   it("dispatch cycle generates due-soon and overdue deadline notifications once", async () => {
@@ -452,7 +491,7 @@ describe("Notifications", () => {
         type: user.type
       },
       ttlMinutes: 120,
-      now: new Date("2026-04-19T08:00:00.000Z")
+      now: fixedNow("2026-04-19T08:00:00.000Z")
     });
 
     assert.equal(result.deliveryStatus, "SENT");
@@ -508,7 +547,7 @@ describe("Notifications", () => {
           type: user.type
         },
         ttlMinutes: 120,
-        now: new Date("2026-04-19T08:00:00.000Z")
+        now: fixedNow("2026-04-19T08:00:00.000Z")
       }
     );
 
@@ -524,7 +563,7 @@ describe("Notifications", () => {
         type: user.type
       },
       ttlMinutes: 120,
-      now: new Date("2026-04-19T08:01:00.000Z")
+      now: fixedNow("2026-04-19T08:01:00.000Z")
     });
 
     releaseSlowResponse();
@@ -559,6 +598,188 @@ describe("Notifications", () => {
 
     assert.equal(newerToken.usedAt, null);
     assert.ok(olderToken.usedAt);
+  });
+
+  it("serializes password reset token timestamps per user when requests share the same requested time", async () => {
+    const user = await createUser("reset-same-now@example.com");
+    let releaseSlowResponse: () => void = () => {};
+    slowResponseGate = new Promise<void>((resolve) => {
+      releaseSlowResponse = resolve;
+    });
+    const slowRequestReceived = new Promise<void>((resolve) => {
+      notifySlowRequestReceived = resolve;
+    });
+    const sharedNow = new Date("2026-04-19T08:00:00.000Z");
+
+    const olderDispatch = createAndDispatchPasswordResetNotification(
+      prisma,
+      {
+        ...testConfig,
+        powerAutomateNotificationWebhookUrl: `${webhookBaseUrl}/slow-reset`
+      },
+      {
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          isArchived: user.isArchived,
+          type: user.type
+        },
+        ttlMinutes: 120,
+        now: fixedNow(sharedNow)
+      }
+    );
+
+    await slowRequestReceived;
+
+    const newerResult = await createAndDispatchPasswordResetNotification(prisma, testConfig, {
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        isArchived: user.isArchived,
+        type: user.type
+      },
+      ttlMinutes: 120,
+      now: fixedNow(sharedNow)
+    });
+
+    releaseSlowResponse();
+    const olderResult = await olderDispatch;
+
+    assert.equal(olderResult.deliveryStatus, "SENT");
+    assert.equal(newerResult.deliveryStatus, "SENT");
+
+    const tokens = await prisma.passwordResetToken.findMany({
+      where: {
+        userId: user.id
+      },
+      orderBy: [
+        {
+          createdAt: "asc"
+        },
+        {
+          id: "asc"
+        }
+      ]
+    });
+
+    assert.equal(tokens.length, 2);
+    assert.ok(tokens[0].createdAt.getTime() < tokens[1].createdAt.getTime());
+
+    const olderOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        id: olderResult.notificationId
+      }
+    });
+    const newerOutbox = await prisma.notificationOutbox.findUniqueOrThrow({
+      where: {
+        id: newerResult.notificationId
+      }
+    });
+
+    const olderToken = await prisma.passwordResetToken.findUniqueOrThrow({
+      where: {
+        id: olderOutbox.idempotencyKey.replace("password-reset:", "")
+      }
+    });
+    const newerToken = await prisma.passwordResetToken.findUniqueOrThrow({
+      where: {
+        id: newerOutbox.idempotencyKey.replace("password-reset:", "")
+      }
+    });
+
+    assert.ok(olderToken.usedAt);
+    assert.equal(newerToken.usedAt, null);
+    assert.equal(olderToken.expiresAt.getTime() - olderToken.createdAt.getTime(), 120 * 60_000);
+    assert.equal(newerToken.expiresAt.getTime() - newerToken.createdAt.getTime(), 120 * 60_000);
+    assert.equal(olderResult.expiresAt.toISOString(), olderToken.expiresAt.toISOString());
+    assert.equal(newerResult.expiresAt.toISOString(), newerToken.expiresAt.toISOString());
+  });
+
+  it("evaluates a caller-provided reset timestamp only after the user lock is acquired", async () => {
+    const user = await createUser("reset-lock-wait@example.com");
+    const lockingClient = new PrismaClient({
+      datasources: {
+        db: {
+          url: testConfig.databaseUrl
+        }
+      }
+    });
+    let releaseLock: () => void = () => {};
+    const lockReleased = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    let signalLockAcquired: () => void = () => {};
+    const lockAcquired = new Promise<void>((resolve) => {
+      signalLockAcquired = resolve;
+    });
+
+    const lockingTransaction = lockingClient.$transaction(async (tx) => {
+      await tx.$executeRaw(
+        Prisma.sql`SELECT 1 FROM "User" WHERE "id" = ${user.id} FOR UPDATE`
+      );
+      signalLockAcquired();
+      await lockReleased;
+    });
+
+    await lockAcquired;
+
+    try {
+      const requestStartedAt = Date.now();
+      let nowCallCount = 0;
+      const dispatchPromise = createAndDispatchPasswordResetNotification(prisma, testConfig, {
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          isArchived: user.isArchived,
+          type: user.type
+        },
+        ttlMinutes: 120,
+        now: () => {
+          nowCallCount += 1;
+          return new Date();
+        }
+      });
+
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
+      releaseLock();
+
+      const result = await dispatchPromise;
+      assert.equal(result.deliveryStatus, "SENT");
+
+      const outboxRow = await prisma.notificationOutbox.findUniqueOrThrow({
+        where: {
+          id: result.notificationId
+        }
+      });
+      const token = await prisma.passwordResetToken.findUniqueOrThrow({
+        where: {
+          id: outboxRow.idempotencyKey.replace("password-reset:", "")
+        }
+      });
+
+      assert.equal(nowCallCount, 1);
+      assert.ok(
+        token.createdAt.getTime() >= requestStartedAt + 75,
+        `Expected post-lock token creation time, got ${token.createdAt.toISOString()}`
+      );
+      assert.equal(token.expiresAt.getTime() - token.createdAt.getTime(), 120 * 60_000);
+      assert.equal(result.expiresAt.toISOString(), token.expiresAt.toISOString());
+      assert.equal(outboxRow.scheduledFor.toISOString(), token.createdAt.toISOString());
+      assert.equal(outboxRow.claimedAt?.toISOString(), token.createdAt.toISOString());
+      assert.equal(outboxRow.lastAttemptAt?.toISOString(), token.createdAt.toISOString());
+    } finally {
+      releaseLock();
+      await lockingTransaction;
+      await lockingClient.$disconnect();
+    }
   });
 
   it("does not use token id ordering to invalidate reset tokens with equal createdAt", async () => {
@@ -644,7 +865,7 @@ describe("Notifications", () => {
         type: user.type
       },
       ttlMinutes: 120,
-      now: new Date("2026-04-19T08:00:00.000Z")
+      now: fixedNow("2026-04-19T08:00:00.000Z")
     });
 
     assert.equal(result.deliveryStatus, "FAILED");
@@ -698,7 +919,7 @@ describe("Notifications", () => {
         type: user.type
       },
       ttlMinutes: 120,
-      now: new Date("2026-04-19T08:00:00.000Z")
+      now: fixedNow("2026-04-19T08:00:00.000Z")
     });
 
     assert.equal(result.deliveryStatus, "FAILED");

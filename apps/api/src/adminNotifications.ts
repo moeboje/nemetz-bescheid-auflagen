@@ -326,7 +326,7 @@ export async function getAdminNotificationOverview(prisma: PrismaClient, config:
       timeoutMs: config.notificationDispatchTimeoutMs,
       claimLeaseSeconds: config.notificationClaimLeaseSeconds,
       timeZone: config.notificationTimeZone,
-      notificationBaseUrl: config.notificationBaseUrl || config.appOrigin,
+      notificationBaseUrl: config.notificationBaseUrl,
       webhookConfigured: Boolean(config.powerAutomateNotificationWebhookUrl.trim()),
       secretConfigured: Boolean(config.powerAutomateNotificationSecret.trim())
     },

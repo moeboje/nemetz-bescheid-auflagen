@@ -285,8 +285,8 @@ describe("migration bootstrap classification", () => {
       classify(
         replacePrimaryKey(
           fixtureFor("baseline-20260422120000_project_status_submission_type"),
-          "ProjectSubmissionProfileAssignment_pkey",
-          { columns: ["projectId"] }
+          "NotificationWorkerStatus_pkey",
+          { columns: ["id"] }
         )
       ),
       "partial"
@@ -349,6 +349,44 @@ describe("migration bootstrap classification", () => {
     assert.equal(
       classify(fixtureFor("baseline-20260419153000_email_notifications_powerautomate_e1")),
       "baseline-20260419153000_email_notifications_powerautomate_e1"
+    );
+  });
+
+  it("accepts the current submissionType baseline without obsolete submission-profile tables", () => {
+    assert.equal(
+      classify(
+        without(fixtureFor("baseline-20260422120000_project_status_submission_type"), {
+          presentTables: ["SubmissionProfile", "ProjectSubmissionProfileAssignment"],
+          presentColumns: [
+            "SubmissionProfile.key",
+            "SubmissionProfile.label",
+            "SubmissionProfile.profileType",
+            "SubmissionProfile.isActive",
+            "SubmissionProfile.sortOrder",
+            "SubmissionProfile.createdAt",
+            "SubmissionProfile.updatedAt",
+            "ProjectSubmissionProfileAssignment.projectId",
+            "ProjectSubmissionProfileAssignment.profileKey",
+            "ProjectSubmissionProfileAssignment.createdAt",
+            "ProjectSubmissionProfileAssignment.updatedAt"
+          ],
+          presentEnumValues: ["SubmissionProfileType.BASE", "SubmissionProfileType.ADDON"],
+          presentIndexes: [
+            "SubmissionProfile_isActive_idx",
+            "SubmissionProfile_profileType_sortOrder_idx",
+            "ProjectSubmissionProfileAssignment_profileKey_idx"
+          ],
+          presentPrimaryKeys: [
+            "SubmissionProfile_pkey",
+            "ProjectSubmissionProfileAssignment_pkey"
+          ],
+          presentForeignKeys: [
+            "ProjectSubmissionProfileAssignment_projectId_fkey",
+            "ProjectSubmissionProfileAssignment_profileKey_fkey"
+          ]
+        })
+      ),
+      "baseline-20260422120000_project_status_submission_type"
     );
   });
 
@@ -474,31 +512,65 @@ describe("migration bootstrap classification", () => {
     );
   });
 
-  it("blocks later objects when earlier migration objects are missing", () => {
-    const profileIntroduced = introducedFor("baseline-20260418190000_project_submission_profiles");
-    const checklistOnly = requirementsFor("baseline-20260418223000_project_checklists");
-
+  it("blocks the current baseline when a required current-schema column is missing even without legacy submission-profile objects", () => {
     assert.equal(
       classify(
-        without(fixtureFor("baseline-20260418223000_project_checklists"), {
-          presentTables: [...profileIntroduced.tables],
-          presentColumns: [...profileIntroduced.columns],
-          presentEnumValues: [...(profileIntroduced.enumValues ?? [])],
-          presentIndexes: [...(profileIntroduced.indexes ?? [])].map((requirement) => requirement.name),
-          presentPrimaryKeys: [...(profileIntroduced.primaryKeys ?? [])].map(
-            (requirement) => requirement.name
-          ),
-          presentForeignKeys: [...(profileIntroduced.foreignKeys ?? [])].map(
-            (requirement) => requirement.name
-          )
-        })
+        without(
+          without(fixtureFor("baseline-20260422120000_project_status_submission_type"), {
+            presentTables: ["SubmissionProfile", "ProjectSubmissionProfileAssignment"],
+            presentColumns: [
+              "SubmissionProfile.key",
+              "SubmissionProfile.label",
+              "SubmissionProfile.profileType",
+              "SubmissionProfile.isActive",
+              "SubmissionProfile.sortOrder",
+              "SubmissionProfile.createdAt",
+              "SubmissionProfile.updatedAt",
+              "ProjectSubmissionProfileAssignment.projectId",
+              "ProjectSubmissionProfileAssignment.profileKey",
+              "ProjectSubmissionProfileAssignment.createdAt",
+              "ProjectSubmissionProfileAssignment.updatedAt"
+            ],
+            presentEnumValues: ["SubmissionProfileType.BASE", "SubmissionProfileType.ADDON"],
+            presentIndexes: [
+              "SubmissionProfile_isActive_idx",
+              "SubmissionProfile_profileType_sortOrder_idx",
+              "ProjectSubmissionProfileAssignment_profileKey_idx"
+            ],
+            presentPrimaryKeys: [
+              "SubmissionProfile_pkey",
+              "ProjectSubmissionProfileAssignment_pkey"
+            ],
+            presentForeignKeys: [
+              "ProjectSubmissionProfileAssignment_projectId_fkey",
+              "ProjectSubmissionProfileAssignment_profileKey_fkey"
+            ]
+          }),
+          {
+            presentColumns: ["Project.submissionType"]
+          }
+        )
       ),
       "partial"
     );
+  });
 
-    assert.ok(
-      checklistOnly.columns.includes("SubmissionProfile.key"),
-      "test fixture must represent a later stage that depends on submission profiles"
+  it("still recognizes the exact historical submission-profile baseline", () => {
+    assert.equal(
+      classify(fixtureFor("baseline-20260418190000_project_submission_profiles")),
+      "baseline-20260418190000_project_submission_profiles"
+    );
+  });
+
+  it("classifies a partial historical submission-profile schema as unsafe", () => {
+    const profileIntroduced = introducedFor("baseline-20260418190000_project_submission_profiles");
+    assert.equal(
+      classify(
+        without(fixtureFromRequirements(profileIntroduced), {
+          presentColumns: ["ProjectSubmissionProfileAssignment.profileKey"]
+        })
+      ),
+      "partial"
     );
   });
 });

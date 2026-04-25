@@ -1,6 +1,10 @@
 # DATA_CONTRACT
 
-## Entities
+## Ziel
+
+Dieser Vertrag beschreibt den aktuellen fachlichen Datenstand des Web-Clients gegen die aktive API. Fuer migrierte Fachdomänen ist die API plus PostgreSQL die Source of Truth.
+
+## Fachdomänen im aktiven Web-Modell
 
 - `Scopes`
   - `companies[]`: `id`, `name`, `shortName?`, `isArchived`, `createdAt`, `updatedAt`
@@ -8,16 +12,22 @@
   - `facilities[]`: `id`, `companyId`, `siteId`, `name`, `type?`, `isArchived`, `createdAt`, `updatedAt`
 - `Authorities`
   - `authorities[]`: `id`, `name`, `shortName?`, `isArchived`, `createdAt?`, `updatedAt?`
-  - `contacts[]`: `id`, `authorityId`, `name`, `email?`, `phone?`, `roleTitle?`, `isArchived`, `createdAt?`, `updatedAt?`
+  - `contacts[]`: `id`, `authorityId`, `name`, `firstName?`, `lastName?`, `email?`, `phone?`, `mobile?`, `roleTitle?`, `department?`, `notes?`, `isPrimary`, `isArchived`, `createdAt?`, `updatedAt?`
 - `Projects`
-  - `id`, `title`, `shortDescription?`, `authorityRef?`
+  - `id`, `title`, `status?`, `submissionType?`, `shortDescription?`, `authorityRef?`
   - `companyId`, `siteId?`, `facilityId?`
   - `authorityId?`, `authorityContactId?`
-  - `ownerUserId?`, `deputyUserId?`, `internalParticipants[]`, `participantUserIds[]`
-  - `externalParticipants[]`, `attachments[]`
+  - `ownerUserId?`, `deputyUserId?`
+  - `internalParticipants[]`, `participantUserIds[]`, `externalParticipants[]`
+  - `attachments[]`, `dependsOnProjectIds[]`, `referenceLegalDocIds[]`
   - `isArchived`, `archivedAt?`, `createdAt`, `updatedAt`
+- `ProjectChecklists`
+  - `id`, `projectId`, `createdAt`, `updatedAt`
+  - `sections[]`: `id`, `title`, `description?`, `sortOrder`, `createdAt`, `updatedAt`
+  - `sections[].items[]`: `id`, `title`, `description?`, `status`, `sortOrder`, `createdAt`, `updatedAt`
 - `LegalDocs`
   - `id`, `projectId`, `type`, `title`, `shortDescription?`, `reference?`, `issuedAt?`
+  - `authorityId?`, `authorityContactId?`
   - `attachments[]`, `aiExtraction?`, `scopeOverride?`
   - `isArchived`, `archivedAt?`, `createdAt`, `updatedAt`
 - `Obligations`
@@ -26,57 +36,79 @@
   - `ownerUserId?`, `deputyUserId?`, `criticality?`
   - `emailReminderEnabled`, `emailReminderDaysBefore?`
   - `origin?`, `sourceSuggestionId?`, `sourceRunId?`
+  - `evidenceRequirements?`
   - `isArchived`, `archivedAt?`, `createdAt`, `updatedAt`
 - `Deadlines`
   - `id`, `title`, `description?`, `dueDate`, `status`
   - `projectId?`, `legalDocId?`, `authorityId?`
   - `ownerUserId?`, `deputyUserId?`
   - `emailReminderEnabled`, `emailReminderDaysBefore?`
-  - `completedAt?`, `completedByUserId?`, `evidence?[]`
+  - `completedAt?`, `completedByUserId?`, `completedByLabel?`, `evidence?[]`
   - `isArchived`, `archivedAt?`, `createdAt`, `updatedAt`
 - `TaskState`
-  - `Record<taskInstanceId, { status, completedAt?, completedByUserId?, completedByLabel?, evidence?[], updatedAt }>`
-- `Evidence`
-  - `id`, `note?`, `outcome?`, `attachments[]`, `createdAt`, `createdByUserId?`, `createdByLabel?`
-- `Notifications`
-  - `id`, `type`, `title`, `body?`, `entityType?`, `entityId?`, `taskInstanceId?`, `dueDate?`, `createdAt`, `dismissedAt?`, `snoozedUntil?`
+  - `Record<taskInstanceId, { status, completedAt?, completedByUserId?, completedByLabel?, evidence?[], updatedAt, createdAt? }>`
+- `LocalAuditLog`
+  - browserlokale UI-Historie: `id`, `at`, `actorLabel`, `entityType`, `entityId`, `action`, `summary`
+- `LocalInAppNotifications`
+  - browserlokale In-App-Reminder: `id`, `type`, `title`, `body?`, `entityType?`, `entityId?`, `taskInstanceId?`, `dueDate?`, `createdAt`, `dismissedAt?`, `snoozedUntil?`
 
-## Export Payload
+## Wichtige Abgrenzungen
+
+- `Project.status` und `Project.submissionType` sind getrennte Felder.
+- Projekt-Checklisten sind eigene serverseitige Projekt-Subressourcen.
+- Serverseitige E-Mail-Benachrichtigungen laufen ueber `NotificationOutbox`; sie sind nicht identisch mit den browserlokalen In-App-Notifications.
+- Benutzer, Rollen, externe Firmen, globale Security Settings, Notification Settings und serverseitige Notification-Outbox-/Versandhistorie sind server-managed Admin-Domänen und kein Teil des generischen JSON-Exports.
+
+## Generischer Export-Payload
+
+Der generische Export ist ein Teil-Export fuer Recovery/Analyse, kein vollstaendiges Restore- oder Disaster-Recovery-Format.
 
 ```json
 {
   "version": 1,
-  "exportedAt": "2026-02-22T00:00:00.000Z",
+  "exportedAt": "2026-04-23T00:00:00.000Z",
   "app": {
-    "name": "Nemetz Bescheid-Auflagen Prototype",
+    "name": "Nemetz Bescheid-Auflagen",
     "buildLabel": "local"
+  },
+  "meta": {
+    "warnings": [
+      "This JSON export is only a partial recovery artifact.",
+      "Users, roles, external organizations, security settings, notification settings and notification outbox history are intentionally omitted."
+    ],
+    "omittedDomains": [
+      "users",
+      "roles",
+      "externalOrgs",
+      "securitySettings",
+      "notificationSettings",
+      "notificationOutbox"
+    ]
   },
   "data": {
     "scopes": { "companies": [], "sites": [], "facilities": [] },
     "authorities": { "authorities": [], "contacts": [] },
-    "users": [],
     "projects": [],
+    "projectChecklists": [],
     "legalDocs": [],
     "obligations": [],
     "deadlines": [],
     "taskState": {},
     "auditLog": [],
     "notifications": [],
-    "featureFlagsSnapshot": {
-      "enableReports": true,
-      "enableDiagnostics": true,
-      "enableNotifications": true,
-      "enableEvidence": true,
-      "enableRbacDemo": true,
-      "enableCalendarExport": true,
-      "enableAiAnalysis": false
-    }
+    "featureFlagsSnapshot": {}
   }
 }
 ```
 
-## Versioning & Migration
+## Import / Recovery Grenzen
 
-- Persistence und Export sind versioniert (`version` + `timestamp/exportedAt`).
-- `migratePayload(versionFrom, versionTo, value)` in `src/state/persistence.ts` fuehrt Feld-Migrationen aus.
-- Import-Validation laeuft in `src/state/importExport/validateImport.ts` (Errors + Warnings vor Confirm).
+- Der generische Gesamt-Import ist derzeit gesperrt, weil mehrere serverseitige Domänen sonst nicht atomar ersetzt wuerden.
+- Datei-Metadaten koennen exportiert werden; lokale Datei-Inhalte muessen nach einem Import ggf. neu hochgeladen werden.
+- Der ErrorBoundary-Reset betrifft nur lokale Browserdaten zur Fehlerisolierung.
+
+## Versioning
+
+- Export und lokale UI-Persistenz bleiben versioniert ueber `version`.
+- Import-Validation liegt in `src/state/importExport/validateImport.ts`.
+- Fuer migrierte Fachdomänen ersetzt Versionierung keine serverseitige Migrations- oder Restore-Strategie.

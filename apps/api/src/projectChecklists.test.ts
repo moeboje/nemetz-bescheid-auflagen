@@ -103,6 +103,7 @@ describe("Project checklists", () => {
       databaseUrl: resolveDatabaseUrl(process.env, "test"),
       appOrigin: "http://localhost:5173",
       notificationBaseUrl: "http://localhost:5173",
+      legacyRecoveryEndpointsEnabled: true,
       notificationDispatchEnabled: false,
       notificationDryRun: true,
       notificationFromLabel: "Nemetz Portal",
