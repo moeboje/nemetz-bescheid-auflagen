@@ -38,6 +38,7 @@ import {
 } from "./mfa.js";
 import { createEntraStateStore, extractEmailFromClaims, isAllowedEmailDomain } from "./entra.js";
 import {
+  canUseUserLookup,
   describePermission,
   getEditablePermissionCatalog,
   getEditableRolePermissionKeys,
@@ -3061,15 +3062,6 @@ export function createApp(config: AppConfig = loadConfig()) {
         return;
       }
 
-      const passwordValidation = validatePassword(newPassword, {
-        minLength: securitySettings.passwordMinLength,
-        requireNumberOrSpecial: securitySettings.passwordRequireNumberOrSpecial
-      });
-      if (!passwordValidation.valid) {
-        res.status(400).json({ ok: false, message: passwordValidation.message });
-        return;
-      }
-
       const tokenHashValue = hashToken(token);
       const now = new Date();
       const resetToken = await prisma.passwordResetToken.findFirst({
@@ -3087,6 +3079,29 @@ export function createApp(config: AppConfig = loadConfig()) {
 
       if (!resetToken || resetToken.user.isArchived) {
         res.status(400).json({ ok: false, message: "Invalid or expired reset token." });
+        return;
+      }
+
+      if (normalizeTypeValue(resetToken.user.type) === "EXTERNAL" && !securitySettings.allowExternalUsers) {
+        await prisma.passwordResetToken.updateMany({
+          where: {
+            userId: resetToken.userId,
+            usedAt: null
+          },
+          data: {
+            usedAt: now
+          }
+        });
+        res.status(403).json({ ok: false, message: "External users are currently disabled." });
+        return;
+      }
+
+      const passwordValidation = validatePassword(newPassword, {
+        minLength: securitySettings.passwordMinLength,
+        requireNumberOrSpecial: securitySettings.passwordRequireNumberOrSpecial
+      });
+      if (!passwordValidation.valid) {
+        res.status(400).json({ ok: false, message: passwordValidation.message });
         return;
       }
 
@@ -3257,6 +3272,11 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.get("/users/lookup", authMiddleware, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
       if (!assertAuthenticated(req, res)) {
+        return;
+      }
+
+      if (!canUseUserLookup(req.authPermissionKeys ?? [], req.authUser.type)) {
+        res.status(403).json({ ok: false, message: "Forbidden." });
         return;
       }
 

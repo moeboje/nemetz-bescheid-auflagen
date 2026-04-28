@@ -265,6 +265,10 @@ export function hasPermission(permissionKeys: Iterable<string>, key: PermissionK
     return true;
   }
 
+  if (key === "masterData.view" && normalized.has("masterData.manage")) {
+    return true;
+  }
+
   if (key === "authorities.view" && normalized.has("authorities.manage")) {
     return true;
   }
@@ -286,6 +290,10 @@ export function hasPermission(permissionKeys: Iterable<string>, key: PermissionK
 export function normalizeRolePermissionKeys(permissionKeys: PermissionKey[]) {
   const normalized = new Set(permissionKeys);
 
+  if (normalized.has("masterData.manage")) {
+    normalized.add("masterData.view");
+  }
+
   if (normalized.has("authorities.manage")) {
     normalized.add("authorities.view");
   }
@@ -299,6 +307,25 @@ export function normalizeRolePermissionKeys(permissionKeys: PermissionKey[]) {
   }
 
   return PERMISSION_KEYS.filter((permissionKey) => normalized.has(permissionKey));
+}
+
+export function canUseUserLookup(permissionKeys: Iterable<string>, userType: string | null | undefined) {
+  if (String(userType ?? "").trim().toUpperCase() === "EXTERNAL") {
+    return false;
+  }
+
+  return (
+    hasPermission(permissionKeys, "users.view") ||
+    hasPermission(permissionKeys, "users.manage") ||
+    hasPermission(permissionKeys, "projects.create") ||
+    hasPermission(permissionKeys, "projects.edit") ||
+    hasPermission(permissionKeys, "obligations.create") ||
+    hasPermission(permissionKeys, "obligations.edit") ||
+    hasPermission(permissionKeys, "deadlines.create") ||
+    hasPermission(permissionKeys, "deadlines.edit") ||
+    hasPermission(permissionKeys, "tasks.edit") ||
+    hasPermission(permissionKeys, "tasks.complete")
+  );
 }
 
 export function permissionRequiresAdminAccess(permissionKey: PermissionKey) {

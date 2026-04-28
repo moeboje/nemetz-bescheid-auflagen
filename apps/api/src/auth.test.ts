@@ -109,6 +109,36 @@ async function loginWithPassword(email: string, password: string, ip?: string) {
   return response;
 }
 
+async function makeUserExternal(userId: string) {
+  await prisma.user.update({
+    where: {
+      id: userId
+    },
+    data: {
+      role: "EXTERNAL",
+      type: "EXTERNAL"
+    }
+  });
+}
+
+async function requestResetToken(email: string, ip: string) {
+  const forgotResponse = await request("/auth/password/forgot", {
+    method: "POST",
+    ip,
+    body: {
+      email
+    }
+  });
+  assert.equal(forgotResponse.status, 200);
+
+  const notification = await waitForCapturedNotification("PASSWORD_RESET_LINK");
+  const resetLink = String(notification.link ?? "");
+  assert.ok(resetLink, "Expected reset link in notification payload");
+  const token = new URL(resetLink).searchParams.get("token");
+  assert.ok(token, "Expected token in reset link");
+  return token;
+}
+
 describe("Auth API", () => {
   before(async () => {
     notificationServer = http.createServer((req, res) => {
@@ -350,6 +380,55 @@ describe("Auth API", () => {
       cookie: sessionCookie
     });
     assert.equal(authoritiesResponse.status, 200);
+  });
+
+  it("allows master data managers to read scopes through masterData.manage", async () => {
+    const role = await prisma.role.create({
+      data: {
+        key: "MASTER_DATA_MANAGER",
+        labelDe: "Stammdatenmanager",
+        isSystem: false
+      }
+    });
+    await setStoredRolePermissionKeys(prisma, role.key, ["masterData.manage"]);
+
+    await createUser("master-data-manager@example.com", "ValidPassword1!");
+    await prisma.user.update({
+      where: {
+        email: "master-data-manager@example.com"
+      },
+      data: {
+        role: role.key,
+        type: "INTERNAL"
+      }
+    });
+
+    const loginResponse = await request("/auth/login", {
+      method: "POST",
+      ip: "127.0.0.230",
+      body: {
+        email: "master-data-manager@example.com",
+        password: "ValidPassword1!"
+      }
+    });
+
+    assert.equal(loginResponse.status, 200);
+    const sessionCookie = extractSessionCookie(loginResponse.headers.get("set-cookie"));
+    assert.ok(sessionCookie, "Expected session cookie");
+
+    const meResponse = await request("/auth/me", {
+      cookie: sessionCookie
+    });
+
+    assert.equal(meResponse.status, 200);
+    const mePayload = (await meResponse.json()) as { user: { effectivePermissions: string[] } };
+    assert.equal(mePayload.user.effectivePermissions.includes("masterData.manage"), true);
+    assert.equal(mePayload.user.effectivePermissions.includes("masterData.view"), true);
+
+    const scopesResponse = await request("/scopes", {
+      cookie: sessionCookie
+    });
+    assert.equal(scopesResponse.status, 200);
   });
 
   it("me requires auth", async () => {
@@ -642,6 +721,259 @@ describe("Auth API", () => {
       }
     });
     assert.equal(newPasswordLogin.status, 200);
+  });
+
+  it("blocks external password reset links when external users are disabled", async () => {
+    const admin = await createUser("external-reset-admin@example.com", "ValidPassword1!");
+    const externalUser = await createUser("external-reset@example.com", "ValidPassword1!");
+    await prisma.user.update({
+      where: {
+        id: externalUser.id
+      },
+      data: {
+        role: "EXTERNAL",
+        type: "EXTERNAL"
+      }
+    });
+
+    const forgotResponse = await request("/auth/password/forgot", {
+      method: "POST",
+      ip: "127.0.0.215",
+      body: {
+        email: "external-reset@example.com"
+      }
+    });
+    assert.equal(forgotResponse.status, 200);
+
+    const notification = await waitForCapturedNotification("PASSWORD_RESET_LINK");
+    const resetLink = String(notification.link ?? "");
+    const token = new URL(resetLink).searchParams.get("token");
+    assert.ok(token, "Expected token in reset link");
+
+    const adminCookie = await loginWithPassword(admin.email, "ValidPassword1!", "127.0.0.216").then((response) =>
+      extractSessionCookie(response.headers.get("set-cookie"))
+    );
+    assert.ok(adminCookie);
+
+    const disableResponse = await request("/admin/security", {
+      method: "PATCH",
+      cookie: adminCookie,
+      body: {
+        allowExternalUsers: false
+      }
+    });
+    assert.equal(disableResponse.status, 200);
+
+    const resetResponse = await request("/auth/password/reset", {
+      method: "POST",
+      ip: "127.0.0.217",
+      body: {
+        token,
+        newPassword: "ExternalResetPassword2!"
+      }
+    });
+    assert.equal(resetResponse.status, 403);
+
+    const activeTokens = await prisma.passwordResetToken.count({
+      where: {
+        userId: externalUser.id,
+        usedAt: null
+      }
+    });
+    assert.equal(activeTokens, 0);
+  });
+
+  it("consumes external reset tokens before password validation when external users are disabled", async () => {
+    const admin = await createUser("external-invalid-reset-admin@example.com", "ValidPassword1!");
+    const externalUser = await createUser("external-invalid-reset@example.com", "ValidPassword1!");
+    await makeUserExternal(externalUser.id);
+
+    const token = await requestResetToken("external-invalid-reset@example.com", "127.0.0.220");
+
+    const adminCookie = await loginWithPassword(admin.email, "ValidPassword1!", "127.0.0.221").then((response) =>
+      extractSessionCookie(response.headers.get("set-cookie"))
+    );
+    assert.ok(adminCookie);
+
+    const disableResponse = await request("/admin/security", {
+      method: "PATCH",
+      cookie: adminCookie,
+      body: {
+        allowExternalUsers: false
+      }
+    });
+    assert.equal(disableResponse.status, 200);
+
+    const resetResponse = await request("/auth/password/reset", {
+      method: "POST",
+      ip: "127.0.0.222",
+      body: {
+        token,
+        newPassword: "short"
+      }
+    });
+    assert.equal(resetResponse.status, 403);
+    const resetPayload = (await resetResponse.json()) as { message?: string };
+    assert.equal(resetPayload.message, "External users are currently disabled.");
+
+    const usedToken = await prisma.passwordResetToken.findUniqueOrThrow({
+      where: {
+        tokenHash: hashToken(token)
+      }
+    });
+    assert.ok(usedToken.usedAt, "Expected disabled external reset to consume token");
+
+    const enableResponse = await request("/admin/security", {
+      method: "PATCH",
+      cookie: adminCookie,
+      body: {
+        allowExternalUsers: true
+      }
+    });
+    assert.equal(enableResponse.status, 200);
+
+    const retryResponse = await request("/auth/password/reset", {
+      method: "POST",
+      ip: "127.0.0.223",
+      body: {
+        token,
+        newPassword: "ExternalResetPassword2!"
+      }
+    });
+    assert.equal(retryResponse.status, 400);
+    const retryPayload = (await retryResponse.json()) as { message?: string };
+    assert.equal(retryPayload.message, "Invalid or expired reset token.");
+  });
+
+  it("keeps internal reset tokens usable after password policy errors", async () => {
+    await createUser("internal-invalid-reset@example.com", "ValidPassword1!");
+    const token = await requestResetToken("internal-invalid-reset@example.com", "127.0.0.224");
+
+    const resetResponse = await request("/auth/password/reset", {
+      method: "POST",
+      ip: "127.0.0.225",
+      body: {
+        token,
+        newPassword: "short"
+      }
+    });
+    assert.equal(resetResponse.status, 400);
+    const resetPayload = (await resetResponse.json()) as { message?: string };
+    assert.match(resetPayload.message ?? "", /Password must be at least/);
+
+    const activeToken = await prisma.passwordResetToken.findUniqueOrThrow({
+      where: {
+        tokenHash: hashToken(token)
+      }
+    });
+    assert.equal(activeToken.usedAt, null);
+
+    const retryResponse = await request("/auth/password/reset", {
+      method: "POST",
+      ip: "127.0.0.226",
+      body: {
+        token,
+        newPassword: "InternalResetPassword2!"
+      }
+    });
+    assert.equal(retryResponse.status, 200);
+  });
+
+  it("allows external password reset links while external users are enabled", async () => {
+    const externalUser = await createUser("external-enabled-reset@example.com", "ValidPassword1!");
+    await makeUserExternal(externalUser.id);
+
+    const token = await requestResetToken("external-enabled-reset@example.com", "127.0.0.227");
+    const resetResponse = await request("/auth/password/reset", {
+      method: "POST",
+      ip: "127.0.0.228",
+      body: {
+        token,
+        newPassword: "ExternalEnabledPassword2!"
+      }
+    });
+    assert.equal(resetResponse.status, 200);
+
+    const loginResponse = await request("/auth/login", {
+      method: "POST",
+      ip: "127.0.0.229",
+      body: {
+        email: "external-enabled-reset@example.com",
+        password: "ExternalEnabledPassword2!"
+      }
+    });
+    assert.equal(loginResponse.status, 200);
+  });
+
+  it("keeps archived users blocked during password reset", async () => {
+    const user = await createUser("archived-reset-token@example.com", "ValidPassword1!");
+    const token = await requestResetToken("archived-reset-token@example.com", "127.0.0.231");
+
+    await prisma.user.update({
+      where: {
+        id: user.id
+      },
+      data: {
+        isArchived: true
+      }
+    });
+
+    const resetResponse = await request("/auth/password/reset", {
+      method: "POST",
+      ip: "127.0.0.232",
+      body: {
+        token,
+        newPassword: "ArchivedResetPassword2!"
+      }
+    });
+    assert.equal(resetResponse.status, 400);
+    const resetPayload = (await resetResponse.json()) as { message?: string };
+    assert.equal(resetPayload.message, "Invalid or expired reset token.");
+  });
+
+  it("does not create new external reset tokens when external users are disabled", async () => {
+    const admin = await createUser("external-forgot-admin@example.com", "ValidPassword1!");
+    const externalUser = await createUser("external-forgot@example.com", "ValidPassword1!");
+    await prisma.user.update({
+      where: {
+        id: externalUser.id
+      },
+      data: {
+        role: "EXTERNAL",
+        type: "EXTERNAL"
+      }
+    });
+
+    const adminCookie = await loginWithPassword(admin.email, "ValidPassword1!", "127.0.0.218").then((response) =>
+      extractSessionCookie(response.headers.get("set-cookie"))
+    );
+    assert.ok(adminCookie);
+
+    const disableResponse = await request("/admin/security", {
+      method: "PATCH",
+      cookie: adminCookie,
+      body: {
+        allowExternalUsers: false
+      }
+    });
+    assert.equal(disableResponse.status, 200);
+
+    const forgotResponse = await request("/auth/password/forgot", {
+      method: "POST",
+      ip: "127.0.0.219",
+      body: {
+        email: "external-forgot@example.com"
+      }
+    });
+    assert.equal(forgotResponse.status, 200);
+
+    const tokenCount = await prisma.passwordResetToken.count({
+      where: {
+        userId: externalUser.id
+      }
+    });
+    assert.equal(tokenCount, 0);
+    assert.equal(capturedNotifications.some((entry) => entry.eventType === "PASSWORD_RESET_LINK"), false);
   });
 
   it("supports MFA setup, confirm and verify during login", async () => {

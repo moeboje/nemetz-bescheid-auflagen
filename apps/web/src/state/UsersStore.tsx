@@ -137,6 +137,30 @@ function mergeUser(existing: User, incoming: User) {
   };
 }
 
+function hasAnyPermission(permissionKeys: string[], keys: string[]) {
+  return keys.some((key) => permissionKeys.includes(key));
+}
+
+function canUseUserLookup(authUser: User) {
+  if (authUser.type === "EXTERNAL") {
+    return false;
+  }
+
+  const permissionKeys = Array.isArray(authUser.effectivePermissions) ? authUser.effectivePermissions : [];
+  return hasAnyPermission(permissionKeys, [
+    "users.view",
+    "users.manage",
+    "projects.create",
+    "projects.edit",
+    "obligations.create",
+    "obligations.edit",
+    "deadlines.create",
+    "deadlines.edit",
+    "tasks.edit",
+    "tasks.complete"
+  ]);
+}
+
 export function UsersProvider({ children }: { children: React.ReactNode }) {
   const { user: authUser } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
@@ -147,9 +171,14 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
       return [];
     }
 
-    const canManageUsers =
-      Array.isArray(authUser.effectivePermissions) &&
-      authUser.effectivePermissions.includes("users.manage");
+    if (!canUseUserLookup(authUser)) {
+      const fallbackUsers = sortUsers([authUser]);
+      setUsers(fallbackUsers);
+      return fallbackUsers;
+    }
+
+    const permissionKeys = Array.isArray(authUser.effectivePermissions) ? authUser.effectivePermissions : [];
+    const canManageUsers = permissionKeys.includes("admin.access") && permissionKeys.includes("users.manage");
 
     const nextUsers = canManageUsers
       ? await listUsers({ includeArchived: true })

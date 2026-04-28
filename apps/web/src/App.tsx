@@ -152,6 +152,7 @@ function AppLayout() {
   const safeMode = isSafeModeActive(location.search);
   const reportsEnabled = runtimeConfig.features.enableReports;
   const notificationsEnabled = runtimeConfig.features.enableNotifications;
+  const canAccessReports = reportsEnabled && permissions.canViewReports && permissions.canViewTasks;
   const currentAccountUser = user ?? currentUser;
   const canAccessLegacyAdmin =
     hasPermission("admin.access") &&
@@ -171,7 +172,7 @@ function AppLayout() {
     hasPermission("deadlines.archive") &&
     hasPermission("tasks.edit") &&
     hasPermission("tasks.complete");
-  const restrictedFallback = currentAccountUser?.isExternal
+  const restrictedFallback = currentAccountUser?.isExternal && permissions.canViewTasks
     ? `${MODULE_BASE_PATH}/tasks`
     : `${MODULE_BASE_PATH}/dashboard`;
   const accountPath = `${MODULE_BASE_PATH}/account`;
@@ -299,7 +300,7 @@ function AppLayout() {
       label: t("nav.tasks"),
       path: `${MODULE_BASE_PATH}/tasks`,
       icon: <TasksIcon />,
-      visible: true
+      visible: permissions.canViewTasks
     },
     {
       key: "deadlines",
@@ -320,7 +321,7 @@ function AppLayout() {
       label: t("nav.reports"),
       path: `${MODULE_BASE_PATH}/reports`,
       icon: <DashboardIcon />,
-      visible: reportsEnabled && permissions.canViewReports
+      visible: canAccessReports
     },
     {
       key: "notifications",
@@ -350,7 +351,7 @@ function AppLayout() {
   }
 
   if (isTasksReportPrintRoute(location.pathname)) {
-    if (!reportsEnabled) {
+    if (!canAccessReports) {
       return <Navigate to={restrictedFallback} replace />;
     }
     return <TasksReportPrintPage />;
@@ -519,8 +520,14 @@ function AppLayout() {
             path="obligations/:id"
             element={permissions.canViewObligations ? <ObligationDetailPage /> : <Navigate to={restrictedFallback} replace />}
           />
-          <Route path="tasks" element={<TasksPage />} />
-          <Route path="tasks/:id" element={<TaskDetailPage />} />
+          <Route
+            path="tasks"
+            element={permissions.canViewTasks ? <TasksPage /> : <Navigate to={restrictedFallback} replace />}
+          />
+          <Route
+            path="tasks/:id"
+            element={permissions.canViewTasks ? <TaskDetailPage /> : <Navigate to={restrictedFallback} replace />}
+          />
           <Route
             path="deadlines"
             element={permissions.canViewDeadlines ? <DeadlinesPage /> : <Navigate to={restrictedFallback} replace />}
@@ -572,7 +579,7 @@ function AppLayout() {
           <Route path="compliance-summary" element={<ComplianceSummaryPage />} />
           <Route
             path="reports"
-            element={reportsEnabled && permissions.canViewReports ? <ReportsPage /> : <Navigate to={restrictedFallback} replace />}
+            element={canAccessReports ? <ReportsPage /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route
             path="notifications"
@@ -608,8 +615,14 @@ function AppLayout() {
           path="/obligations/:id"
           element={permissions.canViewObligations ? <ObligationDetailPage /> : <Navigate to={restrictedFallback} replace />}
         />
-        <Route path="/tasks" element={<TasksPage />} />
-        <Route path="/tasks/:id" element={<TaskDetailPage />} />
+        <Route
+          path="/tasks"
+          element={permissions.canViewTasks ? <TasksPage /> : <Navigate to={restrictedFallback} replace />}
+        />
+        <Route
+          path="/tasks/:id"
+          element={permissions.canViewTasks ? <TaskDetailPage /> : <Navigate to={restrictedFallback} replace />}
+        />
         <Route
           path="/deadlines"
           element={permissions.canViewDeadlines ? <DeadlinesPage /> : <Navigate to={restrictedFallback} replace />}
@@ -661,7 +674,7 @@ function AppLayout() {
         <Route path="/compliance-summary" element={<ComplianceSummaryPage />} />
         <Route
           path="/reports"
-          element={reportsEnabled && permissions.canViewReports ? <ReportsPage /> : <Navigate to={restrictedFallback} replace />}
+          element={canAccessReports ? <ReportsPage /> : <Navigate to={restrictedFallback} replace />}
         />
         <Route
           path="/notifications"
