@@ -224,6 +224,15 @@ function clearLegacyTaskState() {
   clearPersistedValue(STORAGE_KEYS.taskState);
 }
 
+function canAccessTaskState(authUser: ReturnType<typeof useAuth>["user"]) {
+  return (
+    Boolean(authUser) &&
+    authUser?.type !== "EXTERNAL" &&
+    Array.isArray(authUser?.effectivePermissions) &&
+    authUser.effectivePermissions.includes("tasks.view")
+  );
+}
+
 export function TaskStateProvider({ children }: { children: React.ReactNode }) {
   const { user: authUser } = useAuth();
   const { logEvent } = useAuditLog();
@@ -240,7 +249,7 @@ export function TaskStateProvider({ children }: { children: React.ReactNode }) {
   const reloadTaskState = useCallback(async () => {
     const legacyTaskState = readLegacyTaskState();
 
-    if (!authUser || authUser.type === "EXTERNAL") {
+    if (!canAccessTaskState(authUser)) {
       setTaskState({});
       legacyCleanupReadyRef.current = false;
       return {};
@@ -279,7 +288,7 @@ export function TaskStateProvider({ children }: { children: React.ReactNode }) {
   }, [authUser]);
 
   useEffect(() => {
-    if (!authUser || authUser.type === "EXTERNAL") {
+    if (!canAccessTaskState(authUser)) {
       setTaskState({});
       legacyCleanupReadyRef.current = false;
       return;

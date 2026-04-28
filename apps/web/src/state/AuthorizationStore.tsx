@@ -28,6 +28,7 @@ export type AuthorizationPermissions = {
   canViewLegalDocs: boolean;
   canViewObligations: boolean;
   canViewDeadlines: boolean;
+  canViewTasks: boolean;
   canViewScopes: boolean;
   canViewReports: boolean;
 };
@@ -113,6 +114,7 @@ export function AuthorizationProvider({ children }: { children: React.ReactNode 
         canViewLegalDocs: hasPermission("legalDocs.view"),
         canViewObligations: hasPermission("obligations.view"),
         canViewDeadlines: hasPermission("deadlines.view"),
+        canViewTasks: hasPermission("tasks.view"),
         canViewScopes: hasPermission("masterData.view") || hasPermission("masterData.manage"),
         canViewReports: hasPermission("reports.view")
       },

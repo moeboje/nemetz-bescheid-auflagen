@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { createApp } from "./app.js";
 import { resolveDatabaseUrl, type AppConfig } from "./config.js";
 import { prisma } from "./prisma.js";
-import { getStoredRolePermissionKeys } from "./rolePermissions.js";
+import { getStoredRolePermissionKeys, setStoredRolePermissionKeys } from "./rolePermissions.js";
 import { hashPassword, verifyPassword } from "./security.js";
 
 let baseUrl = "";
@@ -229,6 +229,64 @@ describe("Admin Users API", () => {
     assert.equal(allPayload.total, 1);
     assert.equal(allPayload.items[0]?.email, "archived-user@example.com");
     assert.equal(allPayload.items[0]?.isArchived, true);
+  });
+
+  it("restricts user lookup to internal users with directory or assignment permissions", async () => {
+    const assignmentRole = await prisma.role.create({
+      data: {
+        key: "ASSIGNMENT_EDITOR",
+        labelDe: "Assignment Editor",
+        isSystem: false
+      }
+    });
+    await setStoredRolePermissionKeys(prisma, assignmentRole.key, ["projects.edit"]);
+
+    const admin = await createUser({
+      email: "lookup-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const readOnlyUser = await createUser({
+      email: "lookup-readonly@example.com",
+      password: "ValidPassword1!",
+      role: "READ_ONLY"
+    });
+    const assignmentUser = await createUser({
+      email: "lookup-assignment@example.com",
+      password: "ValidPassword1!",
+      role: assignmentRole.key
+    });
+    const externalUser = await createUser({
+      email: "lookup-external@example.com",
+      password: "ValidPassword1!",
+      role: "EXTERNAL",
+      type: "EXTERNAL"
+    });
+
+    const readOnlyCookie = await login(readOnlyUser.email, "ValidPassword1!");
+    const externalCookie = await login(externalUser.email, "ValidPassword1!");
+    const adminCookie = await login(admin.email, "ValidPassword1!");
+    const assignmentCookie = await login(assignmentUser.email, "ValidPassword1!");
+
+    const readOnlyResponse = await request("/users/lookup", {
+      cookie: readOnlyCookie
+    });
+    assert.equal(readOnlyResponse.status, 403);
+
+    const externalResponse = await request("/users/lookup", {
+      cookie: externalCookie
+    });
+    assert.equal(externalResponse.status, 403);
+
+    const adminResponse = await request("/users/lookup", {
+      cookie: adminCookie
+    });
+    assert.equal(adminResponse.status, 200);
+
+    const assignmentResponse = await request("/users/lookup", {
+      cookie: assignmentCookie
+    });
+    assert.equal(assignmentResponse.status, 200);
   });
 
   it("non-admin gets 403 on admin users endpoints", async () => {

@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useMemo } from "react";
 import { useDeadlines } from "./DeadlinesStore";
+import { useAuthorization } from "./AuthorizationStore";
 import { useLegalDocs } from "./LegalDocsStore";
 import { useObligations } from "./ObligationsStore";
 import { useProjects } from "./ProjectsStore";
@@ -184,6 +185,7 @@ export type TasksContextValue = {
 const TasksContext = createContext<TasksContextValue | undefined>(undefined);
 
 export function TasksProvider({ children }: { children: React.ReactNode }) {
+  const { permissions } = useAuthorization();
   const { obligations } = useObligations();
   const {
     deadlines,
@@ -204,6 +206,9 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
 
   const setTaskStatus = useCallback(
     (taskId: string, status: TaskStatusInput) => {
+      if (!permissions.canViewTasks) {
+        return;
+      }
       const deadlineId = parseDeadlineTaskId(taskId);
       if (deadlineId) {
         if (status === "DONE") {
@@ -215,7 +220,7 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
       }
       setObligationTaskStatus(taskId, status);
     },
-    [markDeadlineDone, reopenDeadline, setObligationTaskStatus]
+    [markDeadlineDone, permissions.canViewTasks, reopenDeadline, setObligationTaskStatus]
   );
 
   const markTaskDone = useCallback(
@@ -228,6 +233,9 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
       taskId: string,
       input: { note?: string; outcome?: EvidenceOutcome; attachments: AttachmentMeta[] }
     ) => {
+      if (!permissions.canViewTasks) {
+        return;
+      }
       const deadlineId = parseDeadlineTaskId(taskId);
       if (deadlineId) {
         markDeadlineDoneWithEvidence(deadlineId, input);
@@ -235,7 +243,7 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
       }
       markObligationDoneWithEvidence(taskId, input);
     },
-    [markDeadlineDoneWithEvidence, markObligationDoneWithEvidence]
+    [markDeadlineDoneWithEvidence, markObligationDoneWithEvidence, permissions.canViewTasks]
   );
 
   const reopenTask = useCallback(
@@ -244,6 +252,10 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
   );
 
   const tasks = useMemo<Task[]>(() => {
+    if (!permissions.canViewTasks) {
+      return [];
+    }
+
     const obligationSeeds = generateTasksFromObligations(obligations, TASK_HORIZON_DAYS);
     const deadlineSeeds = generateTasksFromDeadlines(deadlines);
     const seeds = [...obligationSeeds, ...deadlineSeeds];
@@ -374,6 +386,7 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
     getUser,
     legalDocs,
     obligations,
+    permissions.canViewTasks,
     projects,
     taskState
   ]);

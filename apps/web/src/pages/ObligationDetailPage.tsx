@@ -243,52 +243,56 @@ export default function ObligationDetailPage() {
         <div className="metaValue">{obligation.infoTextLong || t("common.notAvailable")}</div>
       </Card>
 
-      <Card>
-        <h2 className="sectionTitle">{t("obligations.detail.taskPreview")}</h2>
-        {taskPreview.length ? (
-          <div className="timeline">
-            {taskPreview.map((task) => (
-              <div key={task.id} className="timelineItem">
-                <div className="metaLabel">{task.dueDate}</div>
-                <div className="metaValue">{t("obligations.detail.generatedTask")}</div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="placeholderText">{t("obligations.detail.noTasks")}</p>
-        )}
-      </Card>
+      {permissions.canViewTasks ? (
+        <Card>
+          <h2 className="sectionTitle">{t("obligations.detail.taskPreview")}</h2>
+          {taskPreview.length ? (
+            <div className="timeline">
+              {taskPreview.map((task) => (
+                <div key={task.id} className="timelineItem">
+                  <div className="metaLabel">{task.dueDate}</div>
+                  <div className="metaValue">{t("obligations.detail.generatedTask")}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="placeholderText">{t("obligations.detail.noTasks")}</p>
+          )}
+        </Card>
+      ) : null}
 
       <Card>
         <h2 className="sectionTitle">{t("obligations.detail.history")}</h2>
         <AuditTimeline entries={historyEntries} />
       </Card>
 
-      <Card>
-        <div className="sectionHeader">
-          <h2 className="sectionTitle">{t("obligations.detail.latestEvidence")}</h2>
-          <Button
-            variant="secondary"
-            onClick={() => navigate(`/tasks?obligationId=${obligation.id}`)}
-          >
-            {t("obligations.detail.openTasksFiltered")}
-          </Button>
-        </div>
-        {latestEvidence.length ? (
-          <div className="timeline">
-            {latestEvidence.map((item) => (
-              <div key={`${item.instanceId}-${item.createdAt}`} className="timelineItem">
-                <div className="metaLabel">{item.createdAt.slice(0, 16).replace("T", " ")}</div>
-                <div className="metaValue">
-                  {item.dueDate} · {item.summary}
-                </div>
-              </div>
-            ))}
+      {permissions.canViewTasks ? (
+        <Card>
+          <div className="sectionHeader">
+            <h2 className="sectionTitle">{t("obligations.detail.latestEvidence")}</h2>
+            <Button
+              variant="secondary"
+              onClick={() => navigate(`/tasks?obligationId=${obligation.id}`)}
+            >
+              {t("obligations.detail.openTasksFiltered")}
+            </Button>
           </div>
-        ) : (
-          <p className="placeholderText">{t("obligations.detail.noEvidence")}</p>
-        )}
-      </Card>
+          {latestEvidence.length ? (
+            <div className="timeline">
+              {latestEvidence.map((item) => (
+                <div key={`${item.instanceId}-${item.createdAt}`} className="timelineItem">
+                  <div className="metaLabel">{item.createdAt.slice(0, 16).replace("T", " ")}</div>
+                  <div className="metaValue">
+                    {item.dueDate} · {item.summary}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="placeholderText">{t("obligations.detail.noEvidence")}</p>
+          )}
+        </Card>
+      ) : null}
 
       <ObligationModal
         open={modalOpen}
