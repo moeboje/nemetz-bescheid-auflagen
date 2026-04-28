@@ -122,46 +122,50 @@ export default function ScopeInlineCreateModal({
   const canRestore = Boolean(!contextError && !nameError && archivedDuplicate);
   const isCreateDisabled = Boolean(isSubmitting || contextError || nameError || archivedDuplicate);
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (isCreateDisabled) {
       return;
     }
 
     setIsSubmitting(true);
 
-    if (mode === "SITE") {
-      const createdSiteId = addSite({ companyId, name: trimmedName });
-      setIsSubmitting(false);
-      onCreated({ siteId: createdSiteId });
-      return;
-    }
+    try {
+      if (mode === "SITE") {
+        const createdSiteId = await addSite({ companyId, name: trimmedName });
+        onCreated({ siteId: createdSiteId });
+        return;
+      }
 
-    if (!siteId) {
-      setIsSubmitting(false);
-      return;
-    }
+      if (!siteId) {
+        return;
+      }
 
-    const createdFacilityId = addFacility({ companyId, siteId, name: trimmedName });
-    setIsSubmitting(false);
-    onCreated({ facilityId: createdFacilityId });
+      const createdFacilityId = await addFacility({ companyId, siteId, name: trimmedName });
+      onCreated({ facilityId: createdFacilityId });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleRestore = () => {
+  const handleRestore = async () => {
     if (!canRestore || !archivedDuplicate) {
       return;
     }
 
     setIsSubmitting(true);
-    if (mode === "SITE") {
-      restoreSite(archivedDuplicate.id);
-      setIsSubmitting(false);
-      onCreated({ siteId: archivedDuplicate.id });
-      return;
-    }
 
-    restoreFacility(archivedDuplicate.id);
-    setIsSubmitting(false);
-    onCreated({ facilityId: archivedDuplicate.id });
+    try {
+      if (mode === "SITE") {
+        await restoreSite(archivedDuplicate.id);
+        onCreated({ siteId: archivedDuplicate.id });
+        return;
+      }
+
+      await restoreFacility(archivedDuplicate.id);
+      onCreated({ facilityId: archivedDuplicate.id });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -169,6 +173,7 @@ export default function ScopeInlineCreateModal({
       open={open}
       onClose={onCancel}
       closeAriaLabel={t("modal.close")}
+      mobileFullscreen
       header={
         mode === "SITE"
           ? t("projects.inlineCreate.site.title")

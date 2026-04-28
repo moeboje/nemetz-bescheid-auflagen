@@ -41,6 +41,7 @@ export default function EvidenceListModal({
       open={open}
       onClose={onClose}
       closeAriaLabel={t("modal.close")}
+      mobileFullscreen
       header={title}
       footer={
         <div className="modalFooter">

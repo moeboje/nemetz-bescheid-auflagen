@@ -298,7 +298,7 @@ export default function LegalDocModal({
       setReviewOpen(true);
 
       if (legalDoc) {
-        updateLegalDoc(legalDoc.id, { aiExtraction: result });
+        void updateLegalDoc(legalDoc.id, { aiExtraction: result });
       }
 
       logEvent({
@@ -322,7 +322,7 @@ export default function LegalDocModal({
     }
   };
 
-  const persistLegalDoc = (
+  const persistLegalDoc = async (
     payload: AiReviewAcceptedPayload,
     result: AiAnalysisResult
   ) => {
@@ -350,7 +350,7 @@ export default function LegalDocModal({
 
     let authorityId = payload.meta.authorityId || form.authorityId || undefined;
     if (!authorityId && payload.meta.createAuthority && payload.meta.authorityName) {
-      const createdAuthority = addAuthority({
+      const createdAuthority = await addAuthority({
         name: payload.meta.authorityName,
         shortName: ""
       });
@@ -364,7 +364,7 @@ export default function LegalDocModal({
       authorityId &&
       payload.meta.authorityContactName
     ) {
-      const createdContact = addContact({
+      const createdContact = await addContact({
         authorityId,
         name: payload.meta.authorityContactName,
         email: payload.meta.authorityContactEmail,
@@ -388,50 +388,57 @@ export default function LegalDocModal({
       scopeOverride
     };
 
-    const savedDocId = legalDoc?.id ?? addLegalDoc(legalDocPayload).id;
+    const savedDoc = legalDoc
+      ? await updateLegalDoc(legalDoc.id, legalDocPayload)
+      : await addLegalDoc(legalDocPayload);
 
-    if (legalDoc) {
-      updateLegalDoc(legalDoc.id, legalDocPayload);
+    if (!savedDoc) {
+      setAnalysisError(t("ai.errors.server"));
+      return;
     }
+
+    const savedDocId = savedDoc.id;
 
     const acceptedObligationIds = new Set(payload.obligations.map((obligation) => obligation.id));
 
-    payload.obligations.forEach((obligation) => {
-      const interval = getObligationInterval(obligation.interval);
-      addObligation({
-        legalDocId: savedDocId,
-        title: obligation.title,
-        infoTextLong: obligation.longDescription ?? "",
-        level: obligation.dutyLevel === "RECOMMENDED" ? "RECOMMENDED" : "MANDATORY",
-        scheduleType: obligation.scheduling === "RECURRING" ? "RECURRING" : "ONCE",
-        firstDueDate: obligation.firstDueDate || undefined,
-        intervalUnit: obligation.scheduling === "RECURRING" ? interval.intervalUnit : undefined,
-        intervalValue: obligation.scheduling === "RECURRING" ? interval.intervalValue : undefined,
-        ownerUserId: undefined,
-        deputyUserId: undefined,
-        origin: "AI_ACCEPTED",
-        sourceSuggestionId: obligation.id,
-        sourceRunId: result.id,
-        criticality: undefined,
-        emailReminderEnabled: Boolean(obligation.reminder?.emailEnabled),
-        emailReminderDaysBefore: obligation.reminder?.emailEnabled
-          ? defaultReminderDays(obligation)
-          : undefined,
-        evidenceRequirements: {
-          ...cloneDefaultObligationEvidenceRequirements(),
-          requirePhoto: Boolean(obligation.evidenceRequirements?.requirePhoto),
-          requireDocument: Boolean(obligation.evidenceRequirements?.requireDocument),
-          requireReport: Boolean(obligation.evidenceRequirements?.requireReport)
-        }
-      });
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "OBLIGATION",
-        entityId: obligation.id,
-        action: "AI_SUGGESTION_ACCEPTED",
-        summary: obligation.title
-      });
-    });
+    await Promise.all(
+      payload.obligations.map(async (obligation) => {
+        const interval = getObligationInterval(obligation.interval);
+        await addObligation({
+          legalDocId: savedDocId,
+          title: obligation.title,
+          infoTextLong: obligation.longDescription ?? "",
+          level: obligation.dutyLevel === "RECOMMENDED" ? "RECOMMENDED" : "MANDATORY",
+          scheduleType: obligation.scheduling === "RECURRING" ? "RECURRING" : "ONCE",
+          firstDueDate: obligation.firstDueDate || undefined,
+          intervalUnit: obligation.scheduling === "RECURRING" ? interval.intervalUnit : undefined,
+          intervalValue: obligation.scheduling === "RECURRING" ? interval.intervalValue : undefined,
+          ownerUserId: undefined,
+          deputyUserId: undefined,
+          origin: "AI_ACCEPTED",
+          sourceSuggestionId: obligation.id,
+          sourceRunId: result.id,
+          criticality: undefined,
+          emailReminderEnabled: Boolean(obligation.reminder?.emailEnabled),
+          emailReminderDaysBefore: obligation.reminder?.emailEnabled
+            ? defaultReminderDays(obligation)
+            : undefined,
+          evidenceRequirements: {
+            ...cloneDefaultObligationEvidenceRequirements(),
+            requirePhoto: Boolean(obligation.evidenceRequirements?.requirePhoto),
+            requireDocument: Boolean(obligation.evidenceRequirements?.requireDocument),
+            requireReport: Boolean(obligation.evidenceRequirements?.requireReport)
+          }
+        });
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "OBLIGATION",
+          entityId: obligation.id,
+          action: "AI_SUGGESTION_ACCEPTED",
+          summary: obligation.title
+        });
+      })
+    );
 
     result.obligations.forEach((obligation) => {
       if (!acceptedObligationIds.has(obligation.id)) {
@@ -471,7 +478,7 @@ export default function LegalDocModal({
     onClose();
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const scopeOverride = form.scopeOverrideEnabled
       ? {
           companyId: form.scopeCompanyId,
@@ -481,7 +488,7 @@ export default function LegalDocModal({
       : undefined;
 
     if (legalDoc) {
-      updateLegalDoc(legalDoc.id, {
+      const updated = await updateLegalDoc(legalDoc.id, {
         projectId: form.projectId,
         type: form.type,
         title: form.title,
@@ -494,8 +501,11 @@ export default function LegalDocModal({
         aiExtraction: analysisResult,
         scopeOverride
       });
+      if (!updated) {
+        return;
+      }
     } else {
-      addLegalDoc({
+      const created = await addLegalDoc({
         projectId: form.projectId,
         type: form.type,
         title: form.title,
@@ -508,6 +518,9 @@ export default function LegalDocModal({
         aiExtraction: analysisResult,
         scopeOverride
       });
+      if (!created) {
+        return;
+      }
     }
     onClose();
   };
@@ -518,6 +531,7 @@ export default function LegalDocModal({
         open={open}
         onClose={onClose}
         closeAriaLabel={t("modal.close")}
+        mobileFullscreen
         header={legalDoc ? t("legalDocs.modal.editTitle") : t("legalDocs.modal.title")}
         footer={
           <div className="modalFooter">
@@ -786,7 +800,7 @@ export default function LegalDocModal({
           onCancel={() => setReviewOpen(false)}
           onApply={(accepted) => {
             setReviewOpen(false);
-            persistLegalDoc(accepted, analysisResult);
+            void persistLegalDoc(accepted, analysisResult);
           }}
         />
       ) : null}

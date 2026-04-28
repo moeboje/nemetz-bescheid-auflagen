@@ -19,6 +19,9 @@
   flex-direction: column;
 }
 
+.mobileFullscreen {
+}
+
 .header {
   display: flex;
   align-items: center;
@@ -48,4 +51,30 @@
 .closeIcon {
   font-size: 18px;
   line-height: 1;
+}
+
+@media (max-width: 640px) {
+  .overlay {
+    padding: 0;
+  }
+
+  .mobileFullscreen {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+  }
+
+  .mobileFullscreen .header {
+    padding: var(--space-4);
+  }
+
+  .mobileFullscreen .body {
+    padding: var(--space-4);
+  }
+
+  .mobileFullscreen .footer {
+    padding: var(--space-4);
+  }
 }

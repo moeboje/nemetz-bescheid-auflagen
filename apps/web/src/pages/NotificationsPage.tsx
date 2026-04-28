@@ -1,5 +1,8 @@
 import React, { useMemo, useState } from "react";
 import { Breadcrumbs, Button, Card, DataTable, Select } from "@nemetz/ui";
+import HelpHintCard from "../components/HelpHintCard";
+import { useRuntimeConfig } from "../config/runtimeConfig";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { t } from "../i18n";
 import { useNotifications } from "../state/NotificationsStore";
 
@@ -27,6 +30,7 @@ function getStatusLabel(row: {
 }
 
 export default function NotificationsPage() {
+  const runtimeConfig = useRuntimeConfig();
   const { notifications, dismissNotification, snoozeNotification } = useNotifications();
   const [filters, setFilters] = useState({
     type: "",
@@ -90,6 +94,22 @@ export default function NotificationsPage() {
           <h1 className="pageTitle">{t("notifications.title")}</h1>
         </div>
       </div>
+
+      {runtimeConfig.features.enableHelpHints ? (
+        <HelpHintCard
+          hintId="hint.notifications"
+          title="Benachrichtigungen einordnen"
+          bullets={[
+            "Nicht jede Benachrichtigung ist eine neue fachliche Aufgabe.",
+            "Reminder, Overdue-Hinweise und Systemmeldungen haben unterschiedliche Zwecke.",
+            "Wenn Sie eine Meldung bearbeiten muessen, oeffnen Sie danach das zugrunde liegende Projekt, Dokument oder die Frist."
+          ]}
+          link={{
+            label: "Passenden Hilfeartikel oeffnen",
+            to: getHelpHref(HELP_CONTEXT_SLUGS.notifications)
+          }}
+        />
+      ) : null}
 
       <Card>
         <div className="filterRowFour">

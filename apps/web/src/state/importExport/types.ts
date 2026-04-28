@@ -3,6 +3,7 @@ import type { Authority, AuthorityContact } from "../../data/authorities";
 import type { Deadline } from "../../data/deadlines";
 import type { LegalDoc } from "../../data/legalDocs";
 import type { Obligation } from "../../data/obligations";
+import type { ProjectChecklist } from "../../data/projectChecklists";
 import type { Project } from "../../data/projects";
 import type { User } from "../../data/users";
 import type { AuditLogEntry } from "../AuditLogStore";
@@ -18,6 +19,7 @@ export type ExportDataBundle = {
   };
   users?: User[];
   projects?: Project[];
+  projectChecklists?: ProjectChecklist[];
   legalDocs?: LegalDoc[];
   obligations?: Obligation[];
   deadlines?: Deadline[];
@@ -33,6 +35,10 @@ export type ExportPayload = {
   app: {
     name: string;
     buildLabel?: string;
+  };
+  meta?: {
+    warnings?: string[];
+    omittedDomains?: string[];
   };
   data: ExportDataBundle;
 };

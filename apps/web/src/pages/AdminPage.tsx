@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Badge,
@@ -11,9 +11,16 @@ import {
   Modal,
   Select
 } from "@nemetz/ui";
+import { ApiError } from "../api/client";
+import {
+  bulkDeleteProjectChecklists,
+  bulkReplaceProjectChecklists,
+  listProjectChecklists
+} from "../api/projectChecklists";
 import { useRuntimeConfig } from "../config/runtimeConfig";
 import { t } from "../i18n";
 import HelpHintCard from "../components/HelpHintCard";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { ArchiveIcon, EditIcon } from "../components/Icons";
 import {
   useAuthorities
@@ -37,6 +44,7 @@ import { runIntegrityScan, type IntegrityFinding } from "../state/diagnostics/in
 import {
   buildExportPayload,
   downloadExportPayload,
+  GENERIC_EXPORT_LIMITATION_META,
   resetAllPersistedData
 } from "../state/importExport/exportPayload";
 import {
@@ -45,6 +53,7 @@ import {
 } from "../state/importExport/validateImport";
 import { createDemoScenarioSeed, mergeDemoScenario } from "../state/demoScenario";
 import type { ExportPayload } from "../state/importExport/types";
+import type { ProjectChecklist } from "../data/projectChecklists";
 import type { Project } from "../data/projects";
 import type { LegalDoc } from "../data/legalDocs";
 import type { Obligation } from "../state/ObligationsStore";
@@ -219,9 +228,15 @@ const emptyAuthorityForm = {
 const emptyContactForm = {
   authorityId: "",
   name: "",
+  firstName: "",
+  lastName: "",
   email: "",
   phone: "",
-  roleTitle: ""
+  mobile: "",
+  roleTitle: "",
+  notes: "",
+  department: "",
+  isPrimary: false
 };
 
 const emptyUserForm = {
@@ -272,7 +287,6 @@ export default function AdminPage() {
     archiveUser,
     restoreUser,
     searchUsers,
-    replaceUsers,
     resetUsers
   } = useUsers();
   const { projects, updateProject, replaceProjects, resetProjects } = useProjects();
@@ -560,9 +574,15 @@ export default function AdminPage() {
         setContactForm({
           authorityId: contact.authorityId,
           name: contact.name,
+          firstName: contact.firstName ?? "",
+          lastName: contact.lastName ?? "",
           email: contact.email ?? "",
           phone: contact.phone ?? "",
-          roleTitle: contact.roleTitle ?? ""
+          mobile: contact.mobile ?? "",
+          roleTitle: contact.roleTitle ?? "",
+          notes: contact.notes ?? "",
+          department: contact.department ?? "",
+          isPrimary: Boolean(contact.isPrimary)
         });
         setEditingContactId(contact.id);
       }
@@ -604,7 +624,10 @@ export default function AdminPage() {
   const contactAuthorityError = !contactForm.authorityId
     ? t("admin.validation.contactAuthority")
     : "";
-  const contactNameError = !contactForm.name.trim()
+  const derivedContactName = [contactForm.firstName.trim(), contactForm.lastName.trim()]
+    .filter(Boolean)
+    .join(" ");
+  const contactNameError = !(contactForm.name.trim() || derivedContactName)
     ? t("admin.validation.contactName")
     : "";
   const contactEmailError =
@@ -639,7 +662,7 @@ export default function AdminPage() {
       userUniqueEmailError
   );
 
-  const handleSaveAuthority = () => {
+  const handleSaveAuthority = async () => {
     if (isAuthoritySaveDisabled) {
       return;
     }
@@ -649,9 +672,9 @@ export default function AdminPage() {
     };
 
     if (editingAuthorityId) {
-      updateAuthority(editingAuthorityId, payload);
+      await updateAuthority(editingAuthorityId, payload);
     } else {
-      addAuthority(payload);
+      await addAuthority(payload);
     }
 
     setAuthorityModalOpen(false);
@@ -659,22 +682,28 @@ export default function AdminPage() {
     setAuthorityForm(emptyAuthorityForm);
   };
 
-  const handleSaveContact = () => {
+  const handleSaveContact = async () => {
     if (isContactSaveDisabled) {
       return;
     }
     const payload = {
       authorityId: contactForm.authorityId,
       name: contactForm.name.trim(),
+      firstName: contactForm.firstName.trim(),
+      lastName: contactForm.lastName.trim(),
       email: contactForm.email.trim(),
       phone: contactForm.phone.trim(),
-      roleTitle: contactForm.roleTitle.trim()
+      mobile: contactForm.mobile.trim(),
+      roleTitle: contactForm.roleTitle.trim(),
+      notes: contactForm.notes.trim(),
+      department: contactForm.department.trim(),
+      isPrimary: contactForm.isPrimary
     };
 
     if (editingContactId) {
-      updateContact(editingContactId, payload);
+      await updateContact(editingContactId, payload);
     } else {
-      addContact(payload);
+      await addContact(payload);
     }
 
     setContactModalOpen(false);
@@ -706,29 +735,102 @@ export default function AdminPage() {
     setUserForm(emptyUserForm);
   };
 
-  const handleExport = () => {
-    const payload = buildExportPayload({
-      scopes: {
-        companies,
-        sites,
-        facilities
-      },
-      authorities: {
-        authorities,
-        contacts
-      },
-      projects,
-      legalDocs,
-      obligations,
-      deadlines,
-      taskState,
-      auditLog: entries,
-      users,
-      notifications
-    });
-    downloadExportPayload(payload);
+  const clearServerDomainsInDependencyOrder = useCallback(async () => {
+    await replaceTaskState({});
+    await replaceDeadlines([]);
+    await replaceObligations([]);
+    await replaceLegalDocs([]);
+    await bulkDeleteProjectChecklists();
+    await replaceProjects([]);
+  }, [
+    bulkDeleteProjectChecklists,
+    replaceDeadlines,
+    replaceLegalDocs,
+    replaceObligations,
+    replaceProjects,
+    replaceTaskState
+  ]);
 
-    setDataManagementMessage(t("admin.dataManagement.exportSuccess"));
+  const applyImportedProjectChecklists = useCallback(
+    async (projectChecklists: ProjectChecklist[] | undefined) => {
+      if (!projectChecklists) {
+        return;
+      }
+
+      if (projectChecklists.length === 0) {
+        await bulkDeleteProjectChecklists();
+        return;
+      }
+
+      await bulkReplaceProjectChecklists(projectChecklists);
+    },
+    [bulkDeleteProjectChecklists]
+  );
+
+  const applyFullDomainReplaceInDependencyOrder = useCallback(
+    async (input: {
+      scopes: ExportPayload["data"]["scopes"];
+      authorities: ExportPayload["data"]["authorities"];
+      projects: Project[];
+      projectChecklists?: ProjectChecklist[];
+      legalDocs: LegalDoc[];
+      obligations: Obligation[];
+      deadlines: Deadline[];
+      taskState: TaskStateMap;
+    }) => {
+      await replaceScopes(input.scopes);
+      await replaceAuthorities(input.authorities);
+      await replaceProjects(input.projects);
+      await applyImportedProjectChecklists(input.projectChecklists);
+      await replaceLegalDocs(input.legalDocs);
+      await replaceObligations(input.obligations);
+      await replaceDeadlines(input.deadlines);
+      await replaceTaskState(input.taskState);
+    },
+    [
+      replaceAuthorities,
+      replaceDeadlines,
+      replaceLegalDocs,
+      replaceObligations,
+      replaceProjects,
+      replaceScopes,
+      replaceTaskState,
+      applyImportedProjectChecklists
+    ]
+  );
+
+  const handleExport = async () => {
+    try {
+      const projectChecklists = await listProjectChecklists();
+      const payload = buildExportPayload({
+        scopes: {
+          companies,
+          sites,
+          facilities
+        },
+        authorities: {
+          authorities,
+          contacts
+        },
+        projects,
+        projectChecklists,
+        legalDocs,
+        obligations,
+        deadlines,
+        taskState,
+        auditLog: entries,
+        notifications
+      }, {
+        meta: GENERIC_EXPORT_LIMITATION_META
+      });
+      downloadExportPayload(payload);
+
+      setDataManagementMessage(t("admin.dataManagement.exportSuccess"));
+    } catch (error) {
+      setDataManagementMessage(
+        error instanceof ApiError ? error.message : t("admin.dataManagement.exportInvalid")
+      );
+    }
   };
 
   const handleImportFile = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -776,79 +878,171 @@ export default function AdminPage() {
       return;
     }
 
-    const imported = pendingImport.data;
-    const legalDocsForImport = imported.legalDocs ?? legalDocs;
-    const sanitizedProjectImport = imported.projects
-      ? sanitizeProjectRelations(
-          imported.projects,
-          new Set(legalDocsForImport.map((doc) => doc.id))
-        )
-      : null;
-    const normalizedEvidenceStorage = await normalizeImportedEvidenceStorage({
-      deadlines: imported.deadlines,
-      taskState: imported.taskState
-    });
+    try {
+      const imported = pendingImport.data;
+      const legalDocsForImport = imported.legalDocs ?? legalDocs;
+      const sanitizedProjectImport = imported.projects
+        ? sanitizeProjectRelations(
+            imported.projects,
+            new Set(legalDocsForImport.map((doc) => doc.id))
+          )
+        : null;
+      const normalizedEvidenceStorage = await normalizeImportedEvidenceStorage({
+        deadlines: imported.deadlines,
+        taskState: imported.taskState
+      });
+      const hasExistingScopeDependents = projects.length > 0;
+      const hasExistingAuthorityDependents =
+        projects.length > 0 ||
+        legalDocs.length > 0 ||
+        obligations.length > 0 ||
+        deadlines.length > 0 ||
+        Object.keys(taskState).length > 0;
 
-    replaceScopes(imported.scopes);
-    replaceAuthorities(imported.authorities);
-    if (sanitizedProjectImport) {
-      replaceProjects(sanitizedProjectImport.projects);
-    }
-    if (imported.legalDocs) {
-      replaceLegalDocs(imported.legalDocs);
-    }
-    if (imported.obligations) {
-      replaceObligations(imported.obligations);
-    }
-    if (imported.deadlines) {
-      replaceDeadlines(normalizedEvidenceStorage.deadlines ?? imported.deadlines);
-    }
-    if (imported.taskState) {
-      replaceTaskState(normalizedEvidenceStorage.taskState ?? imported.taskState);
-    }
-    replaceAuditLog(imported.auditLog ?? []);
-    replaceUsers(imported.users ?? users);
-    replaceNotifications(imported.notifications ?? []);
+      if (!imported.projects) {
+        const partialReplaceErrors: ImportValidationMessage[] = [];
+        if (imported.scopes) {
+          partialReplaceErrors.push({
+            key: "import.validation.scopeReplaceBlockedByProjects",
+            path: "data.scopes"
+          });
+        }
+        if (imported.authorities) {
+          partialReplaceErrors.push({
+            key: "import.validation.authorityReplaceBlockedByDownstream",
+            path: "data.authorities"
+          });
+        }
 
-    setPendingImport(null);
-    setImportConfirmOpen(false);
-    setImportErrors([]);
+        const filteredPartialReplaceErrors = partialReplaceErrors.filter((entry) =>
+          entry.path === "data.scopes" ? hasExistingScopeDependents : hasExistingAuthorityDependents
+        );
 
-    const warnings: ImportValidationMessage[] = [];
-    if (normalizedEvidenceStorage.missingContentCount > 0) {
-      warnings.push({ key: "admin.dataManagement.importMissingFiles" });
-    }
-    if (
-      sanitizedProjectImport &&
-      (sanitizedProjectImport.removedDependencyLinks > 0 ||
-        sanitizedProjectImport.removedLegalDocRefs > 0)
-    ) {
-      warnings.push({ key: "admin.dataManagement.importRelationsSanitized" });
-    }
+        if (filteredPartialReplaceErrors.length > 0) {
+          setImportErrors(filteredPartialReplaceErrors);
+          setPendingImport(null);
+          setImportConfirmOpen(false);
+          return;
+        }
+      }
 
-    setImportWarnings(warnings);
+      if (
+        sanitizedProjectImport &&
+        (!imported.legalDocs || !imported.obligations || !imported.deadlines || !imported.taskState)
+      ) {
+        setImportErrors([
+          {
+            key: "import.validation.projectReplaceRequiresDependents",
+            path: "data.projects"
+          }
+        ]);
+        setPendingImport(null);
+        setImportConfirmOpen(false);
+        return;
+      }
 
-    if (warnings.length) {
+      if (imported.legalDocs && (!imported.obligations || !imported.deadlines)) {
+        setImportErrors([
+          {
+            key: "import.validation.legalDocReplaceRequiresDependents",
+            path: "data.legalDocs"
+          }
+        ]);
+        setPendingImport(null);
+        setImportConfirmOpen(false);
+        return;
+      }
+
+      if (sanitizedProjectImport) {
+        await clearServerDomainsInDependencyOrder();
+        await applyFullDomainReplaceInDependencyOrder({
+          scopes: imported.scopes,
+          authorities: imported.authorities,
+          projects: sanitizedProjectImport.projects,
+          projectChecklists: imported.projectChecklists ?? [],
+          legalDocs: imported.legalDocs ?? [],
+          obligations: imported.obligations ?? [],
+          deadlines: normalizedEvidenceStorage.deadlines ?? imported.deadlines ?? [],
+          taskState: normalizedEvidenceStorage.taskState ?? imported.taskState ?? {}
+        });
+      } else {
+        if (imported.deadlines) {
+          await replaceDeadlines([]);
+        }
+        if (imported.legalDocs) {
+          await replaceObligations([]);
+        }
+        await replaceScopes(imported.scopes);
+        await replaceAuthorities(imported.authorities);
+        if (imported.legalDocs) {
+          await replaceLegalDocs(imported.legalDocs);
+        }
+        if (imported.obligations) {
+          await replaceObligations(imported.obligations);
+        }
+        await applyImportedProjectChecklists(imported.projectChecklists);
+        if (imported.deadlines) {
+          await replaceDeadlines(normalizedEvidenceStorage.deadlines ?? imported.deadlines);
+        }
+        if (imported.taskState) {
+          await replaceTaskState(normalizedEvidenceStorage.taskState ?? imported.taskState);
+        }
+      }
+      replaceAuditLog(imported.auditLog ?? []);
+      replaceNotifications(imported.notifications ?? []);
+
+      setPendingImport(null);
+      setImportConfirmOpen(false);
+      setImportErrors([]);
+
+      const warnings: ImportValidationMessage[] = [];
+      if (imported.users) {
+        warnings.push({ key: "import.validation.usersIgnoredOnImport", path: "data.users" });
+      }
+      if (normalizedEvidenceStorage.missingContentCount > 0) {
+        warnings.push({ key: "admin.dataManagement.importMissingFiles" });
+      }
+      if (
+        sanitizedProjectImport &&
+        (sanitizedProjectImport.removedDependencyLinks > 0 ||
+          sanitizedProjectImport.removedLegalDocRefs > 0)
+      ) {
+        warnings.push({ key: "admin.dataManagement.importRelationsSanitized" });
+      }
+
+      setImportWarnings(warnings);
+
+      if (warnings.length) {
+        setDataManagementMessage(
+          `${t("admin.dataManagement.importSuccess")} ${warnings
+            .map((warning) => formatImportMessage(warning))
+            .join(" ")}`
+        );
+        return;
+      }
+
+      setDataManagementMessage(t("admin.dataManagement.importSuccess"));
+    } catch (error) {
+      setPendingImport(null);
+      setImportConfirmOpen(false);
+      setImportErrors([]);
+      setImportWarnings([]);
       setDataManagementMessage(
-        `${t("admin.dataManagement.importSuccess")} ${warnings
-          .map((warning) => formatImportMessage(warning))
-          .join(" ")}`
+        error instanceof ApiError ? error.message : t("admin.dataManagement.importInvalid")
       );
-      return;
     }
-
-    setDataManagementMessage(t("admin.dataManagement.importSuccess"));
   };
 
-  const handleConfirmReset = () => {
+  const handleConfirmReset = async () => {
     resetAllPersistedData();
-    resetScopes();
-    resetAuthorities();
-    resetProjects();
-    resetLegalDocs();
-    resetObligations();
-    resetDeadlines();
-    resetTaskState();
+    await clearServerDomainsInDependencyOrder();
+    await resetScopes();
+    await resetAuthorities();
+    await resetProjects();
+    await resetLegalDocs();
+    await resetObligations();
+    await resetDeadlines();
+    await resetTaskState();
     resetAuditLog();
     resetUsers();
     resetNotifications();
@@ -859,8 +1053,8 @@ export default function AdminPage() {
     setDataManagementMessage(t("admin.dataManagement.resetSuccess"));
   };
 
-  const handleCleanupTaskState = () => {
-    const removed = cleanupOld(365);
+  const handleCleanupTaskState = async () => {
+    const removed = await cleanupOld(365);
     setDataManagementMessage(t("admin.dataManagement.cleanupTaskStateSuccess").replace("{count}", String(removed)));
   };
 
@@ -873,16 +1067,11 @@ export default function AdminPage() {
     );
   };
 
-  const handleConfirmDemoScenario = () => {
+  const handleConfirmDemoScenario = async () => {
     const seed = createDemoScenarioSeed();
     if (demoMode === "replace") {
-      replaceScopes(seed.scopes);
-      replaceAuthorities(seed.authorities);
-      replaceProjects(seed.projects);
-      replaceLegalDocs(seed.legalDocs);
-      replaceObligations(seed.obligations);
-      replaceDeadlines(seed.deadlines);
-      replaceTaskState(seed.taskState);
+      await clearServerDomainsInDependencyOrder();
+      await applyFullDomainReplaceInDependencyOrder(seed);
       replaceNotifications([]);
     } else {
       const merged = mergeDemoScenario(
@@ -897,13 +1086,8 @@ export default function AdminPage() {
         },
         seed
       );
-      replaceScopes(merged.scopes);
-      replaceAuthorities(merged.authorities);
-      replaceProjects(merged.projects);
-      replaceLegalDocs(merged.legalDocs);
-      replaceObligations(merged.obligations);
-      replaceDeadlines(merged.deadlines);
-      replaceTaskState(merged.taskState);
+      await clearServerDomainsInDependencyOrder();
+      await applyFullDomainReplaceInDependencyOrder(merged);
     }
 
     setDemoConfirmOpen(false);
@@ -960,7 +1144,7 @@ export default function AdminPage() {
     if (finding.entityType === "LEGAL_DOC") {
       const legalDoc = legalDocs.find((item) => item.id === finding.entityId);
       if (legalDoc && !legalDoc.isArchived) {
-        updateLegalDoc(legalDoc.id, { archivedAt: new Date().toISOString(), isArchived: true });
+        void updateLegalDoc(legalDoc.id, { archivedAt: new Date().toISOString(), isArchived: true });
         logIntegrityFix(finding, "archive");
       }
       return;
@@ -999,9 +1183,9 @@ export default function AdminPage() {
     }
     if (finding.entityType === "LEGAL_DOC") {
       if (finding.field === "scopeOverride.companyId") {
-        updateLegalDoc(finding.entityId, { scopeOverride: undefined } as Partial<LegalDoc>);
+        void updateLegalDoc(finding.entityId, { scopeOverride: undefined } as Partial<LegalDoc>);
       } else {
-        updateLegalDoc(finding.entityId, { [finding.field]: undefined } as Partial<LegalDoc>);
+        void updateLegalDoc(finding.entityId, { [finding.field]: undefined } as Partial<LegalDoc>);
       }
       logIntegrityFix(finding, "unlink");
       return;
@@ -1036,7 +1220,7 @@ export default function AdminPage() {
     if (finding.entityType === "LEGAL_DOC") {
       if (finding.field === "scopeOverride.companyId") {
         const current = legalDocs.find((item) => item.id === finding.entityId);
-        updateLegalDoc(finding.entityId, {
+        void updateLegalDoc(finding.entityId, {
           scopeOverride: {
             companyId: value,
             siteId: current?.scopeOverride?.siteId,
@@ -1044,7 +1228,7 @@ export default function AdminPage() {
           }
         });
       } else {
-        updateLegalDoc(finding.entityId, { [finding.field]: value } as Partial<LegalDoc>);
+        void updateLegalDoc(finding.entityId, { [finding.field]: value } as Partial<LegalDoc>);
       }
       logIntegrityFix(finding, "reassign");
       return;
@@ -1073,7 +1257,7 @@ export default function AdminPage() {
     }
 
     if (finding.entityType === "TASK") {
-      markAttachmentUnavailable(finding.entityId, finding.attachmentId);
+      void markAttachmentUnavailable(finding.entityId, finding.attachmentId);
       logIntegrityFix(finding, "markUnavailable");
     }
   };
@@ -1116,7 +1300,7 @@ export default function AdminPage() {
             "helpHints.admin.bullets.2",
             "helpHints.admin.bullets.3"
           ]}
-          link={{ labelKey: "common.openHelp", to: "/help#admin-tools" }}
+          link={{ labelKey: "common.openHelp", to: getHelpHref(HELP_CONTEXT_SLUGS.adminData) }}
         />
       ) : null}
 
@@ -1191,13 +1375,13 @@ export default function AdminPage() {
                   <EditIcon />
                 </IconButton>
                 {row.isArchived ? (
-                  <Button size="sm" variant="ghost" onClick={() => restoreAuthority(row.id)}>
+                  <Button size="sm" variant="ghost" onClick={() => void restoreAuthority(row.id)}>
                     {t("common.restore")}
                   </Button>
                 ) : (
                   <IconButton
                     ariaLabel={t("common.archive")}
-                    onClick={() => archiveAuthority(row.id)}
+                    onClick={() => void archiveAuthority(row.id)}
                   >
                     <ArchiveIcon />
                   </IconButton>
@@ -1249,13 +1433,13 @@ export default function AdminPage() {
                     <EditIcon />
                   </IconButton>
                   {row.isArchived ? (
-                    <Button size="sm" variant="ghost" onClick={() => restoreContact(row.id)}>
+                    <Button size="sm" variant="ghost" onClick={() => void restoreContact(row.id)}>
                       {t("common.restore")}
                     </Button>
                   ) : (
                     <IconButton
                       ariaLabel={t("common.archive")}
-                      onClick={() => archiveContact(row.id)}
+                      onClick={() => void archiveContact(row.id)}
                     >
                       <ArchiveIcon />
                     </IconButton>
@@ -1339,7 +1523,11 @@ export default function AdminPage() {
           <div className="tableSection">
             <div className="sectionHeader">
               <h2 className="sectionTitle">{t("diagnostics.title")}</h2>
-              <Button size="sm" variant="ghost" onClick={() => navigate("/help#admin-tools")}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => navigate(getHelpHref(HELP_CONTEXT_SLUGS.adminData))}
+              >
                 {t("common.openHelp")}
               </Button>
             </div>
@@ -1413,7 +1601,11 @@ export default function AdminPage() {
           <div className="tableSection">
             <div className="sectionHeader">
               <h2 className="sectionTitle">{t("admin.dataManagement.title")}</h2>
-              <Button size="sm" variant="ghost" onClick={() => navigate("/help#admin-tools")}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => navigate(getHelpHref(HELP_CONTEXT_SLUGS.adminData))}
+              >
                 {t("common.openHelp")}
               </Button>
             </div>
@@ -1424,7 +1616,7 @@ export default function AdminPage() {
               {t("admin.dataManagement.lastTickAt").replace("{date}", lastTickAt || t("common.notAvailable"))}
             </p>
             <div className="inlineMeta">
-              <Button onClick={handleExport}>{t("admin.dataManagement.export")}</Button>
+              <Button onClick={() => void handleExport()}>{t("admin.dataManagement.export")}</Button>
               <Button
                 variant="secondary"
                 onClick={() => fileInputRef.current?.click()}
@@ -1437,7 +1629,7 @@ export default function AdminPage() {
               <Button variant="secondary" onClick={() => setDemoConfirmOpen(true)}>
                 {t("admin.dataManagement.generateDemoScenario")}
               </Button>
-              <Button variant="secondary" onClick={handleCleanupTaskState}>
+              <Button variant="secondary" onClick={() => void handleCleanupTaskState()}>
                 {t("admin.dataManagement.cleanupTaskState")}
               </Button>
               <Button variant="secondary" onClick={() => setResetConfirmOpen(true)}>
@@ -1574,6 +1766,36 @@ export default function AdminPage() {
             {contactNameError ? <span className="validationText">{contactNameError}</span> : null}
           </div>
           <div className="formField">
+            <span className="fieldLabel">{t("users.firstName")}</span>
+            <Input
+              placeholder={t("users.firstName")}
+              value={contactForm.firstName}
+              onChange={(event) =>
+                setContactForm((prev) => ({ ...prev, firstName: event.target.value }))
+              }
+            />
+          </div>
+          <div className="formField">
+            <span className="fieldLabel">{t("users.lastName")}</span>
+            <Input
+              placeholder={t("users.lastName")}
+              value={contactForm.lastName}
+              onChange={(event) =>
+                setContactForm((prev) => ({ ...prev, lastName: event.target.value }))
+              }
+            />
+          </div>
+          <div className="formField">
+            <span className="fieldLabel">{t("admin.contacts.form.department")}</span>
+            <Input
+              placeholder={t("admin.contacts.form.department")}
+              value={contactForm.department}
+              onChange={(event) =>
+                setContactForm((prev) => ({ ...prev, department: event.target.value }))
+              }
+            />
+          </div>
+          <div className="formField">
             <span className="fieldLabel">{t("admin.contacts.form.role")}</span>
             <Input
               placeholder={t("admin.contacts.form.role")}
@@ -1605,6 +1827,39 @@ export default function AdminPage() {
                 setContactForm((prev) => ({ ...prev, phone: event.target.value }))
               }
             />
+          </div>
+          <div className="formField">
+            <span className="fieldLabel">{t("admin.contacts.form.mobile")}</span>
+            <Input
+              placeholder={t("admin.contacts.form.mobile")}
+              value={contactForm.mobile}
+              onChange={(event) =>
+                setContactForm((prev) => ({ ...prev, mobile: event.target.value }))
+              }
+            />
+          </div>
+          <div className="formField">
+            <span className="fieldLabel">{t("admin.contacts.form.notes")}</span>
+            <textarea
+              className="textarea"
+              rows={3}
+              value={contactForm.notes}
+              onChange={(event) =>
+                setContactForm((prev) => ({ ...prev, notes: event.target.value }))
+              }
+            />
+          </div>
+          <div className="formField">
+            <label className="checkboxRow">
+              <input
+                type="checkbox"
+                checked={contactForm.isPrimary}
+                onChange={(event) =>
+                  setContactForm((prev) => ({ ...prev, isPrimary: event.target.checked }))
+                }
+              />
+              <span>{t("admin.contacts.form.isPrimary")}</span>
+            </label>
           </div>
         </div>
       </Modal>

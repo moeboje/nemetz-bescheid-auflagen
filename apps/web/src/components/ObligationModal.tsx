@@ -91,7 +91,7 @@ export default function ObligationModal({
     (requiresFirstDue && !form.firstDueDate) ||
     (requiresInterval && (!form.intervalUnit || !form.intervalValue));
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const intervalValue = form.intervalValue ? Number(form.intervalValue) : undefined;
     const reminderDays = form.emailReminderEnabled
       ? Number(form.emailReminderDaysBefore || "7")
@@ -118,12 +118,13 @@ export default function ObligationModal({
       }
     };
 
-    if (obligation) {
-      updateObligation(obligation.id, payload);
-    } else {
-      addObligation(payload);
+    const saved = obligation
+      ? await updateObligation(obligation.id, payload)
+      : await addObligation(payload);
+
+    if (saved) {
+      onClose();
     }
-    onClose();
   };
 
   return (
@@ -131,13 +132,14 @@ export default function ObligationModal({
       open={open}
       onClose={onClose}
       closeAriaLabel={t("modal.close")}
+      mobileFullscreen
       header={obligation ? t("obligations.modal.editTitle") : t("obligations.modal.title")}
       footer={
         <div className="modalFooter">
           <Button variant="secondary" onClick={onClose}>
             {t("modal.cancel")}
           </Button>
-          <Button onClick={handleSave} disabled={isSaveDisabled}>
+          <Button onClick={() => void handleSave()} disabled={isSaveDisabled}>
             {t("modal.save")}
           </Button>
         </div>
@@ -239,7 +241,10 @@ export default function ObligationModal({
             <Select
               options={[
                 { value: "", label: t("obligations.form.intervalUnit") },
+                { value: "DAY", label: t("obligations.interval.day") },
+                { value: "WEEK", label: t("obligations.interval.week") },
                 { value: "MONTH", label: t("obligations.interval.month") },
+                { value: "QUARTER", label: t("obligations.interval.quarter") },
                 { value: "YEAR", label: t("obligations.interval.year") }
               ]}
               value={form.intervalUnit}

@@ -11,9 +11,15 @@ export type AuthorityContact = {
   id: string;
   authorityId: string;
   name: string;
+  firstName?: string;
+  lastName?: string;
   email?: string;
   phone?: string;
+  mobile?: string;
   roleTitle?: string;
+  notes?: string;
+  department?: string;
+  isPrimary?: boolean;
   isArchived: boolean;
   createdAt?: string;
   updatedAt?: string;
@@ -48,50 +54,4 @@ export const authorities: Authority[] = [
   }
 ];
 
-export const contacts: AuthorityContact[] = [
-  {
-    id: "contact-001",
-    authorityId: "auth-001",
-    name: "Sachbearbeitung Umwelt 1",
-    roleTitle: "Sachbearbeitung Umwelt",
-    isArchived: false,
-    createdAt: seedTimestamp,
-    updatedAt: seedTimestamp
-  },
-  {
-    id: "contact-002",
-    authorityId: "auth-001",
-    name: "Sachbearbeitung Umwelt 2",
-    roleTitle: "Team Anlagen",
-    isArchived: false,
-    createdAt: seedTimestamp,
-    updatedAt: seedTimestamp
-  },
-  {
-    id: "contact-003",
-    authorityId: "auth-002",
-    name: "Sachbearbeitung Verwaltung 1",
-    roleTitle: "Sachbearbeitung Abfall",
-    isArchived: false,
-    createdAt: seedTimestamp,
-    updatedAt: seedTimestamp
-  },
-  {
-    id: "contact-004",
-    authorityId: "auth-002",
-    name: "Sachbearbeitung Verwaltung 2",
-    roleTitle: "Team Umweltverfahren",
-    isArchived: false,
-    createdAt: seedTimestamp,
-    updatedAt: seedTimestamp
-  },
-  {
-    id: "contact-005",
-    authorityId: "auth-003",
-    name: "Sachbearbeitung Umwelt 3",
-    roleTitle: "Koordination Bewilligungen",
-    isArchived: false,
-    createdAt: seedTimestamp,
-    updatedAt: seedTimestamp
-  }
-];
+export const contacts: AuthorityContact[] = [];

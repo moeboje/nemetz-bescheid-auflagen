@@ -7,6 +7,7 @@ export type DataTableColumn<T> = {
   header: React.ReactNode;
   render?: (row: T) => React.ReactNode;
   align?: "left" | "center" | "right";
+  mobileLabel?: string;
 };
 
 export type DataTableProps<T> = {
@@ -14,6 +15,7 @@ export type DataTableProps<T> = {
   data: T[];
   getRowKey: (row: T, index: number) => string;
   rowActions?: (row: T) => React.ReactNode;
+  rowActionsLabel?: string;
   className?: string;
 };
 
@@ -22,6 +24,7 @@ export function DataTable<T>({
   data,
   getRowKey,
   rowActions,
+  rowActionsLabel,
   className
 }: DataTableProps<T>) {
   return (
@@ -41,11 +44,19 @@ export function DataTable<T>({
           {data.map((row, index) => (
             <tr key={getRowKey(row, index)} className={styles.row}>
               {columns.map((col) => (
-                <td key={col.key} className={cx(styles.td, styles[col.align ?? "left"])}>
+                <td
+                  key={col.key}
+                  className={cx(styles.td, styles[col.align ?? "left"])}
+                  data-label={col.mobileLabel ?? (typeof col.header === "string" ? col.header : "")}
+                >
                   {col.render ? col.render(row) : (row as Record<string, React.ReactNode>)[col.key]}
                 </td>
               ))}
-              {rowActions ? <td className={styles.actions}>{rowActions(row)}</td> : null}
+              {rowActions ? (
+                <td className={styles.actions} data-label={rowActionsLabel ?? ""}>
+                  {rowActions(row)}
+                </td>
+              ) : null}
             </tr>
           ))}
         </tbody>

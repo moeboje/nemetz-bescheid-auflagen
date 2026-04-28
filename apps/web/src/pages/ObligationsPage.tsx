@@ -14,6 +14,7 @@ import { t } from "../i18n";
 import { useObligations } from "../state/ObligationsStore";
 import HelpHintCard from "../components/HelpHintCard";
 import { useRuntimeConfig } from "../config/runtimeConfig";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
@@ -221,7 +222,7 @@ export default function ObligationsPage() {
             "helpHints.obligations.bullets.2",
             "helpHints.obligations.bullets.3"
           ]}
-          link={{ labelKey: "common.openHelp", to: "/help#workflows" }}
+          link={{ labelKey: "common.openHelp", to: getHelpHref(HELP_CONTEXT_SLUGS.obligations) }}
         />
       ) : null}
 

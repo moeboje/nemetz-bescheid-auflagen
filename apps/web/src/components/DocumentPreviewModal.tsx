@@ -135,6 +135,7 @@ export default function DocumentPreviewModal({
       onClose={onClose}
       closeAriaLabel={t("modal.close")}
       className="documentsPreviewModal"
+      mobileFullscreen
       header={document?.originalFilename || document?.filename || t("documents.preview")}
       footer={
         <div className="modalFooter">

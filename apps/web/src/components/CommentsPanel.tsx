@@ -36,6 +36,15 @@ function getRoleLabel(role: string) {
   if (role === "ADMIN") {
     return t("users.role.admin");
   }
+  if (role === "COMPLIANCE_MANAGER") {
+    return t("users.role.complianceManager");
+  }
+  if (role === "COMPLIANCE_EDITOR") {
+    return t("users.role.complianceEditor");
+  }
+  if (role === "READ_ONLY") {
+    return t("users.role.readOnly");
+  }
   if (role === "COMPLIANCE") {
     return t("users.role.compliance");
   }
@@ -66,7 +75,7 @@ export default function CommentsPanel({
   titleKey = "comments.title"
 }: CommentsPanelProps) {
   const { user } = useAuth();
-  const isAdmin = user?.role === "ADMIN";
+  const isAdmin = Array.isArray(user?.effectivePermissions) && user.effectivePermissions.includes("admin.access");
 
   const [items, setItems] = useState<CommentItem[]>([]);
   const [loading, setLoading] = useState(false);

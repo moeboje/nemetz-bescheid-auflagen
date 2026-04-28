@@ -14,6 +14,7 @@ import {
 import DeadlineModal from "../components/DeadlineModal";
 import { EditIcon, EyeIcon } from "../components/Icons";
 import { useRuntimeConfig } from "../config/runtimeConfig";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { t } from "../i18n";
 import HelpHintCard from "../components/HelpHintCard";
 import { exportDeadlinesToIcs } from "../services/icsExport";
@@ -302,7 +303,7 @@ export default function DeadlinesPage() {
             "helpHints.deadlines.bullets.2",
             "helpHints.deadlines.bullets.3"
           ]}
-          link={{ labelKey: "common.openHelp", to: "/help#workflows" }}
+          link={{ labelKey: "common.openHelp", to: getHelpHref(HELP_CONTEXT_SLUGS.deadlines) }}
         />
       ) : null}
 

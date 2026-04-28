@@ -1,15 +1,24 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   authorities as initialAuthorities,
   contacts as initialContacts,
-  Authority,
-  AuthorityContact
+  type Authority,
+  type AuthorityContact
 } from "../data/authorities";
+import { useAuth } from "./AuthStore";
+import { clearPersistedValue, makeStorageKey } from "./persistence";
 import {
-  loadPersistedValue,
-  makeStorageKey,
-  savePersistedValue
-} from "./persistence";
+  archiveAuthority as apiArchiveAuthority,
+  archiveAuthorityContact as apiArchiveAuthorityContact,
+  bulkReplaceAuthorities,
+  createAuthority as apiCreateAuthority,
+  createAuthorityContact as apiCreateAuthorityContact,
+  listAuthorities,
+  restoreAuthority as apiRestoreAuthority,
+  restoreAuthorityContact as apiRestoreAuthorityContact,
+  updateAuthority as apiUpdateAuthority,
+  updateAuthorityContact as apiUpdateAuthorityContact
+} from "../api/authorities";
 
 type FilterOptions = {
   includeArchived?: boolean;
@@ -25,31 +34,45 @@ export type AuthoritiesContextValue = {
   contacts: AuthorityContact[];
   getAuthority: (authorityId: string) => Authority | undefined;
   getContacts: (authorityId: string, options?: FilterOptions) => AuthorityContact[];
-  addAuthority: (input: { name: string; shortName?: string }) => Authority;
-  updateAuthority: (id: string, input: { name: string; shortName?: string }) => void;
-  archiveAuthority: (id: string) => void;
-  restoreAuthority: (id: string) => void;
+  addAuthority: (input: { id?: string; name: string; shortName?: string }) => Promise<Authority>;
+  updateAuthority: (id: string, input: { name: string; shortName?: string }) => Promise<Authority | null>;
+  archiveAuthority: (id: string) => Promise<Authority | null>;
+  restoreAuthority: (id: string) => Promise<Authority | null>;
   addContact: (input: {
+    id?: string;
     authorityId: string;
-    name: string;
+    name?: string;
+    firstName?: string;
+    lastName?: string;
     email?: string;
     phone?: string;
+    mobile?: string;
     roleTitle?: string;
-  }) => AuthorityContact;
+    notes?: string;
+    department?: string;
+    isPrimary?: boolean;
+  }) => Promise<AuthorityContact>;
   updateContact: (
     id: string,
     input: {
       authorityId: string;
-      name: string;
+      name?: string;
+      firstName?: string;
+      lastName?: string;
       email?: string;
       phone?: string;
+      mobile?: string;
       roleTitle?: string;
+      notes?: string;
+      department?: string;
+      isPrimary?: boolean;
     }
-  ) => void;
-  archiveContact: (id: string) => void;
-  restoreContact: (id: string) => void;
-  replaceAuthorities: (value: AuthoritiesSnapshot) => void;
-  resetAuthorities: () => void;
+  ) => Promise<AuthorityContact | null>;
+  archiveContact: (id: string) => Promise<AuthorityContact | null>;
+  restoreContact: (id: string) => Promise<AuthorityContact | null>;
+  replaceAuthorities: (value: AuthoritiesSnapshot) => Promise<void>;
+  resetAuthorities: () => Promise<void>;
+  reloadAuthorities: () => Promise<AuthoritiesSnapshot>;
   getAuthorityName: (authorityId?: string) => string;
   getContactsForAuthority: (authorityId?: string) => AuthorityContact[];
 };
@@ -60,6 +83,22 @@ export const AUTHORITIES_STORAGE_KEY = makeStorageKey("authorities");
 
 function nowStamp() {
   return new Date().toISOString();
+}
+
+function toTrimmedOptionalString(value?: string) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function deriveContactName(input: { name?: string; firstName?: string; lastName?: string }) {
+  const firstName = input.firstName?.trim() ?? "";
+  const lastName = input.lastName?.trim() ?? "";
+  const combinedName = [firstName, lastName].filter(Boolean).join(" ");
+  if (combinedName) {
+    return combinedName;
+  }
+
+  return input.name?.trim() ?? "";
 }
 
 function createSeedAuthorities(): AuthoritiesSnapshot {
@@ -99,20 +138,26 @@ function normalizeAuthorities(value: AuthoritiesSnapshot): AuthoritiesSnapshot {
       (contact) =>
         Boolean(contact?.id) &&
         Boolean(contact?.authorityId) &&
-        Boolean(contact?.name) &&
         authorityIds.has(contact.authorityId)
     )
     .map((contact) => ({
       id: contact.id,
       authorityId: contact.authorityId,
-      name: contact.name,
+      name: deriveContactName(contact),
+      firstName: contact.firstName ?? "",
+      lastName: contact.lastName ?? "",
       email: contact.email ?? "",
       phone: contact.phone ?? "",
+      mobile: contact.mobile ?? "",
       roleTitle: contact.roleTitle ?? "",
+      notes: contact.notes ?? "",
+      department: contact.department ?? "",
+      isPrimary: Boolean(contact.isPrimary),
       isArchived: Boolean(contact.isArchived),
       createdAt: contact.createdAt ?? fallbackTime,
       updatedAt: contact.updatedAt ?? contact.createdAt ?? fallbackTime
-    }));
+    }))
+    .filter((contact) => Boolean(contact.name));
 
   return {
     authorities,
@@ -120,22 +165,66 @@ function normalizeAuthorities(value: AuthoritiesSnapshot): AuthoritiesSnapshot {
   };
 }
 
-function createId(prefix: "auth" | "contact") {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+function mergeAuthority(existing: Authority, incoming: Authority) {
+  return {
+    ...existing,
+    ...incoming,
+    shortName: incoming.shortName ?? existing.shortName ?? ""
+  };
+}
+
+function mergeContact(existing: AuthorityContact, incoming: AuthorityContact) {
+  return {
+    ...existing,
+    ...incoming,
+    name: deriveContactName(incoming),
+    firstName: incoming.firstName ?? existing.firstName ?? "",
+    lastName: incoming.lastName ?? existing.lastName ?? "",
+    email: incoming.email ?? existing.email ?? "",
+    phone: incoming.phone ?? existing.phone ?? "",
+    mobile: incoming.mobile ?? existing.mobile ?? "",
+    roleTitle: incoming.roleTitle ?? existing.roleTitle ?? "",
+    notes: incoming.notes ?? existing.notes ?? "",
+    department: incoming.department ?? existing.department ?? "",
+    isPrimary: incoming.isPrimary ?? existing.isPrimary ?? false
+  };
 }
 
 export function AuthoritiesProvider({ children }: { children: React.ReactNode }) {
-  const [authorityData, setAuthorityData] = useState<AuthoritiesSnapshot>(() => {
-    const fallback = createSeedAuthorities();
-    const stored = loadPersistedValue<AuthoritiesSnapshot>(AUTHORITIES_STORAGE_KEY, fallback);
-    return normalizeAuthorities(stored);
+  const { user: authUser } = useAuth();
+  const [authorityData, setAuthorityData] = useState<AuthoritiesSnapshot>({
+    authorities: [],
+    contacts: []
   });
 
   const { authorities, contacts } = authorityData;
 
-  React.useEffect(() => {
-    savePersistedValue(AUTHORITIES_STORAGE_KEY, authorityData);
-  }, [authorityData]);
+  const reloadAuthorities = useCallback(async () => {
+    if (!authUser || authUser.type === "EXTERNAL") {
+      const empty = { authorities: [], contacts: [] } satisfies AuthoritiesSnapshot;
+      setAuthorityData(empty);
+      clearPersistedValue(AUTHORITIES_STORAGE_KEY);
+      return empty;
+    }
+
+    const next = normalizeAuthorities(await listAuthorities());
+    setAuthorityData(next);
+    clearPersistedValue(AUTHORITIES_STORAGE_KEY);
+    return next;
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser || authUser.type === "EXTERNAL") {
+      setAuthorityData({ authorities: [], contacts: [] });
+      clearPersistedValue(AUTHORITIES_STORAGE_KEY);
+      return;
+    }
+
+    void reloadAuthorities().catch(() => {
+      setAuthorityData({ authorities: [], contacts: [] });
+      clearPersistedValue(AUTHORITIES_STORAGE_KEY);
+    });
+  }, [authUser, reloadAuthorities]);
 
   const getAuthority = useCallback(
     (authorityId: string) => authorities.find((authority) => authority.id === authorityId),
@@ -160,150 +249,224 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
     [authorities, contacts]
   );
 
-  const addAuthority = useCallback((input: { name: string; shortName?: string }) => {
-    const timestamp = nowStamp();
-    const createdAuthority: Authority = {
-      id: createId("auth"),
-      name: input.name,
-      shortName: input.shortName ?? "",
-      isArchived: false,
-      createdAt: timestamp,
-      updatedAt: timestamp
-    };
+  const addAuthority = useCallback(async (input: { id?: string; name: string; shortName?: string }) => {
+    const createdAuthority = await apiCreateAuthority({
+      id: input.id,
+      name: input.name.trim(),
+      shortName: input.shortName?.trim() || undefined
+    });
+
     setAuthorityData((prev) => ({
       ...prev,
       authorities: [...prev.authorities, createdAuthority]
     }));
+    clearPersistedValue(AUTHORITIES_STORAGE_KEY);
     return createdAuthority;
   }, []);
 
   const updateAuthority = useCallback(
-    (id: string, input: { name: string; shortName?: string }) => {
-      const timestamp = nowStamp();
+    async (id: string, input: { name: string; shortName?: string }) => {
+      const existing = authorities.find((authority) => authority.id === id);
+      if (!existing) {
+        return null;
+      }
+
+      const updatedAuthority = await apiUpdateAuthority(id, {
+        name: input.name.trim(),
+        shortName: input.shortName?.trim() || undefined
+      });
+
       setAuthorityData((prev) => ({
         ...prev,
         authorities: prev.authorities.map((authority) =>
-          authority.id === id
-            ? {
-                ...authority,
-                name: input.name,
-                shortName: input.shortName ?? "",
-                updatedAt: timestamp
-              }
-            : authority
+          authority.id === id ? mergeAuthority(authority, updatedAuthority) : authority
         )
       }));
+      clearPersistedValue(AUTHORITIES_STORAGE_KEY);
+      return updatedAuthority;
     },
-    []
+    [authorities]
   );
 
-  const archiveAuthority = useCallback((id: string) => {
-    const timestamp = nowStamp();
-    setAuthorityData((prev) => ({
-      ...prev,
-      authorities: prev.authorities.map((authority) =>
-        authority.id === id ? { ...authority, isArchived: true, updatedAt: timestamp } : authority
-      )
-    }));
-  }, []);
+  const archiveAuthority = useCallback(
+    async (id: string) => {
+      const existing = authorities.find((authority) => authority.id === id);
+      if (!existing) {
+        return null;
+      }
 
-  const restoreAuthority = useCallback((id: string) => {
-    const timestamp = nowStamp();
-    setAuthorityData((prev) => ({
-      ...prev,
-      authorities: prev.authorities.map((authority) =>
-        authority.id === id ? { ...authority, isArchived: false, updatedAt: timestamp } : authority
-      )
-    }));
-  }, []);
+      const updatedAuthority = await apiArchiveAuthority(id);
+      setAuthorityData((prev) => ({
+        ...prev,
+        authorities: prev.authorities.map((authority) =>
+          authority.id === id ? mergeAuthority(authority, updatedAuthority) : authority
+        )
+      }));
+      clearPersistedValue(AUTHORITIES_STORAGE_KEY);
+      return updatedAuthority;
+    },
+    [authorities]
+  );
+
+  const restoreAuthority = useCallback(
+    async (id: string) => {
+      const existing = authorities.find((authority) => authority.id === id);
+      if (!existing) {
+        return null;
+      }
+
+      const updatedAuthority = await apiRestoreAuthority(id);
+      setAuthorityData((prev) => ({
+        ...prev,
+        authorities: prev.authorities.map((authority) =>
+          authority.id === id ? mergeAuthority(authority, updatedAuthority) : authority
+        )
+      }));
+      clearPersistedValue(AUTHORITIES_STORAGE_KEY);
+      return updatedAuthority;
+    },
+    [authorities]
+  );
 
   const addContact = useCallback(
-    (input: {
+    async (input: {
+      id?: string;
       authorityId: string;
-      name: string;
+      name?: string;
+      firstName?: string;
+      lastName?: string;
       email?: string;
       phone?: string;
+      mobile?: string;
       roleTitle?: string;
+      notes?: string;
+      department?: string;
+      isPrimary?: boolean;
     }) => {
-      const timestamp = nowStamp();
-      const createdContact: AuthorityContact = {
-        id: createId("contact"),
+      const createdContact = await apiCreateAuthorityContact({
+        id: input.id,
         authorityId: input.authorityId,
-        name: input.name,
-        email: input.email ?? "",
-        phone: input.phone ?? "",
-        roleTitle: input.roleTitle ?? "",
-        isArchived: false,
-        createdAt: timestamp,
-        updatedAt: timestamp
-      };
+        name: deriveContactName(input) || undefined,
+        firstName: toTrimmedOptionalString(input.firstName),
+        lastName: toTrimmedOptionalString(input.lastName),
+        email: toTrimmedOptionalString(input.email),
+        phone: toTrimmedOptionalString(input.phone),
+        mobile: toTrimmedOptionalString(input.mobile),
+        roleTitle: toTrimmedOptionalString(input.roleTitle),
+        notes: toTrimmedOptionalString(input.notes),
+        department: toTrimmedOptionalString(input.department),
+        isPrimary: input.isPrimary
+      });
+
       setAuthorityData((prev) => ({
         ...prev,
         contacts: [...prev.contacts, createdContact]
       }));
+      clearPersistedValue(AUTHORITIES_STORAGE_KEY);
       return createdContact;
     },
     []
   );
 
   const updateContact = useCallback(
-    (
+    async (
       id: string,
       input: {
         authorityId: string;
-        name: string;
+        name?: string;
+        firstName?: string;
+        lastName?: string;
         email?: string;
         phone?: string;
+        mobile?: string;
         roleTitle?: string;
+        notes?: string;
+        department?: string;
+        isPrimary?: boolean;
       }
     ) => {
-      const timestamp = nowStamp();
+      const existing = contacts.find((contact) => contact.id === id);
+      if (!existing) {
+        return null;
+      }
+
+      const updatedContact = await apiUpdateAuthorityContact(id, {
+        authorityId: input.authorityId,
+        name: deriveContactName(input) || undefined,
+        firstName: toTrimmedOptionalString(input.firstName),
+        lastName: toTrimmedOptionalString(input.lastName),
+        email: toTrimmedOptionalString(input.email),
+        phone: toTrimmedOptionalString(input.phone),
+        mobile: toTrimmedOptionalString(input.mobile),
+        roleTitle: toTrimmedOptionalString(input.roleTitle),
+        notes: toTrimmedOptionalString(input.notes),
+        department: toTrimmedOptionalString(input.department),
+        isPrimary: input.isPrimary
+      });
+
       setAuthorityData((prev) => ({
         ...prev,
         contacts: prev.contacts.map((contact) =>
-          contact.id === id
-            ? {
-                ...contact,
-                authorityId: input.authorityId,
-                name: input.name,
-                email: input.email ?? "",
-                phone: input.phone ?? "",
-                roleTitle: input.roleTitle ?? "",
-                updatedAt: timestamp
-              }
-            : contact
+          contact.id === id ? mergeContact(contact, updatedContact) : contact
         )
       }));
+      clearPersistedValue(AUTHORITIES_STORAGE_KEY);
+      return updatedContact;
     },
-    []
+    [contacts]
   );
 
-  const archiveContact = useCallback((id: string) => {
-    const timestamp = nowStamp();
-    setAuthorityData((prev) => ({
-      ...prev,
-      contacts: prev.contacts.map((contact) =>
-        contact.id === id ? { ...contact, isArchived: true, updatedAt: timestamp } : contact
-      )
-    }));
+  const archiveContact = useCallback(
+    async (id: string) => {
+      const existing = contacts.find((contact) => contact.id === id);
+      if (!existing) {
+        return null;
+      }
+
+      const updatedContact = await apiArchiveAuthorityContact(id);
+      setAuthorityData((prev) => ({
+        ...prev,
+        contacts: prev.contacts.map((contact) =>
+          contact.id === id ? mergeContact(contact, updatedContact) : contact
+        )
+      }));
+      clearPersistedValue(AUTHORITIES_STORAGE_KEY);
+      return updatedContact;
+    },
+    [contacts]
+  );
+
+  const restoreContact = useCallback(
+    async (id: string) => {
+      const existing = contacts.find((contact) => contact.id === id);
+      if (!existing) {
+        return null;
+      }
+
+      const updatedContact = await apiRestoreAuthorityContact(id);
+      setAuthorityData((prev) => ({
+        ...prev,
+        contacts: prev.contacts.map((contact) =>
+          contact.id === id ? mergeContact(contact, updatedContact) : contact
+        )
+      }));
+      clearPersistedValue(AUTHORITIES_STORAGE_KEY);
+      return updatedContact;
+    },
+    [contacts]
+  );
+
+  const replaceAuthorities = useCallback(async (value: AuthoritiesSnapshot) => {
+    const replaced = normalizeAuthorities(await bulkReplaceAuthorities(value));
+    setAuthorityData(replaced);
+    clearPersistedValue(AUTHORITIES_STORAGE_KEY);
   }, []);
 
-  const restoreContact = useCallback((id: string) => {
-    const timestamp = nowStamp();
-    setAuthorityData((prev) => ({
-      ...prev,
-      contacts: prev.contacts.map((contact) =>
-        contact.id === id ? { ...contact, isArchived: false, updatedAt: timestamp } : contact
-      )
-    }));
-  }, []);
-
-  const replaceAuthorities = useCallback((value: AuthoritiesSnapshot) => {
-    setAuthorityData(normalizeAuthorities(value));
-  }, []);
-
-  const resetAuthorities = useCallback(() => {
-    setAuthorityData(createSeedAuthorities());
+  const resetAuthorities = useCallback(async () => {
+    const seed = createSeedAuthorities();
+    const replaced = normalizeAuthorities(await bulkReplaceAuthorities(seed));
+    setAuthorityData(replaced);
+    clearPersistedValue(AUTHORITIES_STORAGE_KEY);
   }, []);
 
   const getAuthorityName = useCallback(
@@ -311,9 +474,10 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       if (!authorityId) {
         return "";
       }
-      return getAuthority(authorityId)?.name ?? "";
+
+      return authorities.find((authority) => authority.id === authorityId)?.name ?? "";
     },
-    [getAuthority]
+    [authorities]
   );
 
   const getContactsForAuthority = useCallback(
@@ -326,7 +490,7 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
     [getContacts]
   );
 
-  const value = useMemo(
+  const value = useMemo<AuthoritiesContextValue>(
     () => ({
       authorities,
       contacts,
@@ -342,26 +506,28 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       restoreContact,
       replaceAuthorities,
       resetAuthorities,
+      reloadAuthorities,
       getAuthorityName,
       getContactsForAuthority
     }),
     [
-      addAuthority,
-      addContact,
-      archiveAuthority,
-      archiveContact,
       authorities,
       contacts,
       getAuthority,
-      getAuthorityName,
       getContacts,
-      getContactsForAuthority,
+      addAuthority,
+      updateAuthority,
+      archiveAuthority,
+      restoreAuthority,
+      addContact,
+      updateContact,
+      archiveContact,
+      restoreContact,
       replaceAuthorities,
       resetAuthorities,
-      restoreAuthority,
-      restoreContact,
-      updateAuthority,
-      updateContact
+      reloadAuthorities,
+      getAuthorityName,
+      getContactsForAuthority
     ]
   );
 

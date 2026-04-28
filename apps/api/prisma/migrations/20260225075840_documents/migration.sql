@@ -1,6 +1,5 @@
--- CreateTable
 CREATE TABLE "Document" (
-    "id" TEXT NOT NULL PRIMARY KEY,
+    "id" TEXT NOT NULL,
     "ownerType" TEXT NOT NULL,
     "ownerId" TEXT NOT NULL,
     "filename" TEXT NOT NULL,
@@ -11,13 +10,15 @@ CREATE TABLE "Document" (
     "sha256" TEXT,
     "isArchived" BOOLEAN NOT NULL DEFAULT false,
     "createdByUserId" TEXT,
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" DATETIME NOT NULL,
-    CONSTRAINT "Document_createdByUserId_fkey" FOREIGN KEY ("createdByUserId") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Document_pkey" PRIMARY KEY ("id")
 );
 
--- CreateIndex
 CREATE INDEX "Document_ownerType_ownerId_idx" ON "Document"("ownerType", "ownerId");
-
--- CreateIndex
 CREATE INDEX "Document_createdAt_idx" ON "Document"("createdAt");
+
+ALTER TABLE "Document"
+ADD CONSTRAINT "Document_createdByUserId_fkey"
+FOREIGN KEY ("createdByUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;

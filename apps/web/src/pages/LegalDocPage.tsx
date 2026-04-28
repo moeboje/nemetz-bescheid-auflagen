@@ -5,10 +5,12 @@ import { t } from "../i18n";
 import { useRuntimeConfig } from "../config/runtimeConfig";
 import AuditTimeline from "../components/AuditTimeline";
 import DeadlineModal from "../components/DeadlineModal";
+import HelpHintCard from "../components/HelpHintCard";
 import { EyeIcon, EditIcon } from "../components/Icons";
 import DocumentsPanel from "../components/DocumentsPanel";
 import CommentsPanel from "../components/CommentsPanel";
 import ObligationModal from "../components/ObligationModal";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { useAuditLog } from "../state/AuditLogStore";
 import { useDeadlines } from "../state/DeadlinesStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
@@ -227,13 +229,15 @@ export default function LegalDocPage() {
     );
   }
 
-  const handleArchive = (cascadeChildren: boolean) => {
+  const handleArchive = async (cascadeChildren: boolean) => {
     if (cascadeChildren) {
-      docObligations.forEach((obligation) => archiveObligation(obligation.id));
+      await Promise.all(docObligations.map((obligation) => archiveObligation(obligation.id)));
       docDeadlines.forEach((deadline) => archiveDeadline(deadline.id));
     }
-    archiveLegalDoc(legalDoc.id);
-    navigate("..", { relative: "path" });
+    const archived = await archiveLegalDoc(legalDoc.id);
+    if (archived) {
+      navigate("..", { relative: "path" });
+    }
   };
 
   return (
@@ -264,13 +268,29 @@ export default function LegalDocPage() {
             <Button
               variant="secondary"
               disabled={!permissions.canEditLegalDocs}
-              onClick={() => restoreLegalDoc(legalDoc.id)}
+              onClick={() => void restoreLegalDoc(legalDoc.id)}
             >
               {t("common.restore")}
             </Button>
           )}
         </div>
       </div>
+
+      {runtimeConfig.features.enableHelpHints ? (
+        <HelpHintCard
+          hintId="hint.legalDocDetail"
+          title="Rechtsdokument, Folgeobjekte und Anhaenge"
+          bullets={[
+            "Leiten Sie Auflagen und Fristen direkt vom konkreten Dokument ab.",
+            "Nutzen Sie Scope-Override und AI-Vorschlaege nur bewusst und fachlich geprueft.",
+            "Archivieren Sie das Dokument nicht vorschnell, solange darunter noch operative Folgeobjekte laufen."
+          ]}
+          link={{
+            label: "Passenden Hilfeartikel oeffnen",
+            to: getHelpHref(HELP_CONTEXT_SLUGS.legalDocDetail)
+          }}
+        />
+      ) : null}
 
       <div className="tabs">
         <button
@@ -538,7 +558,7 @@ export default function LegalDocPage() {
               variant="secondary"
               onClick={() => {
                 setArchiveModalOpen(false);
-                handleArchive(false);
+                void handleArchive(false);
               }}
             >
               {t("legalDocs.archive.parentOnly")}
@@ -546,7 +566,7 @@ export default function LegalDocPage() {
             <Button
               onClick={() => {
                 setArchiveModalOpen(false);
-                handleArchive(true);
+                void handleArchive(true);
               }}
               disabled={docObligations.length + docDeadlines.length === 0}
             >

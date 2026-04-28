@@ -9,6 +9,7 @@ export type RuntimeFeatures = {
   enableCalendarExport: boolean;
   enableAiAnalysis: boolean;
   enableHelpHints: boolean;
+  enableProjectChecklists: boolean;
 };
 
 export type RuntimeAiConfig = {
@@ -31,7 +32,8 @@ const DEFAULT_FEATURES: RuntimeFeatures = {
   enableRbacDemo: true,
   enableCalendarExport: true,
   enableAiAnalysis: false,
-  enableHelpHints: true
+  enableHelpHints: true,
+  enableProjectChecklists: true
 };
 
 export const DEFAULT_RUNTIME_CONFIG: RuntimeConfig = {
@@ -80,7 +82,11 @@ function normalizeFeatures(value: unknown): RuntimeFeatures {
     enableRbacDemo: toBoolean(value.enableRbacDemo, DEFAULT_FEATURES.enableRbacDemo),
     enableCalendarExport: toBoolean(value.enableCalendarExport, DEFAULT_FEATURES.enableCalendarExport),
     enableAiAnalysis: toBoolean(value.enableAiAnalysis, DEFAULT_FEATURES.enableAiAnalysis),
-    enableHelpHints: toBoolean(value.enableHelpHints, DEFAULT_FEATURES.enableHelpHints)
+    enableHelpHints: toBoolean(value.enableHelpHints, DEFAULT_FEATURES.enableHelpHints),
+    enableProjectChecklists: toBoolean(
+      value.enableProjectChecklists,
+      DEFAULT_FEATURES.enableProjectChecklists
+    )
   };
 }
 

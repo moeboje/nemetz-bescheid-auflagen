@@ -3,6 +3,7 @@ import {
   archiveAdminRole,
   createAdminRole,
   listAdminRoles,
+  listAdminRolesLookup,
   restoreAdminRole,
   updateAdminRole,
   type AdminRole,
@@ -14,13 +15,14 @@ type RolesContextValue = {
   roles: AdminRole[];
   loadRoles: (query?: AdminRolesQuery) => Promise<{ items: AdminRole[]; total: number }>;
   reloadRoles: () => Promise<AdminRole[]>;
-  createRole: (input: { key: string; labelDe: string; descriptionDe?: string }) => Promise<AdminRole>;
+  createRole: (input: { key: string; labelDe: string; descriptionDe?: string; permissionKeys?: string[] }) => Promise<AdminRole>;
   updateRole: (
     id: string,
     input: Partial<{
       key: string;
       labelDe: string;
       descriptionDe?: string;
+      permissionKeys?: string[];
     }>
   ) => Promise<AdminRole>;
   archiveRole: (id: string) => Promise<AdminRole>;
@@ -38,27 +40,33 @@ function sortRoles(rows: AdminRole[]) {
 export function RolesProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const [roles, setRoles] = useState<AdminRole[]>([]);
+  const permissionKeys = Array.isArray(user?.effectivePermissions) ? user.effectivePermissions : [];
+  const hasAdminAccess = permissionKeys.includes("admin.access");
+  const canLookupRoles =
+    hasAdminAccess &&
+    (permissionKeys.includes("roles.view") ||
+      permissionKeys.includes("roles.manage") ||
+      permissionKeys.includes("users.view") ||
+      permissionKeys.includes("users.manage"));
 
   const loadRoles = useCallback(async (query: AdminRolesQuery = {}) => {
     return listAdminRoles(query);
   }, []);
 
   const reloadRoles = useCallback(async () => {
-    if (!user || user.role !== "ADMIN") {
+    if (!user || !canLookupRoles) {
       setRoles([]);
       return [];
     }
 
-    const payload = await listAdminRoles({
-      archived: "false"
-    });
+    const payload = await listAdminRolesLookup();
     const next = sortRoles(payload.items);
     setRoles(next);
     return next;
-  }, [user]);
+  }, [canLookupRoles, user]);
 
   useEffect(() => {
-    if (!user || user.role !== "ADMIN") {
+    if (!user || !canLookupRoles) {
       setRoles([]);
       return;
     }
@@ -66,10 +74,10 @@ export function RolesProvider({ children }: { children: React.ReactNode }) {
     void reloadRoles().catch(() => {
       setRoles([]);
     });
-  }, [reloadRoles, user]);
+  }, [canLookupRoles, reloadRoles, user]);
 
   const createRoleEntry = useCallback(
-    async (input: { key: string; labelDe: string; descriptionDe?: string }) => {
+    async (input: { key: string; labelDe: string; descriptionDe?: string; permissionKeys?: string[] }) => {
       const created = await createAdminRole(input);
       await reloadRoles();
       return created;
@@ -84,6 +92,7 @@ export function RolesProvider({ children }: { children: React.ReactNode }) {
         key: string;
         labelDe: string;
         descriptionDe?: string;
+        permissionKeys?: string[];
       }>
     ) => {
       const updated = await updateAdminRole(id, input);

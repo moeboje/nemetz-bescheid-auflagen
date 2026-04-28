@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  Badge,
   Breadcrumbs,
   Button,
   Card,
@@ -13,6 +14,7 @@ import { t } from "../i18n";
 import { EyeIcon } from "../components/Icons";
 import HelpHintCard from "../components/HelpHintCard";
 import { useRuntimeConfig } from "../config/runtimeConfig";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
 import { useAuthorities } from "../state/AuthoritiesStore";
@@ -22,6 +24,18 @@ import { useTasks } from "../state/TasksStore";
 import { useAuthorization } from "../state/AuthorizationStore";
 import { ProjectPolicy } from "../policies/ProjectPolicy";
 import ProjectModal from "../components/ProjectModal";
+import {
+  PROJECT_STATUS_FILTER_UNSET,
+  getProjectStatusBadgeVariant,
+  getProjectStatusLabel,
+  getProjectStatusOptions
+} from "../projectStatus";
+import {
+  PROJECT_SUBMISSION_TYPE_FILTER_UNSET,
+  getProjectSubmissionTypeBadgeVariant,
+  getProjectSubmissionTypeLabel,
+  getProjectSubmissionTypeOptions
+} from "../projectSubmissionType";
 
 export default function ProjectsPage() {
   const navigate = useNavigate();
@@ -40,6 +54,8 @@ export default function ProjectsPage() {
     siteId: "",
     facilityId: "",
     authorityId: "",
+    status: "",
+    submissionType: "",
     showArchived: false
   });
 
@@ -98,6 +114,28 @@ export default function ProjectsPage() {
         .map((authority) => ({ value: authority.id, label: authority.name })),
     [authorities]
   );
+  const statusOptions = useMemo(
+    () => [
+      { value: "", label: t("projects.filters.status") },
+      {
+        value: PROJECT_STATUS_FILTER_UNSET,
+        label: getProjectStatusLabel()
+      },
+      ...getProjectStatusOptions()
+    ],
+    []
+  );
+  const submissionTypeOptions = useMemo(
+    () => [
+      { value: "", label: t("projects.filters.submissionType") },
+      {
+        value: PROJECT_SUBMISSION_TYPE_FILTER_UNSET,
+        label: getProjectSubmissionTypeLabel()
+      },
+      ...getProjectSubmissionTypeOptions()
+    ],
+    []
+  );
 
   const filteredProjects = useMemo(() => {
     return projects.filter((project) => {
@@ -118,7 +156,27 @@ export default function ProjectsPage() {
       const matchesAuthority = filters.authorityId
         ? project.authorityId === filters.authorityId
         : true;
-      return matchesSearch && matchesCompany && matchesSite && matchesFacility && matchesAuthority;
+      const matchesStatus =
+        filters.status === ""
+          ? true
+          : filters.status === PROJECT_STATUS_FILTER_UNSET
+          ? !project.status
+          : project.status === filters.status;
+      const matchesSubmissionType =
+        filters.submissionType === ""
+          ? true
+          : filters.submissionType === PROJECT_SUBMISSION_TYPE_FILTER_UNSET
+          ? !project.submissionType
+          : project.submissionType === filters.submissionType;
+      return (
+        matchesSearch &&
+        matchesCompany &&
+        matchesSite &&
+        matchesFacility &&
+        matchesAuthority &&
+        matchesStatus &&
+        matchesSubmissionType
+      );
     });
   }, [actor, filters, projects]);
 
@@ -133,6 +191,24 @@ export default function ProjectsPage() {
       header: t("projects.table.scope"),
       render: (project: (typeof projects)[number]) =>
         getScopeLabel(project.companyId, project.siteId, project.facilityId)
+    },
+    {
+      key: "status",
+      header: t("projects.table.status"),
+      render: (project: (typeof projects)[number]) => (
+        <Badge variant={getProjectStatusBadgeVariant(project.status)}>
+          {getProjectStatusLabel(project.status)}
+        </Badge>
+      )
+    },
+    {
+      key: "submissionType",
+      header: t("projects.table.submissionType"),
+      render: (project: (typeof projects)[number]) => (
+        <Badge variant={getProjectSubmissionTypeBadgeVariant(project.submissionType)}>
+          {getProjectSubmissionTypeLabel(project.submissionType)}
+        </Badge>
+      )
     },
     {
       key: "authority",
@@ -212,12 +288,12 @@ export default function ProjectsPage() {
             "helpHints.projects.bullets.2",
             "helpHints.projects.bullets.3"
           ]}
-          link={{ labelKey: "common.openHelp", to: "/help#workflows" }}
+          link={{ labelKey: "common.openHelp", to: getHelpHref(HELP_CONTEXT_SLUGS.projectsList) }}
         />
       ) : null}
 
       <Card>
-        <div className="filterRowFive">
+        <div className="filterRowSeven">
           <Input
             placeholder={t("projects.filters.search")}
             value={filters.search}
@@ -263,6 +339,20 @@ export default function ProjectsPage() {
             value={filters.authorityId}
             onChange={(event) =>
               setFilters((prev) => ({ ...prev, authorityId: event.target.value }))
+            }
+          />
+          <Select
+            options={statusOptions}
+            value={filters.status}
+            onChange={(event) =>
+              setFilters((prev) => ({ ...prev, status: event.target.value }))
+            }
+          />
+          <Select
+            options={submissionTypeOptions}
+            value={filters.submissionType}
+            onChange={(event) =>
+              setFilters((prev) => ({ ...prev, submissionType: event.target.value }))
             }
           />
         </div>

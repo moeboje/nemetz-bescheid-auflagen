@@ -9,7 +9,8 @@
     "enableRbacDemo": true,
     "enableCalendarExport": true,
     "enableAiAnalysis": false,
-    "enableHelpHints": true
+    "enableHelpHints": true,
+    "enableProjectChecklists": true
   },
   "ai": {
     "provider": "disabled",

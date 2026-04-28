@@ -56,6 +56,7 @@ function extractApiErrorMessage(error: unknown, fallbackKey: string) {
 export default function AdminExternalOrgsPage() {
   const { permissions } = useAuthorization();
   const { loadExternalOrgs, createExternalOrg, updateExternalOrg, archiveExternalOrg, restoreExternalOrg } = useExternalOrgs();
+  const canManageExternalOrgs = permissions.canManageExternalOrgsAdmin;
 
   const [search, setSearch] = useState("");
   const [archivedFilter, setArchivedFilter] = useState<ArchivedFilter>("false");
@@ -99,11 +100,14 @@ export default function AdminExternalOrgsPage() {
     void fetchExternalOrgs();
   }, [fetchExternalOrgs]);
 
-  if (!permissions.canViewAdmin) {
+  if (!permissions.canViewExternalOrgsAdmin) {
     return <Navigate to="/compliance/dashboard" replace />;
   }
 
   const openCreateModal = () => {
+    if (!canManageExternalOrgs) {
+      return;
+    }
     setEditingId(null);
     setForm(emptyForm);
     setFormError("");
@@ -112,6 +116,9 @@ export default function AdminExternalOrgsPage() {
   };
 
   const openEditModal = (orgId: string) => {
+    if (!canManageExternalOrgs) {
+      return;
+    }
     const row = rows.find((entry) => entry.id === orgId);
     if (!row) {
       return;
@@ -148,6 +155,9 @@ export default function AdminExternalOrgsPage() {
   };
 
   const handleSave = async () => {
+    if (!canManageExternalOrgs) {
+      return;
+    }
     const validationError = validateForm();
     if (validationError) {
       setFormError(validationError);
@@ -189,6 +199,9 @@ export default function AdminExternalOrgsPage() {
   };
 
   const handleConfirmArchiveRestore = async () => {
+    if (!canManageExternalOrgs) {
+      return;
+    }
     if (!confirmation) {
       return;
     }
@@ -219,7 +232,7 @@ export default function AdminExternalOrgsPage() {
     <div className="page">
       <div className="pageHeader">
         <h1 className="pageTitle">{t("admin.externalOrgs.title")}</h1>
-        <Button onClick={openCreateModal}>{t("admin.externalOrgs.action.new")}</Button>
+        {canManageExternalOrgs ? <Button onClick={openCreateModal}>{t("admin.externalOrgs.action.new")}</Button> : null}
       </div>
 
       <AdminSubnav />
@@ -296,42 +309,46 @@ export default function AdminExternalOrgsPage() {
         ]}
         data={rows}
         getRowKey={(row) => row.id}
-        rowActions={(row) => (
-          <div className="tableActions">
-            <IconButton ariaLabel={t("admin.externalOrgs.action.edit")} onClick={() => openEditModal(row.id)}>
-              <EditIcon />
-            </IconButton>
+        rowActions={
+          canManageExternalOrgs
+            ? (row) => (
+                <div className="tableActions">
+                  <IconButton ariaLabel={t("admin.externalOrgs.action.edit")} onClick={() => openEditModal(row.id)}>
+                    <EditIcon />
+                  </IconButton>
 
-            {row.isArchived ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() =>
-                  setConfirmation({
-                    orgId: row.id,
-                    orgLabel: row.name,
-                    mode: "restore"
-                  })
-                }
-              >
-                {t("admin.externalOrgs.action.restore")}
-              </Button>
-            ) : (
-              <IconButton
-                ariaLabel={t("admin.externalOrgs.action.archive")}
-                onClick={() =>
-                  setConfirmation({
-                    orgId: row.id,
-                    orgLabel: row.name,
-                    mode: "archive"
-                  })
-                }
-              >
-                <ArchiveIcon />
-              </IconButton>
-            )}
-          </div>
-        )}
+                  {row.isArchived ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        setConfirmation({
+                          orgId: row.id,
+                          orgLabel: row.name,
+                          mode: "restore"
+                        })
+                      }
+                    >
+                      {t("admin.externalOrgs.action.restore")}
+                    </Button>
+                  ) : (
+                    <IconButton
+                      ariaLabel={t("admin.externalOrgs.action.archive")}
+                      onClick={() =>
+                        setConfirmation({
+                          orgId: row.id,
+                          orgLabel: row.name,
+                          mode: "archive"
+                        })
+                      }
+                    >
+                      <ArchiveIcon />
+                    </IconButton>
+                  )}
+                </div>
+              )
+            : undefined
+        }
       />
 
       <Modal

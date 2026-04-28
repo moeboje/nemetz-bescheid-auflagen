@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { after, before, beforeEach, describe, it } from "node:test";
 import type { AddressInfo } from "node:net";
 import { createApp } from "./app.js";
-import type { AppConfig } from "./config.js";
+import { resolveDatabaseUrl, type AppConfig } from "./config.js";
 import { prisma } from "./prisma.js";
 import { hashPassword } from "./security.js";
 
@@ -72,8 +72,19 @@ describe("Comments API", () => {
   before(async () => {
     const config: AppConfig = {
       port: 0,
-      databaseUrl: process.env.DATABASE_URL || "file:./test.db",
+      databaseUrl: resolveDatabaseUrl(process.env, "test"),
       appOrigin: "http://localhost:5173",
+      notificationBaseUrl: "http://localhost:5173",
+      notificationDispatchEnabled: false,
+      notificationDryRun: true,
+      notificationFromLabel: "Nemetz Portal",
+      powerAutomateNotificationWebhookUrl: "",
+      powerAutomateNotificationSecret: "",
+      notificationMaxAttempts: 5,
+      notificationDispatchBatchSize: 25,
+      notificationDispatchTimeoutMs: 15_000,
+      notificationClaimLeaseSeconds: 300,
+      notificationTimeZone: "Europe/Vienna",
       sessionSecret: "test-secret",
       nodeEnv: "test",
       resetTokenTtlMinutes: 30,

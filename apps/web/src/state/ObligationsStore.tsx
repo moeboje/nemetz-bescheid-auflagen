@@ -1,31 +1,47 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   DEFAULT_OBLIGATION_EVIDENCE_REQUIREMENTS,
   obligations as initialObligations,
   type Obligation,
   type ObligationEvidenceRequirements
 } from "../data/obligations";
+import { useAuth } from "./AuthStore";
 import { useAuditLog } from "./AuditLogStore";
-import { loadJSON, saveJSON, STORAGE_KEYS } from "./persistence";
+import { clearPersistedValue, makeStorageKey } from "./persistence";
+import {
+  archiveObligation as apiArchiveObligation,
+  bulkDeleteObligations,
+  bulkReplaceObligations,
+  createObligation as apiCreateObligation,
+  listObligations,
+  restoreObligation as apiRestoreObligation,
+  updateObligation as apiUpdateObligation
+} from "../api/obligations";
+
+type ObligationCreateInput = Omit<
+  Obligation,
+  "id" | "createdAt" | "updatedAt" | "isArchived" | "archivedAt"
+> & {
+  id?: string;
+};
 
 export type ObligationsContextValue = {
   obligations: Obligation[];
   addObligation: (
-    input: Omit<Obligation, "id" | "createdAt" | "updatedAt" | "isArchived" | "archivedAt">
-  ) => void;
-  updateObligation: (id: string, input: Partial<Obligation>) => void;
-  archiveObligation: (id: string) => void;
-  restoreObligation: (id: string) => void;
+    input: ObligationCreateInput
+  ) => Promise<Obligation | null>;
+  updateObligation: (id: string, input: Partial<Obligation>) => Promise<Obligation | null>;
+  archiveObligation: (id: string) => Promise<Obligation | null>;
+  restoreObligation: (id: string) => Promise<Obligation | null>;
   getObligationsForLegalDoc: (legalDocId: string) => Obligation[];
-  replaceObligations: (value: Obligation[]) => void;
-  resetObligations: () => void;
+  replaceObligations: (value: Obligation[]) => Promise<void>;
+  resetObligations: () => Promise<void>;
+  reloadObligations: () => Promise<Obligation[]>;
 };
 
 const ObligationsContext = createContext<ObligationsContextValue | undefined>(undefined);
 
-function createId() {
-  return `ob-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-}
+export const OBLIGATIONS_STORAGE_KEY = makeStorageKey("obligations");
 
 function nowStamp() {
   return new Date().toISOString();
@@ -101,7 +117,12 @@ function normalizeObligation(value: Partial<Obligation>, index: number): Obligat
         : undefined,
     ownerUserId: value.ownerUserId ?? undefined,
     deputyUserId: value.deputyUserId ?? undefined,
-    origin: value.origin === "AI_ACCEPTED" ? "AI_ACCEPTED" : value.origin === "MANUAL" ? "MANUAL" : undefined,
+    origin:
+      value.origin === "AI_ACCEPTED"
+        ? "AI_ACCEPTED"
+        : value.origin === "MANUAL"
+        ? "MANUAL"
+        : undefined,
     sourceSuggestionId: value.sourceSuggestionId ?? undefined,
     sourceRunId: value.sourceRunId ?? undefined,
     criticality: value.criticality ?? undefined,
@@ -124,146 +145,241 @@ function normalizeObligations(value: unknown): Obligation[] {
     .filter((obligation): obligation is Obligation => Boolean(obligation));
 }
 
-export function ObligationsProvider({ children }: { children: React.ReactNode }) {
-  const { logEvent } = useAuditLog();
-  const [obligations, setObligations] = useState<Obligation[]>(() =>
-    loadJSON<Obligation[]>(STORAGE_KEYS.obligations, {
-      fallback: initialObligations,
-      migrate: (value) => {
-        const normalized = normalizeObligations(value);
-        return normalized.length ? normalized : initialObligations;
-      }
-    }) ?? initialObligations
-  );
+const normalizedInitialObligations = normalizeObligations(initialObligations);
 
-  React.useEffect(() => {
-    saveJSON(STORAGE_KEYS.obligations, obligations);
-  }, [obligations]);
+function mergeObligation(existing: Obligation, incoming: Obligation) {
+  return {
+    ...existing,
+    ...incoming,
+    infoTextLong: incoming.infoTextLong ?? existing.infoTextLong ?? "",
+    evidenceRequirements: incoming.evidenceRequirements ?? existing.evidenceRequirements
+  };
+}
+
+export function ObligationsProvider({ children }: { children: React.ReactNode }) {
+  const { user: authUser } = useAuth();
+  const { logEvent } = useAuditLog();
+  const [obligations, setObligations] = useState<Obligation[]>([]);
+
+  const reloadObligations = useCallback(async () => {
+    if (!authUser || authUser.type === "EXTERNAL") {
+      setObligations([]);
+      clearPersistedValue(OBLIGATIONS_STORAGE_KEY);
+      return [];
+    }
+
+    const next = normalizeObligations(await listObligations());
+    setObligations(next);
+    clearPersistedValue(OBLIGATIONS_STORAGE_KEY);
+    return next;
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser || authUser.type === "EXTERNAL") {
+      setObligations([]);
+      clearPersistedValue(OBLIGATIONS_STORAGE_KEY);
+      return;
+    }
+
+    void reloadObligations().catch(() => {
+      setObligations([]);
+      clearPersistedValue(OBLIGATIONS_STORAGE_KEY);
+    });
+  }, [authUser, reloadObligations]);
 
   const addObligation = useCallback(
-    (
-      input: Omit<Obligation, "id" | "createdAt" | "updatedAt" | "isArchived" | "archivedAt">
+    async (
+      input: ObligationCreateInput
     ) => {
-      const timestamp = nowStamp();
-      const normalized = normalizeObligationInput(input);
-      const newObligation: Obligation = {
-        ...normalized,
-        id: createId(),
-        origin: normalized.origin ?? "MANUAL",
-        evidenceRequirements: normalizeEvidenceRequirements(normalized.evidenceRequirements),
-        archivedAt: undefined,
-        isArchived: false,
-        createdAt: timestamp,
-        updatedAt: timestamp
-      };
-      setObligations((prev) => [newObligation, ...prev]);
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "OBLIGATION",
-        entityId: newObligation.id,
-        action: "CREATED",
-        summary: newObligation.title
-      });
+      try {
+        const normalized = normalizeObligations([
+          await apiCreateObligation({
+            id: input.id,
+            legalDocId: input.legalDocId,
+            title: input.title,
+            infoTextLong: input.infoTextLong ?? "",
+            level: input.level,
+            criticality: input.criticality,
+            scheduleType: input.scheduleType,
+            firstDueDate: input.firstDueDate,
+            intervalUnit: input.intervalUnit,
+            intervalValue: input.intervalValue,
+            ownerUserId: input.ownerUserId,
+            deputyUserId: input.deputyUserId,
+            origin: input.origin ?? "MANUAL",
+            sourceSuggestionId: input.sourceSuggestionId,
+            sourceRunId: input.sourceRunId,
+            emailReminderEnabled: Boolean(input.emailReminderEnabled),
+            emailReminderDaysBefore: input.emailReminderDaysBefore,
+            evidenceRequirements: normalizeEvidenceRequirements(input.evidenceRequirements)
+          })
+        ])[0];
+
+        if (!normalized) {
+          return null;
+        }
+
+        setObligations((prev) => [normalized, ...prev]);
+        clearPersistedValue(OBLIGATIONS_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "OBLIGATION",
+          entityId: normalized.id,
+          action: "CREATED",
+          summary: normalized.title
+        });
+        return normalized;
+      } catch {
+        return null;
+      }
     },
     [logEvent]
   );
 
   const updateObligation = useCallback(
-    (id: string, input: Partial<Obligation>) => {
-      const current = obligations.find((obligation) => obligation.id === id);
-      if (!current) {
-        return;
+    async (id: string, input: Partial<Obligation>) => {
+      const existing = obligations.find((obligation) => obligation.id === id);
+      if (!existing) {
+        return null;
       }
 
-      const timestamp = nowStamp();
-      setObligations((prev) =>
-        prev.map((obligation) => {
-          if (obligation.id !== id) {
-            return obligation;
-          }
-          const merged = normalizeObligationInput({
-            ...obligation,
-            ...input
-          });
+      try {
+        const updatedObligation = normalizeObligations([
+          await apiUpdateObligation(id, {
+            legalDocId:
+              input.legalDocId !== undefined ? input.legalDocId : existing.legalDocId,
+            title: input.title !== undefined ? input.title : existing.title,
+            infoTextLong:
+              input.infoTextLong !== undefined ? input.infoTextLong : existing.infoTextLong ?? "",
+            level: input.level !== undefined ? input.level : existing.level,
+            criticality:
+              input.criticality !== undefined ? input.criticality : existing.criticality,
+            scheduleType:
+              input.scheduleType !== undefined ? input.scheduleType : existing.scheduleType,
+            firstDueDate:
+              input.firstDueDate !== undefined ? input.firstDueDate : existing.firstDueDate,
+            intervalUnit:
+              input.intervalUnit !== undefined ? input.intervalUnit : existing.intervalUnit,
+            intervalValue:
+              input.intervalValue !== undefined ? input.intervalValue : existing.intervalValue,
+            ownerUserId:
+              input.ownerUserId !== undefined ? input.ownerUserId : existing.ownerUserId,
+            deputyUserId:
+              input.deputyUserId !== undefined ? input.deputyUserId : existing.deputyUserId,
+            origin: input.origin !== undefined ? input.origin : existing.origin,
+            sourceSuggestionId:
+              input.sourceSuggestionId !== undefined
+                ? input.sourceSuggestionId
+                : existing.sourceSuggestionId,
+            sourceRunId:
+              input.sourceRunId !== undefined ? input.sourceRunId : existing.sourceRunId,
+            emailReminderEnabled:
+              input.emailReminderEnabled !== undefined
+                ? input.emailReminderEnabled
+                : existing.emailReminderEnabled,
+            emailReminderDaysBefore:
+              input.emailReminderDaysBefore !== undefined
+                ? input.emailReminderDaysBefore
+                : existing.emailReminderDaysBefore,
+            evidenceRequirements:
+              input.evidenceRequirements !== undefined
+                ? normalizeEvidenceRequirements(input.evidenceRequirements)
+                : existing.evidenceRequirements,
+            archivedAt:
+              input.archivedAt !== undefined ? input.archivedAt : existing.archivedAt,
+            isArchived: input.isArchived !== undefined ? input.isArchived : existing.isArchived
+          })
+        ])[0];
 
-          return {
-            ...merged,
-            id: obligation.id,
-            evidenceRequirements: normalizeEvidenceRequirements(merged.evidenceRequirements),
-            archivedAt: merged.archivedAt,
-            isArchived: merged.isArchived,
-            createdAt: obligation.createdAt,
-            updatedAt: timestamp
-          };
-        })
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "OBLIGATION",
-        entityId: id,
-        action: "UPDATED",
-        summary: current.title
-      });
+        if (!updatedObligation) {
+          return null;
+        }
+
+        setObligations((prev) =>
+          prev.map((obligation) =>
+            obligation.id === id ? mergeObligation(obligation, updatedObligation) : obligation
+          )
+        );
+        clearPersistedValue(OBLIGATIONS_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "OBLIGATION",
+          entityId: id,
+          action: "UPDATED",
+          summary: existing.title
+        });
+        return updatedObligation;
+      } catch {
+        return null;
+      }
     },
     [logEvent, obligations]
   );
 
   const archiveObligation = useCallback(
-    (id: string) => {
-      const current = obligations.find((obligation) => obligation.id === id);
-      if (!current) {
-        return;
+    async (id: string) => {
+      const existing = obligations.find((obligation) => obligation.id === id);
+      if (!existing) {
+        return null;
       }
-      const timestamp = nowStamp();
-      setObligations((prev) =>
-        prev.map((obligation) =>
-          obligation.id === id
-            ? {
-                ...obligation,
-                archivedAt: timestamp,
-                isArchived: true,
-                updatedAt: timestamp
-              }
-            : obligation
-        )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "OBLIGATION",
-        entityId: id,
-        action: "ARCHIVED",
-        summary: current.title
-      });
+
+      try {
+        const updatedObligation = normalizeObligations([await apiArchiveObligation(id)])[0];
+        if (!updatedObligation) {
+          return null;
+        }
+
+        setObligations((prev) =>
+          prev.map((obligation) =>
+            obligation.id === id ? mergeObligation(obligation, updatedObligation) : obligation
+          )
+        );
+        clearPersistedValue(OBLIGATIONS_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "OBLIGATION",
+          entityId: id,
+          action: "ARCHIVED",
+          summary: existing.title
+        });
+        return updatedObligation;
+      } catch {
+        return null;
+      }
     },
     [logEvent, obligations]
   );
 
   const restoreObligation = useCallback(
-    (id: string) => {
-      const current = obligations.find((obligation) => obligation.id === id);
-      if (!current) {
-        return;
+    async (id: string) => {
+      const existing = obligations.find((obligation) => obligation.id === id);
+      if (!existing) {
+        return null;
       }
-      const timestamp = nowStamp();
-      setObligations((prev) =>
-        prev.map((obligation) =>
-          obligation.id === id
-            ? {
-                ...obligation,
-                archivedAt: undefined,
-                isArchived: false,
-                updatedAt: timestamp
-              }
-            : obligation
-        )
-      );
-      logEvent({
-        actorLabel: "Demo User",
-        entityType: "OBLIGATION",
-        entityId: id,
-        action: "RESTORED",
-        summary: current.title
-      });
+
+      try {
+        const updatedObligation = normalizeObligations([await apiRestoreObligation(id)])[0];
+        if (!updatedObligation) {
+          return null;
+        }
+
+        setObligations((prev) =>
+          prev.map((obligation) =>
+            obligation.id === id ? mergeObligation(obligation, updatedObligation) : obligation
+          )
+        );
+        clearPersistedValue(OBLIGATIONS_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "OBLIGATION",
+          entityId: id,
+          action: "RESTORED",
+          summary: existing.title
+        });
+        return updatedObligation;
+      } catch {
+        return null;
+      }
     },
     [logEvent, obligations]
   );
@@ -274,13 +390,23 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
     [obligations]
   );
 
-  const replaceObligations = useCallback((value: Obligation[]) => {
-    const normalized = normalizeObligations(value);
-    setObligations(normalized.length ? normalized : initialObligations);
+  const replaceObligations = useCallback(async (value: Obligation[]) => {
+    const replaced = normalizeObligations(await bulkReplaceObligations(value));
+    setObligations(replaced);
+    clearPersistedValue(OBLIGATIONS_STORAGE_KEY);
   }, []);
 
-  const resetObligations = useCallback(() => {
-    setObligations(initialObligations);
+  const resetObligations = useCallback(async () => {
+    if (normalizedInitialObligations.length === 0) {
+      await bulkDeleteObligations();
+      setObligations([]);
+      clearPersistedValue(OBLIGATIONS_STORAGE_KEY);
+      return;
+    }
+
+    const replaced = normalizeObligations(await bulkReplaceObligations(normalizedInitialObligations));
+    setObligations(replaced);
+    clearPersistedValue(OBLIGATIONS_STORAGE_KEY);
   }, []);
 
   const value = useMemo(
@@ -292,13 +418,15 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
       restoreObligation,
       getObligationsForLegalDoc,
       replaceObligations,
-      resetObligations
+      resetObligations,
+      reloadObligations
     }),
     [
       addObligation,
       archiveObligation,
       getObligationsForLegalDoc,
       obligations,
+      reloadObligations,
       replaceObligations,
       resetObligations,
       restoreObligation,

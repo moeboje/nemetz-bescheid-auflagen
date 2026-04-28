@@ -1,5 +1,13 @@
 import { getRuntimeConfigSnapshot } from "../../config/runtimeConfig";
 import { clearAllFiles } from "../../services/fileStorage";
+import { listAuthorities } from "../../api/authorities";
+import { listDeadlines } from "../../api/deadlines";
+import { listLegalDocs } from "../../api/legalDocs";
+import { listObligations } from "../../api/obligations";
+import { listProjectChecklists } from "../../api/projectChecklists";
+import { listProjects } from "../../api/projects";
+import { listScopes } from "../../api/scopes";
+import { listTaskState } from "../../api/taskState";
 import {
   clearPersistedValue,
   parsePersistedPayload,
@@ -8,6 +16,36 @@ import {
   STORAGE_VERSION
 } from "../persistence";
 import type { ExportDataBundle, ExportPayload } from "./types";
+
+type ServerDomainReaderResult = {
+  authorities: Awaited<ReturnType<typeof readAuthoritiesForExport>>;
+  deadlines: Awaited<ReturnType<typeof readDeadlinesForExport>>;
+  legalDocs: Awaited<ReturnType<typeof readLegalDocsForExport>>;
+  obligations: Awaited<ReturnType<typeof readObligationsForExport>>;
+  projectChecklists: Awaited<ReturnType<typeof readProjectChecklistsForExport>>;
+  projects: Awaited<ReturnType<typeof readProjectsForExport>>;
+  scopes: Awaited<ReturnType<typeof readScopesForExport>>;
+  taskState: Awaited<ReturnType<typeof readTaskStateForExport>>;
+};
+
+export const GENERIC_EXPORT_LIMITATION_META: NonNullable<ExportPayload["meta"]> = {
+  warnings: [
+    "Users are server-managed and are intentionally omitted from generic exports because generic imports do not restore users."
+  ],
+  omittedDomains: ["users"]
+};
+
+export class RecoveryExportError extends Error {
+  readonly missingDomains: string[];
+
+  constructor(missingDomains: string[]) {
+    super(
+      `Recovery export failed because server data could not be loaded for: ${missingDomains.join(", ")}`
+    );
+    this.name = "RecoveryExportError";
+    this.missingDomains = missingDomains;
+  }
+}
 
 function readStorageValue<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") {
@@ -31,9 +69,14 @@ function readStorageValue<T>(key: string, fallback: T): T {
   return parsed as T;
 }
 
-export function buildExportPayload(data: ExportDataBundle): ExportPayload {
+export function buildExportPayload(
+  data: ExportDataBundle,
+  options: {
+    meta?: ExportPayload["meta"];
+  } = {}
+): ExportPayload {
   const runtimeConfig = getRuntimeConfigSnapshot();
-  return {
+  const payload: ExportPayload = {
     version: STORAGE_VERSION,
     exportedAt: new Date().toISOString(),
     app: {
@@ -45,27 +88,87 @@ export function buildExportPayload(data: ExportDataBundle): ExportPayload {
       featureFlagsSnapshot: runtimeConfig.features
     }
   };
+
+  if (options.meta) {
+    payload.meta = options.meta;
+  }
+
+  return payload;
 }
 
-export function buildStorageExportPayload() {
+async function readAuthoritiesForExport() {
+  return listAuthorities();
+}
+
+async function readScopesForExport() {
+  return listScopes();
+}
+
+async function readProjectsForExport() {
+  return listProjects();
+}
+
+async function readProjectChecklistsForExport() {
+  return listProjectChecklists();
+}
+
+async function readLegalDocsForExport() {
+  return listLegalDocs();
+}
+
+async function readObligationsForExport() {
+  return listObligations();
+}
+
+async function readDeadlinesForExport() {
+  return listDeadlines();
+}
+
+async function readTaskStateForExport() {
+  return listTaskState();
+}
+
+async function readServerDomainsForExport(): Promise<ServerDomainReaderResult> {
+  const readers = [
+    ["scopes", readScopesForExport],
+    ["authorities", readAuthoritiesForExport],
+    ["projects", readProjectsForExport],
+    ["projectChecklists", readProjectChecklistsForExport],
+    ["legalDocs", readLegalDocsForExport],
+    ["obligations", readObligationsForExport],
+    ["deadlines", readDeadlinesForExport],
+    ["taskState", readTaskStateForExport]
+  ] as const;
+
+  const settled = await Promise.allSettled(readers.map(([, reader]) => reader()));
+  const missingDomains = settled
+    .map((result, index) => (result.status === "rejected" ? readers[index][0] : null))
+    .filter((domain): domain is string => Boolean(domain));
+
+  if (missingDomains.length > 0) {
+    throw new RecoveryExportError(missingDomains);
+  }
+
+  return Object.fromEntries(
+    settled.map((result, index) => [readers[index][0], (result as PromiseFulfilledResult<unknown>).value])
+  ) as ServerDomainReaderResult;
+}
+
+export async function buildStorageExportPayload() {
+  const serverDomains = await readServerDomainsForExport();
   const payload = buildExportPayload({
-    scopes: readStorageValue(STORAGE_KEYS.scopes, {
-      companies: [],
-      sites: [],
-      facilities: []
-    }),
-    authorities: readStorageValue(STORAGE_KEYS.authorities, {
-      authorities: [],
-      contacts: []
-    }),
-    users: readStorageValue(STORAGE_KEYS.users, []),
-    projects: readStorageValue(STORAGE_KEYS.projects, []),
-    legalDocs: readStorageValue(STORAGE_KEYS.legalDocs, []),
-    obligations: readStorageValue(STORAGE_KEYS.obligations, []),
-    deadlines: readStorageValue(STORAGE_KEYS.deadlines, []),
-    taskState: readStorageValue(STORAGE_KEYS.taskState, {}),
+    scopes: serverDomains.scopes,
+    authorities: serverDomains.authorities,
+    projects: serverDomains.projects,
+    projectChecklists: serverDomains.projectChecklists,
+    legalDocs: serverDomains.legalDocs,
+    obligations: serverDomains.obligations,
+    deadlines: serverDomains.deadlines,
+    taskState: serverDomains.taskState,
     auditLog: readStorageValue(STORAGE_KEYS.auditLog, []),
     notifications: readStorageValue(STORAGE_KEYS.notifications, [])
+  }, {
+    meta: GENERIC_EXPORT_LIMITATION_META
   });
 
   return payload;

@@ -455,6 +455,7 @@ export default function AiAnalysisReviewModal({
       open={open}
       onClose={onCancel}
       closeAriaLabel={t("modal.close")}
+      mobileFullscreen
       header={t("ai.review.title")}
       footer={
         <div className="modalFooter">

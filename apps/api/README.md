@@ -6,6 +6,7 @@
 cd apps/api
 cp .env.example .env
 npm install
+# Set explicit non-default ADMIN_EMAIL and ADMIN_PASSWORD in .env before running the seed.
 npm run migrate:dev -- --name init_auth
 npm run seed
 npm run dev
@@ -16,6 +17,7 @@ For this auth upgrade, run migration + seed after pulling changes:
 ```bash
 cd apps/api
 npm install
+# Ensure ADMIN_EMAIL and ADMIN_PASSWORD are set to explicit non-default values in .env.
 npm run migrate:dev -- --name mfa_totp_support
 npm run seed
 ```
@@ -24,21 +26,47 @@ API base path: `http://localhost:4000/api`
 
 ## Seeded Admin
 
-- Default email: `admin@example.com`
-- Password comes from `ADMIN_PASSWORD` (or fallback from `.env.example`)
-- Change the admin password after first login.
+- No default admin credentials are created anymore.
+- Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` explicitly before bootstrap or `npm run seed`.
+- `SEED_DEFAULT_PASSWORD` is optional and defaults to the explicit admin password when omitted.
 
-## Mail Outbox (dev)
+## E-Mail Notifications
 
-Password reset requests are written to:
+Serverseitige Benachrichtigungen werden in PostgreSQL ueber `NotificationOutbox` gespeichert.
 
-- `apps/api/storage/mail-outbox/*.json`
+Wichtige Env-Variablen:
 
-Each file contains:
+- `NOTIFICATION_BASE_URL`
+- `NOTIFICATION_DISPATCH_ENABLED`
+- `NOTIFICATION_DRY_RUN`
+- `POWER_AUTOMATE_NOTIFICATION_WEBHOOK_URL`
+- `POWER_AUTOMATE_NOTIFICATION_SECRET`
+- `PASSWORD_RESET_TOKEN_TTL_MINUTES`
 
-- `toEmail`
-- `resetLink`
-- `expiresAt`
+Dispatcher lokal ausfuehren:
+
+```bash
+cd apps/api
+npx prisma generate
+npm run build
+npm run notifications:dispatch
+```
+
+Dispatcher als periodischen Worker lokal ausfuehren:
+
+```bash
+cd apps/api
+npx prisma generate
+npm run build
+npm run notifications:worker
+```
+
+Hinweise:
+
+- Passwort-Reset-Tokens werden nur gehasht gespeichert.
+- Alte Reset-Links bleiben aktiv, bis ein neu erzeugter Reset-Link erfolgreich zugestellt wurde.
+- Reset-Links werden aus Sicherheitsgruenden nicht fuer asynchrone Retries persistiert; fehlgeschlagene Reset-Mails muessen neu ausgeloest werden.
+- `NOTIFICATION_DRY_RUN=true` markiert Benachrichtigungen als gesendet, ohne einen Power-Automate-Webhook aufzurufen.
 
 ## Migrations
 

@@ -43,7 +43,11 @@ export default function MfaVerifyPage() {
     setError("");
 
     try {
-      await verifyMfa(mfaToken, value.trim());
+      const user = await verifyMfa(mfaToken, value.trim());
+      if (user.mustChangePassword) {
+        navigate("/compliance/account/security?mode=force-password-change", { replace: true });
+        return;
+      }
       navigate(nextPath, { replace: true });
     } catch (err) {
       if (err instanceof ApiError) {
@@ -95,6 +99,9 @@ export default function MfaVerifyPage() {
             </Button>
             <Link to="/login" className="authLink">
               Zurück zum Login
+            </Link>
+            <Link to="/help/auth#security-login-password-mfa" className="authLink">
+              Hilfe zu MFA & Recovery-Code
             </Link>
           </div>
         </form>

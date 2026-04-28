@@ -3,6 +3,21 @@ import crypto from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 
 const PASSWORD_MIN_LENGTH = 12;
+const KNOWN_PLACEHOLDER_PASSWORDS = new Set([
+  "changeme123!",
+  "changeme!",
+  "password123!",
+  "welcome123!",
+  "admin123!",
+  "temp1234!",
+  "temporarypassword123!",
+  "initialpassword123!"
+]);
+
+export type PasswordPolicy = {
+  minLength: number;
+  requireNumberOrSpecial: boolean;
+};
 
 export type PasswordValidationResult = {
   valid: boolean;
@@ -22,20 +37,42 @@ export async function verifyPassword(hash: string, password: string) {
   return argon2.verify(hash, password);
 }
 
-export function validatePassword(password: string): PasswordValidationResult {
+export function validatePassword(password: string, policy: Partial<PasswordPolicy> = {}): PasswordValidationResult {
   const normalized = password.trim();
+  const minLength = Math.max(policy.minLength ?? PASSWORD_MIN_LENGTH, PASSWORD_MIN_LENGTH);
+  const requireNumberOrSpecial = policy.requireNumberOrSpecial ?? true;
 
-  if (normalized.length < PASSWORD_MIN_LENGTH) {
+  if (normalized.length < minLength) {
     return {
       valid: false,
-      message: "Password must be at least 12 characters long."
+      message: `Password must be at least ${minLength} characters long.`
     };
   }
 
-  if (!/[0-9]|[^A-Za-z0-9]/.test(normalized)) {
+  if (requireNumberOrSpecial && !/[0-9]|[^A-Za-z0-9]/.test(normalized)) {
     return {
       valid: false,
       message: "Password must include at least one number or special character."
+    };
+  }
+
+  return { valid: true };
+}
+
+export function isKnownPlaceholderPassword(password: string) {
+  return KNOWN_PLACEHOLDER_PASSWORDS.has(password.trim().toLowerCase());
+}
+
+export function validateManagedPassword(password: string, policy: Partial<PasswordPolicy> = {}): PasswordValidationResult {
+  const policyValidation = validatePassword(password, policy);
+  if (!policyValidation.valid) {
+    return policyValidation;
+  }
+
+  if (isKnownPlaceholderPassword(password)) {
+    return {
+      valid: false,
+      message: "Known placeholder passwords are not allowed."
     };
   }
 

@@ -1,0 +1,189 @@
+.standalonePage {
+  min-height: 100vh;
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  background: var(--color-bg-subtle);
+}
+
+.standaloneHeader {
+  width: min(100%, 1120px);
+  margin: 0 auto;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.standaloneLead {
+  max-width: 72ch;
+}
+
+.hero {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.block {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.quickLinks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-3);
+}
+
+.quickLink {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg);
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-1);
+  text-align: left;
+  cursor: pointer;
+  color: var(--color-text);
+}
+
+.quickLink:hover {
+  border-color: var(--color-primary);
+}
+
+.quickLinkTitle {
+  font-weight: 600;
+}
+
+.categoryLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.categoryLink {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  padding: 6px 10px;
+  text-decoration: none;
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+}
+
+.resetSection {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.actionRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.articleGroup {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.groupHeader {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.article {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.articleHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.articleTitle {
+  margin: 0 0 var(--space-1);
+  font-size: var(--font-size-lg);
+}
+
+.articleSummary {
+  margin: 0;
+}
+
+.articleType {
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-subtle);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.articleSection {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.sectionHeading {
+  margin: 0;
+  font-size: var(--font-size-md);
+}
+
+.list {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.relatedBlock {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.relatedLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.faqList,
+.glossaryList {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.faqItem,
+.glossaryItem {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.faqQuestion,
+.glossaryTerm {
+  margin: 0;
+  font-size: var(--font-size-md);
+}
+
+.synonyms {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+@media (max-width: 768px) {
+  .standalonePage {
+    padding: var(--space-4);
+  }
+
+  .articleHeader {
+    flex-direction: column;
+  }
+
+  .categoryLinks,
+  .relatedLinks,
+  .actionRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

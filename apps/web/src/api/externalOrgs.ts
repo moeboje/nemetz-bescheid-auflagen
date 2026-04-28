@@ -43,6 +43,12 @@ export async function listExternalOrganizations(query: ExternalOrganizationsQuer
   );
 }
 
+export async function listExternalOrganizationsLookup() {
+  return apiRequest<{ items: ExternalOrganization[]; total: number }>("/admin/external-orgs/lookup", {
+    method: "GET"
+  });
+}
+
 export async function createExternalOrganization(input: {
   name: string;
   type: string;

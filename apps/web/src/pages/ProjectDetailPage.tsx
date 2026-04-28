@@ -12,13 +12,17 @@ import {
 import { t } from "../i18n";
 import AuditTimeline from "../components/AuditTimeline";
 import DeadlineModal from "../components/DeadlineModal";
+import HelpHintCard from "../components/HelpHintCard";
 import { EyeIcon, EditIcon } from "../components/Icons";
 import DocumentsPanel from "../components/DocumentsPanel";
 import CommentsPanel from "../components/CommentsPanel";
 import ExternalParticipantModal from "../components/ExternalParticipantModal";
 import LegalDocModal from "../components/LegalDocModal";
+import ProjectChecklistTab from "../components/ProjectChecklistTab";
 import ProjectModal from "../components/ProjectModal";
+import { useRuntimeConfig } from "../config/runtimeConfig";
 import type { ExternalParticipant } from "../data/projects";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { ProjectPolicy } from "../policies/ProjectPolicy";
 import { useAuditLog } from "../state/AuditLogStore";
 import { useAuthorization } from "../state/AuthorizationStore";
@@ -31,6 +35,14 @@ import { useScopes } from "../state/ScopesStore";
 import { useUsers } from "../state/UsersStore";
 import UserMultiSelect from "../components/UserMultiSelect";
 import UserSelect from "../components/UserSelect";
+import {
+  getProjectStatusBadgeVariant,
+  getProjectStatusLabel
+} from "../projectStatus";
+import {
+  getProjectSubmissionTypeBadgeVariant,
+  getProjectSubmissionTypeLabel
+} from "../projectSubmissionType";
 
 function getExternalTypeLabel(type: ExternalParticipant["type"]) {
   if (type === "LAWYER") {
@@ -72,6 +84,7 @@ function isArchivedEntity(value: { isArchived?: boolean; archivedAt?: string }) 
 export default function ProjectDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const runtimeConfig = useRuntimeConfig();
   const { actor } = useAuthorization();
   const { entries } = useAuditLog();
   const {
@@ -103,6 +116,7 @@ export default function ProjectDetailPage() {
     null
   );
   const [showArchivedExternal, setShowArchivedExternal] = useState(false);
+  const checklistTabEnabled = runtimeConfig.features.enableProjectChecklists;
 
   const project = useMemo(() => projects.find((item) => item.id === id), [id, projects]);
   const scopeLabel = project
@@ -213,6 +227,11 @@ export default function ProjectDetailPage() {
       return false;
     });
   }, [entries, project, projectDeadlines, projectDocs, projectObligations]);
+  React.useEffect(() => {
+    if (!checklistTabEnabled && tab === "checklist") {
+      setTab("overview");
+    }
+  }, [checklistTabEnabled, tab]);
 
   if (!project) {
     return (
@@ -332,13 +351,13 @@ export default function ProjectDetailPage() {
     }
   ];
 
-  const handleArchive = (cascadeChildren: boolean) => {
+  const handleArchive = async (cascadeChildren: boolean) => {
     if (cascadeChildren) {
-      projectDocs.forEach((doc) => archiveLegalDoc(doc.id));
-      projectObligations.forEach((obligation) => archiveObligation(obligation.id));
+      await Promise.all(projectDocs.map((doc) => archiveLegalDoc(doc.id)));
+      await Promise.all(projectObligations.map((obligation) => archiveObligation(obligation.id)));
       projectDeadlines.forEach((deadline) => archiveDeadline(deadline.id));
     }
-    const archived = archiveProject(project.id);
+    const archived = await archiveProject(project.id);
     if (archived) {
       navigate("..", { relative: "path" });
     }
@@ -377,6 +396,12 @@ export default function ProjectDetailPage() {
           />
           <h1 className="pageTitle">{project.title}</h1>
           <div className="inlineMeta">
+            <Badge variant={getProjectStatusBadgeVariant(project.status)}>
+              {getProjectStatusLabel(project.status)}
+            </Badge>
+            <Badge variant={getProjectSubmissionTypeBadgeVariant(project.submissionType)}>
+              {getProjectSubmissionTypeLabel(project.submissionType)}
+            </Badge>
             <span>{scopeLabel}</span>
             <span>{authorityName || t("common.notAvailable")}</span>
             <span>{contactName || t("common.notAvailable")}</span>
@@ -391,12 +416,32 @@ export default function ProjectDetailPage() {
               {t("common.archive")}
             </Button>
           ) : (
-            <Button variant="secondary" disabled={!canArchive} onClick={() => restoreProject(project.id)}>
+            <Button
+              variant="secondary"
+              disabled={!canArchive}
+              onClick={() => void restoreProject(project.id)}
+            >
               {t("common.restore")}
             </Button>
           )}
         </div>
       </div>
+
+      {runtimeConfig.features.enableHelpHints ? (
+        <HelpHintCard
+          hintId="hint.projectDetail"
+          title="Projektkontext, Status und Checkliste"
+          bullets={[
+            "Pruefen Sie zuerst Status, Einreichtyp und Scope in der Uebersicht.",
+            "Bearbeiten Sie Beziehungen, Dokumente und Fristen bewusst im passenden Tab statt alles gleichzeitig.",
+            "Die Projektcheckliste ist eine operative Hilfe und ersetzt keine formale Freigabe oder Archivierung."
+          ]}
+          link={{
+            label: "Passenden Hilfeartikel oeffnen",
+            to: getHelpHref(HELP_CONTEXT_SLUGS.projectDetail)
+          }}
+        />
+      ) : null}
 
       <div className="tabs">
         <button
@@ -434,6 +479,15 @@ export default function ProjectDetailPage() {
         >
           {t("projects.detail.tabs.participants")}
         </button>
+        {checklistTabEnabled ? (
+          <button
+            type="button"
+            className={`tabButton ${tab === "checklist" ? "tabButtonActive" : ""}`}
+            onClick={() => setTab("checklist")}
+          >
+            {t("projects.detail.tabs.checklist")}
+          </button>
+        ) : null}
         <button
           type="button"
           className={`tabButton ${tab === "notes" ? "tabButtonActive" : ""}`}
@@ -454,6 +508,22 @@ export default function ProjectDetailPage() {
         <>
           <Card>
             <div className="detailGrid">
+              <div>
+                <div className="metaLabel">{t("projects.detail.status")}</div>
+                <div className="metaValue">
+                  <Badge variant={getProjectStatusBadgeVariant(project.status)}>
+                    {getProjectStatusLabel(project.status)}
+                  </Badge>
+                </div>
+              </div>
+              <div>
+                <div className="metaLabel">{t("projects.detail.submissionType")}</div>
+                <div className="metaValue">
+                  <Badge variant={getProjectSubmissionTypeBadgeVariant(project.submissionType)}>
+                    {getProjectSubmissionTypeLabel(project.submissionType)}
+                  </Badge>
+                </div>
+              </div>
               <div>
                 <div className="metaLabel">{t("projects.detail.shortDescription")}</div>
                 <div className="metaValue">{project.shortDescription || t("common.notAvailable")}</div>
@@ -660,7 +730,7 @@ export default function ProjectDetailPage() {
                   placeholderKey="projects.owner"
                   disabled={!canUpdate}
                   onChange={(userId) =>
-                    updateProject(project.id, { ownerUserId: userId ?? undefined })
+                    void updateProject(project.id, { ownerUserId: userId ?? undefined })
                   }
                 />
               </div>
@@ -673,7 +743,7 @@ export default function ProjectDetailPage() {
                   placeholderKey="projects.deputy"
                   disabled={!canUpdate}
                   onChange={(userId) =>
-                    updateProject(project.id, { deputyUserId: userId ?? undefined })
+                    void updateProject(project.id, { deputyUserId: userId ?? undefined })
                   }
                 />
               </div>
@@ -687,7 +757,7 @@ export default function ProjectDetailPage() {
                   disabled={!canUpdate}
                   onChange={(values) => {
                     const internalParticipants = values.map((userId) => ({ userId }));
-                    updateProject(project.id, {
+                    void updateProject(project.id, {
                       internalParticipants,
                       participantUserIds: values
                     });
@@ -741,7 +811,7 @@ export default function ProjectDetailPage() {
                       size="sm"
                       variant="secondary"
                       disabled={!canUpdate}
-                      onClick={() => archiveExternalParticipant(project.id, participant.id)}
+                      onClick={() => void archiveExternalParticipant(project.id, participant.id)}
                     >
                       {t("common.archive")}
                     </Button>
@@ -750,7 +820,7 @@ export default function ProjectDetailPage() {
                       size="sm"
                       variant="ghost"
                       disabled={!canUpdate}
-                      onClick={() => restoreExternalParticipant(project.id, participant.id)}
+                      onClick={() => void restoreExternalParticipant(project.id, participant.id)}
                     >
                       {t("common.restore")}
                     </Button>
@@ -760,6 +830,14 @@ export default function ProjectDetailPage() {
             />
           </div>
         </div>
+      ) : null}
+
+      {checklistTabEnabled && tab === "checklist" ? (
+        <ProjectChecklistTab
+          projectId={project.id}
+          canEdit={canUpdate}
+          projectTitle={project.title}
+        />
       ) : null}
 
       {tab === "notes" ? (
@@ -805,15 +883,14 @@ export default function ProjectDetailPage() {
           setEditingExternalParticipantId(null);
         }}
         participant={editingExternalParticipant}
-        onSave={(input) => {
+        onSave={async (input) => {
           if (!canUpdate) {
-            return;
+            return false;
           }
           if (editingExternalParticipant) {
-            updateExternalParticipant(project.id, editingExternalParticipant.id, input);
-            return;
+            return updateExternalParticipant(project.id, editingExternalParticipant.id, input);
           }
-          addExternalParticipant(project.id, input);
+          return addExternalParticipant(project.id, input);
         }}
       />
 
@@ -831,7 +908,7 @@ export default function ProjectDetailPage() {
               variant="secondary"
               onClick={() => {
                 setArchiveModalOpen(false);
-                handleArchive(false);
+                void handleArchive(false);
               }}
             >
               {t("projects.archive.parentOnly")}
@@ -839,7 +916,7 @@ export default function ProjectDetailPage() {
             <Button
               onClick={() => {
                 setArchiveModalOpen(false);
-                handleArchive(true);
+                void handleArchive(true);
               }}
               disabled={!hasChildrenForArchive}
             >

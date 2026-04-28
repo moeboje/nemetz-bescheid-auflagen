@@ -58,12 +58,25 @@ function toDate(value: string) {
   return new Date(`${value}T00:00:00`);
 }
 
-function addInterval(date: Date, unit: "MONTH" | "YEAR", value: number) {
+function addInterval(date: Date, unit: NonNullable<Obligation["intervalUnit"]>, value: number) {
   const next = new Date(date);
-  if (unit === "YEAR") {
-    next.setFullYear(next.getFullYear() + value);
-  } else {
-    next.setMonth(next.getMonth() + value);
+  switch (unit) {
+    case "DAY":
+      next.setDate(next.getDate() + value);
+      break;
+    case "WEEK":
+      next.setDate(next.getDate() + value * 7);
+      break;
+    case "QUARTER":
+      next.setMonth(next.getMonth() + value * 3);
+      break;
+    case "YEAR":
+      next.setFullYear(next.getFullYear() + value);
+      break;
+    case "MONTH":
+    default:
+      next.setMonth(next.getMonth() + value);
+      break;
   }
   return next;
 }

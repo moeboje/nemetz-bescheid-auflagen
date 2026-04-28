@@ -3,6 +3,7 @@ import { Breadcrumbs, Card, DataTable, StatusDot } from "@nemetz/ui";
 import { t } from "../i18n";
 import HelpHintCard from "../components/HelpHintCard";
 import { useRuntimeConfig } from "../config/runtimeConfig";
+import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { useTasks } from "../state/TasksStore";
 import { useDeadlines } from "../state/DeadlinesStore";
 import { useNotifications } from "../state/NotificationsStore";
@@ -139,7 +140,7 @@ export default function DashboardPage() {
             "helpHints.dashboard.bullets.2",
             "helpHints.dashboard.bullets.3"
           ]}
-          link={{ labelKey: "common.openHelp", to: "/help" }}
+          link={{ labelKey: "common.openHelp", to: getHelpHref(HELP_CONTEXT_SLUGS.dashboard) }}
         />
       ) : null}
 

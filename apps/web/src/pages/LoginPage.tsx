@@ -58,6 +58,10 @@ export default function LoginPage() {
         });
         return;
       }
+      if (result.user.mustChangePassword) {
+        navigate("/compliance/account/security?mode=force-password-change", { replace: true });
+        return;
+      }
       navigate(nextPath, { replace: true });
     } catch (err) {
       if (err instanceof ApiError) {
@@ -127,6 +131,9 @@ export default function LoginPage() {
             ) : null}
             <Link to="/forgot-password" className="authLink">
               {t("auth.login.forgot")}
+            </Link>
+            <Link to="/help/auth#security-login-password-mfa" className="authLink">
+              Hilfe zu Login & MFA
             </Link>
           </div>
         </form>

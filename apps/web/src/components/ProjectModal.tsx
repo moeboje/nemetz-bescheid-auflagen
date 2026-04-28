@@ -12,9 +12,16 @@ import type { Project } from "../data/projects";
 import UserSelect from "./UserSelect";
 import UserMultiSelect from "./UserMultiSelect";
 import ScopeInlineCreateModal, { ScopeInlineCreateMode } from "./ScopeInlineCreateModal";
+import { getProjectStatusOptions } from "../projectStatus";
+import { getProjectSubmissionTypeOptions } from "../projectSubmissionType";
+
+type ProjectFormStatus = Project["status"] | "";
+type ProjectFormSubmissionType = Project["submissionType"] | "";
 
 const emptyForm = {
   title: "",
+  status: "DRAFT" as ProjectFormStatus,
+  submissionType: "" as ProjectFormSubmissionType,
   shortDescription: "",
   companyId: "",
   siteId: "",
@@ -89,6 +96,8 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     if (project) {
       setForm({
         title: project.title,
+        status: project.status ?? "",
+        submissionType: project.submissionType ?? "",
         shortDescription: project.shortDescription ?? "",
         companyId: project.companyId,
         siteId: project.siteId ?? "",
@@ -231,6 +240,17 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     ? ProjectPolicy.update(actor, project)
     : ProjectPolicy.create(actor);
   const isSaveDisabled = !canSave || !form.title.trim() || !form.companyId;
+  const statusOptions = useMemo(
+    () => getProjectStatusOptions({ includeUnset: Boolean(project && !project.status) }),
+    [project]
+  );
+  const submissionTypeOptions = useMemo(
+    () =>
+      getProjectSubmissionTypeOptions({
+        includeUnset: !project || Boolean(project && !project.submissionType)
+      }),
+    [project]
+  );
   const projectById = useMemo(
     () => new Map(projects.map((item) => [item.id, item] as const)),
     [projects]
@@ -411,7 +431,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     closeInlineCreate();
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (isSaveDisabled) {
       return;
     }
@@ -420,8 +440,10 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     let saveSucceeded = false;
 
     if (project) {
-      saveSucceeded = updateProject(project.id, {
+      saveSucceeded = await updateProject(project.id, {
         title: form.title,
+        status: form.status || undefined,
+        submissionType: form.submissionType || undefined,
         shortDescription: form.shortDescription,
         companyId: form.companyId,
         siteId: form.siteId || undefined,
@@ -438,8 +460,10 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
         attachments: form.attachments
       });
     } else {
-      saveSucceeded = addProject({
+      saveSucceeded = await addProject({
         title: form.title,
+        status: form.status || undefined,
+        submissionType: form.submissionType || undefined,
         shortDescription: form.shortDescription,
         companyId: form.companyId,
         siteId: form.siteId || undefined,
@@ -518,13 +542,14 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
       open={open}
       onClose={onClose}
       closeAriaLabel={t("modal.close")}
+      mobileFullscreen
       header={project ? t("projects.modal.editTitle") : t("projects.modal.title")}
       footer={
         <div className="modalFooter">
           <Button variant="secondary" onClick={onClose}>
             {t("modal.cancel")}
           </Button>
-          <Button onClick={handleSave} disabled={isSaveDisabled}>
+          <Button onClick={() => void handleSave()} disabled={isSaveDisabled}>
             {t("modal.save")}
           </Button>
         </div>
@@ -538,6 +563,32 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
             value={form.title}
             onChange={(event) =>
               setForm((prev) => ({ ...prev, title: event.target.value }))
+            }
+          />
+        </div>
+        <div className="formField">
+          <span className="fieldLabel">{t("projects.form.status")}</span>
+          <Select
+            options={statusOptions}
+            value={form.status}
+            onChange={(event) =>
+              setForm((prev) => ({
+                ...prev,
+                status: event.target.value as ProjectFormStatus
+              }))
+            }
+          />
+        </div>
+        <div className="formField">
+          <span className="fieldLabel">{t("projects.form.submissionType")}</span>
+          <Select
+            options={submissionTypeOptions}
+            value={form.submissionType}
+            onChange={(event) =>
+              setForm((prev) => ({
+                ...prev,
+                submissionType: event.target.value as ProjectFormSubmissionType
+              }))
             }
           />
         </div>

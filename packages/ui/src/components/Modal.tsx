@@ -11,6 +11,7 @@ export type ModalProps = {
   children: React.ReactNode;
   closeAriaLabel: string;
   className?: string;
+  mobileFullscreen?: boolean;
 };
 
 export function Modal({
@@ -20,13 +21,18 @@ export function Modal({
   footer,
   children,
   closeAriaLabel,
-  className
+  className,
+  mobileFullscreen = false
 }: ModalProps) {
   if (!open) return null;
 
   return (
     <div className={styles.overlay} role="presentation">
-      <div className={cx(styles.modal, className)} role="dialog" aria-modal="true">
+      <div
+        className={cx(styles.modal, mobileFullscreen && styles.mobileFullscreen, className)}
+        role="dialog"
+        aria-modal="true"
+      >
         <div className={styles.header}>
           <div className={styles.headerContent}>{header}</div>
           {onClose ? (

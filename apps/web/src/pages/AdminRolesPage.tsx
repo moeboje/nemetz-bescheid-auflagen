@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { Badge, Button, Card, DataTable, IconButton, Input, Modal, Select } from "@nemetz/ui";
+import { getAdminRoleCatalog, type PermissionCatalogEntry } from "../api/roles";
 import { ApiError } from "../api/client";
 import { t } from "../i18n";
 import { useAuthorization } from "../state/AuthorizationStore";
@@ -14,6 +15,7 @@ type RoleFormState = {
   key: string;
   labelDe: string;
   descriptionDe: string;
+  permissionKeys: string[];
 };
 
 type ConfirmationState = {
@@ -25,7 +27,8 @@ type ConfirmationState = {
 const emptyForm: RoleFormState = {
   key: "",
   labelDe: "",
-  descriptionDe: ""
+  descriptionDe: "",
+  permissionKeys: []
 };
 
 function normalizeRoleKey(value: string) {
@@ -41,12 +44,18 @@ function isValidRoleKey(value: string) {
 
 function extractApiErrorMessage(error: unknown, fallbackKey: string) {
   if (error instanceof ApiError) {
+    const message = typeof error.message === "string" ? error.message.trim() : "";
+
+    if (/admin\.access is required for admin sub-section permissions/i.test(message)) {
+      return t("admin.roles.validation.adminAccessRequired");
+    }
+
     if (error.status === 409) {
       return t("admin.roles.validation.uniqueKey");
     }
 
-    if (typeof error.message === "string" && error.message.trim()) {
-      return error.message;
+    if (message) {
+      return message;
     }
   }
 
@@ -60,7 +69,9 @@ export default function AdminRolesPage() {
   const [search, setSearch] = useState("");
   const [archivedFilter, setArchivedFilter] = useState<ArchivedFilter>("false");
   const [rows, setRows] = useState<AdminRole[]>([]);
+  const [permissionCatalog, setPermissionCatalog] = useState<PermissionCatalogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isCatalogLoading, setIsCatalogLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
 
@@ -74,6 +85,25 @@ export default function AdminRolesPage() {
   const [isConfirmSubmitting, setIsConfirmSubmitting] = useState(false);
 
   const editingRole = useMemo(() => rows.find((row) => row.id === editingId), [editingId, rows]);
+  const canManageRoles = permissions.canManageRolesAdmin;
+  const groupedPermissionCatalog = useMemo(() => {
+    const groups = new Map<string, PermissionCatalogEntry[]>();
+
+    permissionCatalog.forEach((entry) => {
+      const bucket = groups.get(entry.group) ?? [];
+      bucket.push(entry);
+      groups.set(entry.group, bucket);
+    });
+
+    return Array.from(groups.entries());
+  }, [permissionCatalog]);
+  const adminSubsectionPermissionKeys = useMemo(
+    () =>
+      new Set(
+        permissionCatalog.filter((entry) => entry.requiresAdminAccess).map((entry) => entry.key)
+      ),
+    [permissionCatalog]
+  );
 
   const query = useMemo(
     () => ({
@@ -101,11 +131,32 @@ export default function AdminRolesPage() {
     void fetchRoles();
   }, [fetchRoles]);
 
-  if (!permissions.canViewAdmin) {
+  useEffect(() => {
+    if (!permissions.canViewRolesAdmin) {
+      return;
+    }
+
+    setIsCatalogLoading(true);
+    void getAdminRoleCatalog()
+      .then((payload) => {
+        setPermissionCatalog(payload.permissions);
+      })
+      .catch(() => {
+        setLoadError(t("admin.roles.error.catalog"));
+      })
+      .finally(() => {
+        setIsCatalogLoading(false);
+      });
+  }, [permissions.canViewRolesAdmin]);
+
+  if (!permissions.canViewRolesAdmin) {
     return <Navigate to="/compliance/dashboard" replace />;
   }
 
   const openCreateModal = () => {
+    if (!canManageRoles) {
+      return;
+    }
     setEditingId(null);
     setForm(emptyForm);
     setFormError("");
@@ -114,6 +165,9 @@ export default function AdminRolesPage() {
   };
 
   const openEditModal = (roleId: string) => {
+    if (!canManageRoles) {
+      return;
+    }
     const role = rows.find((row) => row.id === roleId);
     if (!role) {
       return;
@@ -123,7 +177,8 @@ export default function AdminRolesPage() {
     setForm({
       key: role.key,
       labelDe: role.labelDe,
-      descriptionDe: role.descriptionDe ?? ""
+      descriptionDe: role.descriptionDe ?? "",
+      permissionKeys: role.permissionKeys ?? []
     });
     setFormError("");
     setSuccessMessage("");
@@ -145,7 +200,25 @@ export default function AdminRolesPage() {
     if (!isValidRoleKey(normalizedKey)) {
       return t("admin.roles.validation.keyFormat");
     }
+    if (!(editingRole?.isSystem) && form.permissionKeys.length === 0) {
+      return t("admin.roles.validation.permissionsRequired");
+    }
+    if (
+      form.permissionKeys.some((permissionKey) => adminSubsectionPermissionKeys.has(permissionKey)) &&
+      !form.permissionKeys.includes("admin.access")
+    ) {
+      return t("admin.roles.validation.adminAccessRequired");
+    }
     return "";
+  };
+
+  const togglePermissionKey = (permissionKey: string) => {
+    setForm((prev) => ({
+      ...prev,
+      permissionKeys: prev.permissionKeys.includes(permissionKey)
+        ? prev.permissionKeys.filter((entry) => entry !== permissionKey)
+        : [...prev.permissionKeys, permissionKey]
+    }));
   };
 
   const handleSave = async () => {
@@ -164,14 +237,16 @@ export default function AdminRolesPage() {
         await updateRole(editingId, {
           key: normalizeRoleKey(form.key),
           labelDe: form.labelDe.trim(),
-          descriptionDe: form.descriptionDe.trim() || undefined
+          descriptionDe: form.descriptionDe.trim() || undefined,
+          permissionKeys: editingRole?.isSystem ? undefined : form.permissionKeys
         });
         setSuccessMessage(t("admin.roles.success.updated"));
       } else {
         await createRole({
           key: normalizeRoleKey(form.key),
           labelDe: form.labelDe.trim(),
-          descriptionDe: form.descriptionDe.trim() || undefined
+          descriptionDe: form.descriptionDe.trim() || undefined,
+          permissionKeys: form.permissionKeys
         });
         setSuccessMessage(t("admin.roles.success.created"));
       }
@@ -216,7 +291,7 @@ export default function AdminRolesPage() {
     <div className="page">
       <div className="pageHeader">
         <h1 className="pageTitle">{t("admin.roles.title")}</h1>
-        <Button onClick={openCreateModal}>{t("admin.roles.action.new")}</Button>
+        {canManageRoles ? <Button onClick={openCreateModal}>{t("admin.roles.action.new")}</Button> : null}
       </div>
 
       <AdminSubnav />
@@ -253,7 +328,7 @@ export default function AdminRolesPage() {
         </Card>
       ) : null}
 
-      {isLoading ? (
+      {isLoading || isCatalogLoading ? (
         <Card>
           <p className="placeholderText">{t("admin.roles.loading")}</p>
         </Card>
@@ -277,10 +352,27 @@ export default function AdminRolesPage() {
             render: (row: AdminRole) => row.descriptionDe || t("common.notAvailable")
           },
           {
-            key: "system",
-            header: t("admin.roles.table.system"),
+            key: "permissions",
+            header: t("admin.roles.table.permissions"),
             render: (row: AdminRole) =>
-              row.isSystem ? <Badge variant="neutral">{t("admin.roles.systemRole")}</Badge> : t("common.notAvailable")
+              row.permissionLabels && row.permissionLabels.length > 0
+                ? row.permissionLabels.join(", ")
+                : t("admin.roles.permissions.none")
+          },
+          {
+            key: "flags",
+            header: t("admin.roles.table.flags"),
+            render: (row: AdminRole) => (
+              <div className="tableBadges">
+                {row.isSystem ? <Badge variant="neutral">{t("admin.roles.systemRole")}</Badge> : null}
+                {row.isAssignable === false ? (
+                  <Badge variant="warning">{t("admin.roles.nonAssignable")}</Badge>
+                ) : null}
+                {row.isDeprecated ? (
+                  <Badge variant="warning">{t("admin.roles.deprecated")}</Badge>
+                ) : null}
+              </div>
+            )
           },
           {
             key: "status",
@@ -295,43 +387,45 @@ export default function AdminRolesPage() {
         ]}
         data={rows}
         getRowKey={(row) => row.id}
-        rowActions={(row) => (
-          <div className="tableActions">
-            <IconButton ariaLabel={t("admin.roles.action.edit")} onClick={() => openEditModal(row.id)}>
-              <EditIcon />
-            </IconButton>
-
-            {row.isArchived ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() =>
-                  setConfirmation({
-                    roleId: row.id,
-                    roleLabel: row.labelDe,
-                    mode: "restore"
-                  })
-                }
-              >
-                {t("admin.roles.action.restore")}
-              </Button>
-            ) : (
-              <IconButton
-                ariaLabel={t("admin.roles.action.archive")}
-                onClick={() =>
-                  setConfirmation({
-                    roleId: row.id,
-                    roleLabel: row.labelDe,
-                    mode: "archive"
-                  })
-                }
-                disabled={row.isSystem}
-              >
-                <ArchiveIcon />
+        rowActions={(row) =>
+          canManageRoles ? (
+            <div className="tableActions">
+              <IconButton ariaLabel={t("admin.roles.action.edit")} onClick={() => openEditModal(row.id)}>
+                <EditIcon />
               </IconButton>
-            )}
-          </div>
-        )}
+
+              {row.isArchived ? (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() =>
+                    setConfirmation({
+                      roleId: row.id,
+                      roleLabel: row.labelDe,
+                      mode: "restore"
+                    })
+                  }
+                >
+                  {t("admin.roles.action.restore")}
+                </Button>
+              ) : (
+                <IconButton
+                  ariaLabel={t("admin.roles.action.archive")}
+                  onClick={() =>
+                    setConfirmation({
+                      roleId: row.id,
+                      roleLabel: row.labelDe,
+                      mode: "archive"
+                    })
+                  }
+                  disabled={row.isSystem}
+                >
+                  <ArchiveIcon />
+                </IconButton>
+              )}
+            </div>
+          ) : null
+        }
       />
 
       <Modal
@@ -344,7 +438,7 @@ export default function AdminRolesPage() {
             <Button variant="secondary" onClick={closeModal}>
               {t("common.cancel")}
             </Button>
-            <Button onClick={handleSave} disabled={Boolean(validateForm()) || isSubmitting}>
+            <Button onClick={handleSave} disabled={Boolean(validateForm()) || isSubmitting || !canManageRoles}>
               {isSubmitting ? t("admin.roles.saving") : t("common.save")}
             </Button>
           </div>
@@ -381,6 +475,31 @@ export default function AdminRolesPage() {
               disabled={isSubmitting}
               placeholder={t("admin.roles.form.descriptionDe")}
             />
+          </div>
+
+          <div className="formField">
+            <span className="fieldLabel">{t("admin.roles.form.permissions")}</span>
+            {editingRole?.isSystem ? <p className="placeholderText">{t("admin.roles.permissions.readonly")}</p> : null}
+            <div className="permissionGrid">
+              {groupedPermissionCatalog.map(([groupLabel, entries]) => (
+                <div key={groupLabel} className="permissionGroup">
+                  <h3 className="sectionTitle">{groupLabel}</h3>
+                  <div className="permissionList">
+                    {entries.map((entry) => (
+                      <label key={entry.key} className="permissionCheckbox">
+                        <input
+                          type="checkbox"
+                          checked={form.permissionKeys.includes(entry.key)}
+                          onChange={() => togglePermissionKey(entry.key)}
+                          disabled={isSubmitting || Boolean(editingRole?.isSystem)}
+                        />
+                        <span>{entry.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
 
           {formError ? <p className="validationText">{formError}</p> : null}

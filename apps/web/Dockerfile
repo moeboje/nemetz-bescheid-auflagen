@@ -11,6 +11,7 @@ COPY apps/web /app/apps/web
 RUN npm run build
 
 FROM nginx:1.27-alpine AS runtime
+COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 COPY --from=build /app/apps/web/public/config.json /usr/share/nginx/html/config.json
 

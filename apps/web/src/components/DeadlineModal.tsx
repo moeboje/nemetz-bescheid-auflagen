@@ -45,11 +45,16 @@ export default function DeadlineModal({
   const { legalDocs } = useLegalDocs();
   const { authorities } = useAuthorities();
   const [form, setForm] = useState(emptyForm);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   useEffect(() => {
     if (!open) {
       return;
     }
+
+    setSaveError("");
+    setIsSaving(false);
 
     if (deadline) {
       setForm({
@@ -104,7 +109,7 @@ export default function DeadlineModal({
 
   const isSaveDisabled = !form.title || !form.dueDate;
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const reminderDays = form.emailReminderEnabled
       ? Number(form.emailReminderDaysBefore || "7")
       : undefined;
@@ -123,12 +128,24 @@ export default function DeadlineModal({
         form.emailReminderEnabled && Number.isFinite(reminderDays) ? reminderDays : undefined
     };
 
-    if (deadline) {
-      updateDeadline(deadline.id, payload);
-    } else {
-      addDeadline(payload);
+    setSaveError("");
+    setIsSaving(true);
+
+    try {
+      const savedDeadline = deadline
+        ? await updateDeadline(deadline.id, payload)
+        : await addDeadline(payload);
+      if (!savedDeadline) {
+        setSaveError(t("deadlines.saveError"));
+        return;
+      }
+
+      onClose();
+    } catch {
+      setSaveError(t("deadlines.saveError"));
+    } finally {
+      setIsSaving(false);
     }
-    onClose();
   };
 
   return (
@@ -136,19 +153,21 @@ export default function DeadlineModal({
       open={open}
       onClose={onClose}
       closeAriaLabel={t("modal.close")}
+      mobileFullscreen
       header={deadline ? t("deadlines.edit") : t("deadlines.new")}
       footer={
         <div className="modalFooter">
           <Button variant="secondary" onClick={onClose}>
             {t("common.cancel")}
           </Button>
-          <Button onClick={handleSave} disabled={isSaveDisabled}>
+          <Button onClick={() => void handleSave()} disabled={isSaveDisabled || isSaving}>
             {t("common.save")}
           </Button>
         </div>
       }
     >
       <div className="modalForm">
+        {saveError ? <p className="validationText">{saveError}</p> : null}
         <div className="formField">
           <span className="fieldLabel">{t("deadlines.form.title")}</span>
           <Input

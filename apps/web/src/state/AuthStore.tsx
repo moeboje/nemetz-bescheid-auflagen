@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { User } from "../data/users";
-import { forgotPassword, login, logout, me, resetPassword, verifyMfa } from "../api/auth";
+import { changePassword, forgotPassword, login, logout, me, resetPassword, verifyMfa } from "../api/auth";
 import { ApiError } from "../api/client";
 
 export type AuthContextValue = {
@@ -15,6 +15,7 @@ export type AuthContextValue = {
   loadMe: () => Promise<User | null>;
   forgotPassword: (email: string) => Promise<void>;
   resetPassword: (token: string, newPassword: string) => Promise<void>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<User>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -77,6 +78,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await resetPassword({ token, newPassword });
   }, []);
 
+  const changeOwnPassword = useCallback(async (currentPassword: string, newPassword: string) => {
+    const nextUser = await changePassword({ currentPassword, newPassword });
+    setUser(nextUser);
+    return nextUser;
+  }, []);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
@@ -86,9 +93,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       logout: logoutUser,
       loadMe,
       forgotPassword: forgotUserPassword,
-      resetPassword: resetUserPassword
+      resetPassword: resetUserPassword,
+      changePassword: changeOwnPassword
     }),
-    [forgotUserPassword, isLoading, loadMe, loginUser, logoutUser, resetUserPassword, user, verifyMfaChallenge]
+    [changeOwnPassword, forgotUserPassword, isLoading, loadMe, loginUser, logoutUser, resetUserPassword, user, verifyMfaChallenge]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

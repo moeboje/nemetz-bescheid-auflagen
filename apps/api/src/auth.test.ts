@@ -1,28 +1,22 @@
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
+import http from "node:http";
 import { once } from "node:events";
-import path from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
-import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import { authenticator } from "otplib";
+import { Prisma } from "@prisma/client";
 import { createApp } from "./app.js";
-import type { AppConfig } from "./config.js";
+import { resolveDatabaseUrl, type AppConfig } from "./config.js";
 import { prisma } from "./prisma.js";
-import { hashPassword } from "./security.js";
-
-const currentFile = fileURLToPath(import.meta.url);
-const currentDir = path.dirname(currentFile);
-const outboxDir = path.resolve(currentDir, "..", "storage", "mail-outbox");
+import { hashPassword, hashToken } from "./security.js";
+import { setStoredRolePermissionKeys } from "./rolePermissions.js";
 
 let baseUrl = "";
 let server: ReturnType<ReturnType<typeof createApp>["listen"]>;
-
-async function cleanOutbox() {
-  await fs.mkdir(outboxDir, { recursive: true });
-  const files = await fs.readdir(outboxDir);
-  await Promise.all(files.map((file) => fs.rm(path.resolve(outboxDir, file), { force: true })));
-}
+let notificationBaseUrl = "";
+let notificationServer: http.Server;
+const capturedNotifications: Array<Record<string, unknown>> = [];
+let loginRequestCounter = 0;
 
 async function request(
   pathname: string,
@@ -76,18 +70,21 @@ async function createUser(email: string, password: string) {
   });
 }
 
-async function getResetTokenFromOutbox() {
-  const files = (await fs.readdir(outboxDir)).sort();
-  const latest = files.at(-1);
-  assert.ok(latest, "Expected reset outbox entry");
-  const content = await fs.readFile(path.resolve(outboxDir, latest), "utf8");
-  const parsed = JSON.parse(content) as { resetLink?: string };
-  assert.ok(parsed.resetLink, "Reset link missing");
+async function waitForCapturedNotification(
+  eventType: string,
+  timeoutMs = 1_500
+) {
+  const deadline = Date.now() + timeoutMs;
 
-  const url = new URL(parsed.resetLink);
-  const token = url.searchParams.get("token");
-  assert.ok(token, "Token missing in reset link");
-  return token;
+  while (Date.now() <= deadline) {
+    const match = capturedNotifications.find((entry) => entry.eventType === eventType);
+    if (match) {
+      return match;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  assert.fail(`Expected captured notification for ${eventType}`);
 }
 
 function readSecretFromOtpAuthUrl(otpauthUrl: string) {
@@ -98,9 +95,10 @@ function readSecretFromOtpAuthUrl(otpauthUrl: string) {
 }
 
 async function loginWithPassword(email: string, password: string, ip?: string) {
+  loginRequestCounter += 1;
   const response = await request("/auth/login", {
     method: "POST",
-    ip: ip ?? `127.0.0.${Math.floor(Math.random() * 200) + 1}`,
+    ip: ip ?? `127.0.0.${(loginRequestCounter % 200) + 1}`,
     body: {
       email,
       password
@@ -113,13 +111,45 @@ async function loginWithPassword(email: string, password: string, ip?: string) {
 
 describe("Auth API", () => {
   before(async () => {
+    notificationServer = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+
+      req.on("data", (chunk) => {
+        chunks.push(Buffer.from(chunk));
+      });
+
+      req.on("end", () => {
+        const body = chunks.length > 0 ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
+        capturedNotifications.push(body as Record<string, unknown>);
+        res.writeHead(200, {
+          "Content-Type": "application/json"
+        });
+        res.end(JSON.stringify({ ok: true, flowRunId: "test-flow-run" }));
+      });
+    });
+    notificationServer.listen(0);
+    await once(notificationServer, "listening");
+    const notificationAddress = notificationServer.address() as AddressInfo;
+    notificationBaseUrl = `http://127.0.0.1:${notificationAddress.port}`;
+
     const config: AppConfig = {
       port: 0,
-      databaseUrl: process.env.DATABASE_URL || "file:./test.db",
+      databaseUrl: resolveDatabaseUrl(process.env, "test"),
       appOrigin: "http://localhost:5173",
+      notificationBaseUrl: "http://localhost:5173",
+      notificationDispatchEnabled: true,
+      notificationDryRun: false,
+      notificationFromLabel: "Nemetz Portal",
+      powerAutomateNotificationWebhookUrl: `${notificationBaseUrl}/notify`,
+      powerAutomateNotificationSecret: "test-notification-secret",
+      notificationMaxAttempts: 5,
+      notificationDispatchBatchSize: 25,
+      notificationDispatchTimeoutMs: 15_000,
+      notificationClaimLeaseSeconds: 300,
+      notificationTimeZone: "Europe/Vienna",
       sessionSecret: "test-secret",
       nodeEnv: "test",
-      resetTokenTtlMinutes: 30,
+      resetTokenTtlMinutes: 120,
       sessionTtlDays: 7,
       cookieSecure: false,
       basePath: "/api",
@@ -145,15 +175,22 @@ describe("Auth API", () => {
 
   after(async () => {
     server.close();
+    notificationServer.close();
     await prisma.$disconnect();
   });
 
   beforeEach(async () => {
+    capturedNotifications.length = 0;
+    loginRequestCounter = 0;
     await prisma.session.deleteMany();
+    await prisma.mfaChallenge.deleteMany();
+    await prisma.mfaPending.deleteMany();
+    await prisma.notificationOutbox.deleteMany();
     await prisma.passwordResetToken.deleteMany();
     await prisma.auditLog.deleteMany();
     await prisma.user.deleteMany();
-    await cleanOutbox();
+    await prisma.role.deleteMany();
+    await prisma.$executeRaw(Prisma.sql`DELETE FROM "SecuritySettings"`);
   });
 
   it("login success and me returns current user", async () => {
@@ -179,6 +216,140 @@ describe("Auth API", () => {
     assert.equal(meResponse.status, 200);
     const mePayload = (await meResponse.json()) as { user: { email: string } };
     assert.equal(mePayload.user.email, "login-success@example.com");
+  });
+
+  it("preserves legacy internal permissions for custom roles without permissionsJson", async () => {
+    await prisma.role.create({
+      data: {
+        key: "QUALITY_MANAGER",
+        labelDe: "Qualitaetsmanagement",
+        isSystem: false
+      }
+    });
+    await createUser("custom-role@example.com", "ValidPassword1!");
+    await prisma.user.update({
+      where: {
+        email: "custom-role@example.com"
+      },
+      data: {
+        role: "QUALITY_MANAGER",
+        type: "INTERNAL"
+      }
+    });
+
+    const loginResponse = await request("/auth/login", {
+      method: "POST",
+      body: {
+        email: "custom-role@example.com",
+        password: "ValidPassword1!"
+      }
+    });
+
+    assert.equal(loginResponse.status, 200);
+    const sessionCookie = extractSessionCookie(loginResponse.headers.get("set-cookie"));
+    assert.ok(sessionCookie, "Expected session cookie");
+
+    const meResponse = await request("/auth/me", {
+      cookie: sessionCookie
+    });
+
+    assert.equal(meResponse.status, 200);
+    const mePayload = (await meResponse.json()) as { user: { effectivePermissions: string[] } };
+    assert.equal(mePayload.user.effectivePermissions.includes("masterData.manage"), true);
+    assert.equal(mePayload.user.effectivePermissions.includes("projects.archive"), true);
+    assert.equal(mePayload.user.effectivePermissions.includes("authorities.manage"), true);
+    assert.equal(mePayload.user.effectivePermissions.includes("admin.access"), false);
+  });
+
+  it("preserves explicitly empty permissionsJson for custom roles", async () => {
+    const role = await prisma.role.create({
+      data: {
+        key: "NO_ACCESS",
+        labelDe: "Ohne Zugriff",
+        isSystem: false
+      }
+    });
+    await setStoredRolePermissionKeys(prisma, role.key, []);
+
+    await createUser("empty-role@example.com", "ValidPassword1!");
+    await prisma.user.update({
+      where: {
+        email: "empty-role@example.com"
+      },
+      data: {
+        role: role.key,
+        type: "INTERNAL"
+      }
+    });
+
+    const loginResponse = await request("/auth/login", {
+      method: "POST",
+      body: {
+        email: "empty-role@example.com",
+        password: "ValidPassword1!"
+      }
+    });
+
+    assert.equal(loginResponse.status, 200);
+    const sessionCookie = extractSessionCookie(loginResponse.headers.get("set-cookie"));
+    assert.ok(sessionCookie, "Expected session cookie");
+
+    const meResponse = await request("/auth/me", {
+      cookie: sessionCookie
+    });
+
+    assert.equal(meResponse.status, 200);
+    const mePayload = (await meResponse.json()) as { user: { effectivePermissions: string[] } };
+    assert.deepEqual(mePayload.user.effectivePermissions, []);
+  });
+
+  it("allows authority managers with admin access to read authorities and resolves authorities.view effectively", async () => {
+    const role = await prisma.role.create({
+      data: {
+        key: "AUTHORITY_MANAGER",
+        labelDe: "Behoerdenmanager",
+        isSystem: false
+      }
+    });
+    await setStoredRolePermissionKeys(prisma, role.key, ["admin.access", "authorities.manage"]);
+
+    await createUser("authority-manager@example.com", "ValidPassword1!");
+    await prisma.user.update({
+      where: {
+        email: "authority-manager@example.com"
+      },
+      data: {
+        role: role.key,
+        type: "INTERNAL"
+      }
+    });
+
+    const loginResponse = await request("/auth/login", {
+      method: "POST",
+      body: {
+        email: "authority-manager@example.com",
+        password: "ValidPassword1!"
+      }
+    });
+
+    assert.equal(loginResponse.status, 200);
+    const sessionCookie = extractSessionCookie(loginResponse.headers.get("set-cookie"));
+    assert.ok(sessionCookie, "Expected session cookie");
+
+    const meResponse = await request("/auth/me", {
+      cookie: sessionCookie
+    });
+
+    assert.equal(meResponse.status, 200);
+    const mePayload = (await meResponse.json()) as { user: { effectivePermissions: string[] } };
+    assert.equal(mePayload.user.effectivePermissions.includes("admin.access"), true);
+    assert.equal(mePayload.user.effectivePermissions.includes("authorities.manage"), true);
+    assert.equal(mePayload.user.effectivePermissions.includes("authorities.view"), true);
+
+    const authoritiesResponse = await request("/authorities", {
+      cookie: sessionCookie
+    });
+    assert.equal(authoritiesResponse.status, 200);
   });
 
   it("me requires auth", async () => {
@@ -240,6 +411,48 @@ describe("Auth API", () => {
     assert.equal(lockedResponse.status, 429);
   });
 
+  it("disabling external users revokes active external sessions and blocks route-auth endpoints", async () => {
+    const admin = await createUser("external-toggle-admin@example.com", "ValidPassword1!");
+    const externalUser = await createUser("external-toggle-user@example.com", "ValidPassword1!");
+    await prisma.user.update({
+      where: {
+        id: externalUser.id
+      },
+      data: {
+        role: "EXTERNAL",
+        type: "EXTERNAL"
+      }
+    });
+
+    const adminCookie = await loginWithPassword(admin.email, "ValidPassword1!").then((response) =>
+      extractSessionCookie(response.headers.get("set-cookie"))
+    );
+    const externalCookie = await loginWithPassword(externalUser.email, "ValidPassword1!").then((response) =>
+      extractSessionCookie(response.headers.get("set-cookie"))
+    );
+    assert.ok(adminCookie);
+    assert.ok(externalCookie);
+
+    const disableResponse = await request("/admin/security", {
+      method: "PATCH",
+      cookie: adminCookie,
+      body: {
+        allowExternalUsers: false
+      }
+    });
+    assert.equal(disableResponse.status, 200);
+
+    const meResponse = await request("/auth/me", {
+      cookie: externalCookie
+    });
+    assert.equal(meResponse.status, 401);
+
+    const routeAuthResponse = await request("/scopes", {
+      cookie: externalCookie
+    });
+    assert.equal(routeAuthResponse.status, 401);
+  });
+
   it("forgot password always returns 200", async () => {
     await createUser("forgot@example.com", "ValidPassword1!");
 
@@ -259,6 +472,50 @@ describe("Auth API", () => {
 
     assert.equal(existingUserResponse.status, 200);
     assert.equal(missingUserResponse.status, 200);
+  });
+
+  it("returns the live password policy and applies it to own password changes", async () => {
+    const admin = await createUser("policy-admin@example.com", "ValidPassword1!");
+    const user = await createUser("policy-user@example.com", "ValidPassword1!");
+
+    const adminLogin = await loginWithPassword(admin.email, "ValidPassword1!");
+    const adminCookie = extractSessionCookie(adminLogin.headers.get("set-cookie"));
+    assert.ok(adminCookie);
+
+    const updateResponse = await request("/admin/security", {
+      method: "PATCH",
+      cookie: adminCookie,
+      body: {
+        passwordMinLength: 16,
+        passwordRequireNumberOrSpecial: false
+      }
+    });
+    assert.equal(updateResponse.status, 200);
+
+    const userLogin = await loginWithPassword(user.email, "ValidPassword1!");
+    const userCookie = extractSessionCookie(userLogin.headers.get("set-cookie"));
+    assert.ok(userCookie);
+
+    const policyResponse = await request("/auth/password/policy", {
+      cookie: userCookie
+    });
+    assert.equal(policyResponse.status, 200);
+    const policyPayload = (await policyResponse.json()) as {
+      passwordMinLength: number;
+      passwordRequireNumberOrSpecial: boolean;
+    };
+    assert.equal(policyPayload.passwordMinLength, 16);
+    assert.equal(policyPayload.passwordRequireNumberOrSpecial, false);
+
+    const changeResponse = await request("/auth/password/change", {
+      method: "POST",
+      cookie: userCookie,
+      body: {
+        currentPassword: "ValidPassword1!",
+        newPassword: "SixteenLettersPwd"
+      }
+    });
+    assert.equal(changeResponse.status, 200);
   });
 
   it("rate limits password reset attempts per IP", async () => {
@@ -310,7 +567,38 @@ describe("Auth API", () => {
 
     assert.equal(forgotResponse.status, 200);
 
-    const token = await getResetTokenFromOutbox();
+    const notification = await waitForCapturedNotification("PASSWORD_RESET_LINK");
+    const resetLink = String(notification.link ?? "");
+    assert.ok(resetLink, "Expected reset link in notification payload");
+
+    const url = new URL(resetLink);
+    const token = url.searchParams.get("token");
+    assert.ok(token, "Expected token in reset link");
+
+    const storedToken = await prisma.passwordResetToken.findFirstOrThrow({
+      where: {
+        userId: (
+          await prisma.user.findUniqueOrThrow({
+            where: {
+              email: "reset@example.com"
+            }
+          })
+        ).id
+      },
+      orderBy: {
+        createdAt: "desc"
+      }
+    });
+    assert.equal(storedToken.tokenHash, hashToken(token));
+    assert.notEqual(storedToken.tokenHash, token);
+
+    const secondActiveToken = await prisma.passwordResetToken.create({
+      data: {
+        userId: storedToken.userId,
+        tokenHash: hashToken("second-active-reset-token"),
+        expiresAt: new Date(Date.now() + 60 * 60_000)
+      }
+    });
 
     const resetResponse = await request("/auth/password/reset", {
       method: "POST",
@@ -322,6 +610,13 @@ describe("Auth API", () => {
     });
 
     assert.equal(resetResponse.status, 200);
+
+    const secondActiveTokenAfter = await prisma.passwordResetToken.findUniqueOrThrow({
+      where: {
+        id: secondActiveToken.id
+      }
+    });
+    assert.ok(secondActiveTokenAfter.usedAt);
 
     const meAfterReset = await request("/auth/me", {
       cookie: activeSessionCookie
@@ -397,6 +692,48 @@ describe("Auth API", () => {
       cookie: verifyCookie
     });
     assert.equal(meResponse.status, 200);
+  });
+
+  it("disabling external users blocks MFA verification before session creation", async () => {
+    const admin = await createUser("external-mfa-admin@example.com", "ValidPassword1!");
+    const externalUser = await createUser("external-mfa-user@example.com", "ValidPassword1!");
+    await prisma.user.update({
+      where: {
+        id: externalUser.id
+      },
+      data: {
+        role: "EXTERNAL",
+        type: "EXTERNAL",
+        mfaEnforced: true
+      }
+    });
+
+    const adminLogin = await loginWithPassword(admin.email, "ValidPassword1!");
+    const adminCookie = extractSessionCookie(adminLogin.headers.get("set-cookie"));
+    assert.ok(adminCookie);
+
+    const mfaLogin = await loginWithPassword(externalUser.email, "ValidPassword1!", "127.0.0.204");
+    const mfaLoginPayload = (await mfaLogin.json()) as { ok: true; mfaRequired: true; mfaToken: string };
+    assert.equal(mfaLoginPayload.mfaRequired, true);
+
+    const disableResponse = await request("/admin/security", {
+      method: "PATCH",
+      cookie: adminCookie,
+      body: {
+        allowExternalUsers: false
+      }
+    });
+    assert.equal(disableResponse.status, 200);
+
+    const verifyResponse = await request("/auth/mfa/verify", {
+      method: "POST",
+      ip: "127.0.0.204",
+      body: {
+        mfaToken: mfaLoginPayload.mfaToken,
+        codeOrRecovery: "123456"
+      }
+    });
+    assert.equal(verifyResponse.status, 401);
   });
 
   it("recovery code works only once", async () => {

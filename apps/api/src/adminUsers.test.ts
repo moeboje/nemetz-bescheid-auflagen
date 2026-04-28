@@ -1,28 +1,16 @@
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
 import { once } from "node:events";
-import path from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
-import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import { createApp } from "./app.js";
-import type { AppConfig } from "./config.js";
+import { resolveDatabaseUrl, type AppConfig } from "./config.js";
 import { prisma } from "./prisma.js";
-import { hashPassword } from "./security.js";
-
-const currentFile = fileURLToPath(import.meta.url);
-const currentDir = path.dirname(currentFile);
-const outboxDir = path.resolve(currentDir, "..", "storage", "mail-outbox");
+import { getStoredRolePermissionKeys } from "./rolePermissions.js";
+import { hashPassword, verifyPassword } from "./security.js";
 
 let baseUrl = "";
 let server: ReturnType<ReturnType<typeof createApp>["listen"]>;
 let requestCounter = 0;
-
-async function cleanOutbox() {
-  await fs.mkdir(outboxDir, { recursive: true });
-  const files = await fs.readdir(outboxDir);
-  await Promise.all(files.map((file) => fs.rm(path.resolve(outboxDir, file), { force: true })));
-}
 
 async function request(pathname: string, options: { method?: string; body?: unknown; cookie?: string } = {}) {
   const headers: Record<string, string> = {};
@@ -59,6 +47,7 @@ async function createUser(args: {
   role?: string;
   type?: "INTERNAL" | "EXTERNAL";
   isArchived?: boolean;
+  mustChangePassword?: boolean;
   failedLoginCount?: number;
   lockedUntil?: Date | null;
 }) {
@@ -70,6 +59,7 @@ async function createUser(args: {
       role: args.role ?? "USER",
       type: args.type ?? "INTERNAL",
       isArchived: args.isArchived ?? false,
+      mustChangePassword: args.mustChangePassword ?? false,
       failedLoginCount: args.failedLoginCount ?? 0,
       lockedUntil: args.lockedUntil ?? null,
       passwordHash: await hashPassword(args.password)
@@ -121,11 +111,22 @@ describe("Admin Users API", () => {
   before(async () => {
     const config: AppConfig = {
       port: 0,
-      databaseUrl: process.env.DATABASE_URL || "file:./test.db",
+      databaseUrl: resolveDatabaseUrl(process.env, "test"),
       appOrigin: "http://localhost:5173",
+      notificationBaseUrl: "http://localhost:5173",
+      notificationDispatchEnabled: false,
+      notificationDryRun: true,
+      notificationFromLabel: "Nemetz Portal",
+      powerAutomateNotificationWebhookUrl: "",
+      powerAutomateNotificationSecret: "",
+      notificationMaxAttempts: 5,
+      notificationDispatchBatchSize: 25,
+      notificationDispatchTimeoutMs: 15_000,
+      notificationClaimLeaseSeconds: 300,
+      notificationTimeZone: "Europe/Vienna",
       sessionSecret: "test-secret",
       nodeEnv: "test",
-      resetTokenTtlMinutes: 30,
+      resetTokenTtlMinutes: 120,
       sessionTtlDays: 7,
       cookieSecure: false,
       basePath: "/api",
@@ -156,6 +157,7 @@ describe("Admin Users API", () => {
 
   beforeEach(async () => {
     await prisma.session.deleteMany();
+    await prisma.notificationOutbox.deleteMany();
     await prisma.passwordResetToken.deleteMany();
     await prisma.mfaPending.deleteMany();
     await prisma.mfaChallenge.deleteMany();
@@ -164,7 +166,6 @@ describe("Admin Users API", () => {
     await prisma.externalOrganization.deleteMany();
     await prisma.role.deleteMany();
     await seedDefaultRoles();
-    await cleanOutbox();
   });
 
   it("admin can list users with filters and archived=all", async () => {
@@ -177,7 +178,9 @@ describe("Admin Users API", () => {
     await createUser({
       email: "active-user@example.com",
       password: "ValidPassword1!",
-      role: "USER"
+      role: "USER",
+      mustChangePassword: true,
+      failedLoginCount: 2
     });
 
     await createUser({
@@ -195,7 +198,12 @@ describe("Admin Users API", () => {
     assert.equal(activeResponse.status, 200);
 
     const activePayload = (await activeResponse.json()) as {
-      items: Array<{ email: string; isArchived: boolean }>;
+      items: Array<{
+        email: string;
+        isArchived: boolean;
+        mustChangePassword: boolean;
+        failedLoginCount: number;
+      }>;
       total: number;
       page: number;
       pageSize: number;
@@ -204,6 +212,9 @@ describe("Admin Users API", () => {
     assert.equal(activePayload.page, 1);
     assert.equal(activePayload.pageSize, 50);
     assert.equal(activePayload.items.some((row) => row.email === "archived-user@example.com"), false);
+    const activeUser = activePayload.items.find((row) => row.email === "active-user@example.com");
+    assert.equal(activeUser?.mustChangePassword, true);
+    assert.equal(activeUser?.failedLoginCount, 2);
 
     const allResponse = await request("/admin/users?archived=all&q=archived-user&page=1&pageSize=10", {
       cookie
@@ -315,7 +326,7 @@ describe("Admin Users API", () => {
     assert.equal(restorePayload.user.isArchived, false);
   });
 
-  it("admin reset-password writes outbox and audit event", async () => {
+  it("admin reset-password updates password, clears lock state and writes audit event", async () => {
     const admin = await createUser({
       email: "admin-reset@example.com",
       password: "ValidPassword1!",
@@ -325,23 +336,179 @@ describe("Admin Users API", () => {
     const target = await createUser({
       email: "target-reset@example.com",
       password: "ValidPassword1!",
-      role: "USER"
+      role: "USER",
+      failedLoginCount: 3,
+      lockedUntil: new Date(Date.now() + 60_000)
+    });
+    const resetToken = await prisma.passwordResetToken.create({
+      data: {
+        userId: target.id,
+        tokenHash: `pre-reset-${target.id}`,
+        expiresAt: new Date(Date.now() + 15 * 60_000)
+      }
     });
 
     const cookie = await login(admin.email, "ValidPassword1!");
 
     const response = await request(`/admin/users/${target.id}/reset-password`, {
       method: "POST",
-      cookie
+      cookie,
+      body: {
+        passwordMode: "direct",
+        newPassword: "EvenBetterPassword2!",
+        mustChangePassword: true
+      }
+    });
+
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as { ok: boolean; user: { id: string; mustChangePassword: boolean } };
+    assert.equal(payload.ok, true);
+    assert.equal(payload.user.id, target.id);
+    assert.equal(payload.user.mustChangePassword, true);
+
+    const updatedTarget = await prisma.user.findUniqueOrThrow({
+      where: {
+        id: target.id
+      }
+    });
+    assert.equal(await verifyPassword(updatedTarget.passwordHash, "EvenBetterPassword2!"), true);
+    assert.equal(await verifyPassword(updatedTarget.passwordHash, "ValidPassword1!"), false);
+    assert.equal(updatedTarget.mustChangePassword, true);
+    assert.equal(updatedTarget.failedLoginCount, 0);
+    assert.equal(updatedTarget.lockedUntil, null);
+    assert.ok(updatedTarget.passwordUpdatedAt);
+    const invalidatedResetToken = await prisma.passwordResetToken.findUniqueOrThrow({
+      where: {
+        id: resetToken.id
+      }
+    });
+    assert.ok(invalidatedResetToken.usedAt, "Expected outstanding reset token to be invalidated");
+
+    const oldPasswordLogin = await request("/auth/login", {
+      method: "POST",
+      body: {
+        email: target.email,
+        password: "ValidPassword1!"
+      }
+    });
+    assert.equal(oldPasswordLogin.status, 401);
+
+    const newPasswordLogin = await request("/auth/login", {
+      method: "POST",
+      body: {
+        email: target.email,
+        password: "EvenBetterPassword2!"
+      }
+    });
+    assert.equal(newPasswordLogin.status, 200);
+    const newPasswordPayload = (await newPasswordLogin.json()) as { ok: boolean; user: { mustChangePassword: boolean } };
+    assert.equal(newPasswordPayload.user.mustChangePassword, true);
+
+    const auditEntry = await prisma.auditLog.findFirst({
+      where: {
+        action: "USER_PASSWORD_RESET_BY_ADMIN",
+        actorUserId: admin.id,
+        targetUserId: target.id
+      }
+    });
+
+    assert.ok(auditEntry, "Expected audit entry for admin reset-password");
+  });
+
+  it("admin reset-password requires newPassword only for direct mode", async () => {
+    const admin = await createUser({
+      email: "admin-reset-direct-required@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+
+    const target = await createUser({
+      email: "target-reset-direct-required@example.com",
+      password: "ValidPassword1!",
+      role: "USER"
+    });
+
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const directResponse = await request(`/admin/users/${target.id}/reset-password`, {
+      method: "POST",
+      cookie,
+      body: {
+        passwordMode: "direct"
+      }
+    });
+
+    assert.equal(directResponse.status, 400);
+    const directPayload = (await directResponse.json()) as { ok: boolean; message: string };
+    assert.match(directPayload.message, /newPassword is required/i);
+
+    const legacyResponse = await request(`/admin/users/${target.id}/reset-password`, {
+      method: "POST",
+      cookie,
+      body: {}
+    });
+
+    assert.equal(legacyResponse.status, 200);
+  });
+
+  it("admin reset-password link mode works without newPassword, invalidates old tokens and records a sent notification", async () => {
+    const admin = await createUser({
+      email: "admin-reset-link@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+
+    const target = await createUser({
+      email: "target-reset-link@example.com",
+      password: "ValidPassword1!",
+      role: "USER"
+    });
+
+    const existingToken = await prisma.passwordResetToken.create({
+      data: {
+        userId: target.id,
+        tokenHash: `pre-link-${target.id}`,
+        expiresAt: new Date(Date.now() + 15 * 60_000)
+      }
+    });
+
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const response = await request(`/admin/users/${target.id}/reset-password`, {
+      method: "POST",
+      cookie,
+      body: {
+        passwordMode: "link"
+      }
     });
 
     assert.equal(response.status, 200);
     const payload = (await response.json()) as { ok: boolean; resetLink?: string };
     assert.equal(payload.ok, true);
-    assert.equal(payload.resetLink, undefined);
+    assert.ok(payload.resetLink, "Expected debug reset link in test mode");
 
-    const outboxFiles = await fs.readdir(outboxDir);
-    assert.ok(outboxFiles.length > 0, "Expected mail outbox file to be created");
+    const existingTokenAfter = await prisma.passwordResetToken.findUniqueOrThrow({
+      where: {
+        id: existingToken.id
+      }
+    });
+    assert.ok(existingTokenAfter.usedAt, "Expected existing reset token to be invalidated");
+
+    const tokens = await prisma.passwordResetToken.findMany({
+      where: {
+        userId: target.id
+      }
+    });
+    assert.equal(tokens.length, 2);
+
+    const notification = await prisma.notificationOutbox.findFirst({
+      where: {
+        eventType: "PASSWORD_RESET_LINK",
+        recipientUserId: target.id
+      }
+    });
+    assert.ok(notification, "Expected password reset notification outbox row");
+    assert.equal(notification?.status, "SENT");
 
     const auditEntry = await prisma.auditLog.findFirst({
       where: {
@@ -350,8 +517,124 @@ describe("Admin Users API", () => {
         targetUserId: target.id
       }
     });
+    assert.ok(auditEntry, "Expected audit entry for admin link reset");
+  });
 
-    assert.ok(auditEntry, "Expected audit entry for admin reset-password");
+  it("admin reset-password auto mode generates a temporary password without newPassword", async () => {
+    const admin = await createUser({
+      email: "admin-reset-auto@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+
+    const target = await createUser({
+      email: "target-reset-auto@example.com",
+      password: "ValidPassword1!",
+      role: "USER"
+    });
+
+    const existingToken = await prisma.passwordResetToken.create({
+      data: {
+        userId: target.id,
+        tokenHash: `pre-auto-${target.id}`,
+        expiresAt: new Date(Date.now() + 15 * 60_000)
+      }
+    });
+
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const response = await request(`/admin/users/${target.id}/reset-password`, {
+      method: "POST",
+      cookie,
+      body: {
+        passwordMode: "auto"
+      }
+    });
+
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as { ok: boolean; temporaryPassword?: string };
+    assert.equal(payload.ok, true);
+    assert.ok(payload.temporaryPassword, "Expected generated temporary password");
+
+    const updatedTarget = await prisma.user.findUniqueOrThrow({
+      where: {
+        id: target.id
+      }
+    });
+    assert.equal(await verifyPassword(updatedTarget.passwordHash, payload.temporaryPassword!), true);
+    assert.equal(updatedTarget.mustChangePassword, true);
+
+    const invalidatedResetToken = await prisma.passwordResetToken.findUniqueOrThrow({
+      where: {
+        id: existingToken.id
+      }
+    });
+    assert.ok(invalidatedResetToken.usedAt, "Expected existing reset token to be invalidated after password change");
+  });
+
+  it("admin reset-password rejects self-service password changes", async () => {
+    const admin = await createUser({
+      email: "admin-reset-self@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+
+    const cookie = await login(admin.email, "ValidPassword1!");
+    const response = await request(`/admin/users/${admin.id}/reset-password`, {
+      method: "POST",
+      cookie,
+      body: {
+        passwordMode: "direct",
+        newPassword: "EvenBetterPassword2!"
+      }
+    });
+
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { ok: boolean; message: string };
+    assert.match(payload.message, /personal security settings/i);
+
+    const unchangedAdmin = await prisma.user.findUniqueOrThrow({
+      where: {
+        id: admin.id
+      }
+    });
+    assert.equal(await verifyPassword(unchangedAdmin.passwordHash, "ValidPassword1!"), true);
+    assert.equal(await verifyPassword(unchangedAdmin.passwordHash, "EvenBetterPassword2!"), false);
+  });
+
+  it("admin reset-password rejects known placeholder passwords", async () => {
+    const admin = await createUser({
+      email: "admin-reset-placeholder@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+
+    const target = await createUser({
+      email: "target-reset-placeholder@example.com",
+      password: "ValidPassword1!",
+      role: "USER"
+    });
+
+    const cookie = await login(admin.email, "ValidPassword1!");
+    const response = await request(`/admin/users/${target.id}/reset-password`, {
+      method: "POST",
+      cookie,
+      body: {
+        passwordMode: "direct",
+        newPassword: "ChangeMe123!"
+      }
+    });
+
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { ok: boolean; message: string };
+    assert.match(payload.message, /placeholder/i);
+
+    const unchangedTarget = await prisma.user.findUniqueOrThrow({
+      where: {
+        id: target.id
+      }
+    });
+    assert.equal(await verifyPassword(unchangedTarget.passwordHash, "ValidPassword1!"), true);
   });
 
   it("admin reset-password is blocked for archived users", async () => {
@@ -371,20 +654,50 @@ describe("Admin Users API", () => {
     const cookie = await login(admin.email, "ValidPassword1!");
     const response = await request(`/admin/users/${archivedTarget.id}/reset-password`, {
       method: "POST",
-      cookie
+      cookie,
+      body: {
+        passwordMode: "direct",
+        newPassword: "EvenBetterPassword2!"
+      }
     });
 
     assert.equal(response.status, 404);
 
     const auditEntry = await prisma.auditLog.findFirst({
       where: {
-        action: "USER_PASSWORD_RESET_REQUESTED_BY_ADMIN",
+        action: "USER_PASSWORD_RESET_BY_ADMIN",
         actorUserId: admin.id,
         targetUserId: archivedTarget.id
       }
     });
 
     assert.equal(auditEntry, null);
+  });
+
+  it("non-admin gets 403 on admin reset-password endpoint", async () => {
+    const user = await createUser({
+      email: "user-reset-403@example.com",
+      password: "ValidPassword1!",
+      role: "USER"
+    });
+
+    const target = await createUser({
+      email: "target-reset-403@example.com",
+      password: "ValidPassword1!",
+      role: "USER"
+    });
+
+    const cookie = await login(user.email, "ValidPassword1!");
+    const response = await request(`/admin/users/${target.id}/reset-password`, {
+      method: "POST",
+      cookie,
+      body: {
+        passwordMode: "direct",
+        newPassword: "EvenBetterPassword2!"
+      }
+    });
+
+    assert.equal(response.status, 403);
   });
 
   it("admin can create, update, archive and restore custom roles", async () => {
@@ -440,6 +753,147 @@ describe("Admin Users API", () => {
       }
     });
     assert.ok(auditEntry);
+  });
+
+  it("persists authorities.view for custom roles that include authorities.manage", async () => {
+    const admin = await createUser({
+      email: "admin-authority-role@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const createResponse = await request("/admin/roles", {
+      method: "POST",
+      cookie,
+      body: {
+        key: "authority-admin-role",
+        labelDe: "Behoerden Admin",
+        permissionKeys: ["admin.access", "authorities.manage"]
+      }
+    });
+
+    assert.equal(createResponse.status, 201);
+    const storedPermissionKeys = await getStoredRolePermissionKeys(prisma, "AUTHORITY_ADMIN_ROLE");
+    assert.deepEqual(storedPermissionKeys, ["admin.access", "authorities.view", "authorities.manage"]);
+  });
+
+  it("allows custom roles to persist authorities.view without authorities.manage through create and update", async () => {
+    const admin = await createUser({
+      email: "admin-authority-view-role@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const createResponse = await request("/admin/roles", {
+      method: "POST",
+      cookie,
+      body: {
+        key: "authority-read-role",
+        labelDe: "Behoerden Lesen",
+        permissionKeys: ["admin.access", "authorities.view"]
+      }
+    });
+
+    assert.equal(createResponse.status, 201);
+    const createdPayload = (await createResponse.json()) as { role: { id: string } };
+    let storedPermissionKeys = await getStoredRolePermissionKeys(prisma, "AUTHORITY_READ_ROLE");
+    assert.deepEqual(storedPermissionKeys, ["admin.access", "authorities.view"]);
+
+    const updateResponse = await request(`/admin/roles/${createdPayload.role.id}`, {
+      method: "PATCH",
+      cookie,
+      body: {
+        permissionKeys: ["admin.access", "authorities.view"]
+      }
+    });
+
+    assert.equal(updateResponse.status, 200);
+    storedPermissionKeys = await getStoredRolePermissionKeys(prisma, "AUTHORITY_READ_ROLE");
+    assert.deepEqual(storedPermissionKeys, ["admin.access", "authorities.view"]);
+  });
+
+  it("persists externalOrgs.view for custom roles that include externalOrgs.manage", async () => {
+    const admin = await createUser({
+      email: "admin-external-org-role@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const createResponse = await request("/admin/roles", {
+      method: "POST",
+      cookie,
+      body: {
+        key: "external-org-admin-role",
+        labelDe: "Externe Firmen Admin",
+        permissionKeys: ["admin.access", "externalOrgs.manage"]
+      }
+    });
+
+    assert.equal(createResponse.status, 201);
+    const storedPermissionKeys = await getStoredRolePermissionKeys(prisma, "EXTERNAL_ORG_ADMIN_ROLE");
+    assert.deepEqual(storedPermissionKeys, ["admin.access", "externalOrgs.view", "externalOrgs.manage"]);
+  });
+
+  it("allows custom roles to persist externalOrgs.view without externalOrgs.manage through create and update", async () => {
+    const admin = await createUser({
+      email: "admin-external-org-view-role@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const createResponse = await request("/admin/roles", {
+      method: "POST",
+      cookie,
+      body: {
+        key: "external-org-read-role",
+        labelDe: "Externe Firmen Lesen",
+        permissionKeys: ["admin.access", "externalOrgs.view"]
+      }
+    });
+
+    assert.equal(createResponse.status, 201);
+    const createdPayload = (await createResponse.json()) as { role: { id: string } };
+    let storedPermissionKeys = await getStoredRolePermissionKeys(prisma, "EXTERNAL_ORG_READ_ROLE");
+    assert.deepEqual(storedPermissionKeys, ["admin.access", "externalOrgs.view"]);
+
+    const updateResponse = await request(`/admin/roles/${createdPayload.role.id}`, {
+      method: "PATCH",
+      cookie,
+      body: {
+        permissionKeys: ["admin.access", "externalOrgs.view"]
+      }
+    });
+
+    assert.equal(updateResponse.status, 200);
+    storedPermissionKeys = await getStoredRolePermissionKeys(prisma, "EXTERNAL_ORG_READ_ROLE");
+    assert.deepEqual(storedPermissionKeys, ["admin.access", "externalOrgs.view"]);
+  });
+
+  it("rejects admin sub-section permissions without admin.access on custom roles", async () => {
+    const admin = await createUser({
+      email: "admin-role-validation@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const createResponse = await request("/admin/roles", {
+      method: "POST",
+      cookie,
+      body: {
+        key: "invalid-role",
+        labelDe: "Ungueltige Rolle",
+        permissionKeys: ["users.view"]
+      }
+    });
+
+    assert.equal(createResponse.status, 400);
+    const payload = (await createResponse.json()) as { message?: string };
+    assert.equal(payload.message, "admin.access is required for admin sub-section permissions.");
   });
 
   it("system roles cannot be archived", async () => {
@@ -518,6 +972,58 @@ describe("Admin Users API", () => {
       }
     });
     assert.ok(auditEntry);
+  });
+
+  it("view-only external org admin can read but cannot manage external organizations", async () => {
+    const readOnlyRole = await prisma.role.create({
+      data: {
+        key: "EXTERNAL_ORG_AUDITOR",
+        labelDe: "Externe Firmen Lesen",
+        descriptionDe: "Kann externe Firmen ansehen.",
+        permissionsJson: ["admin.access", "externalOrgs.view"]
+      }
+    });
+    assert.ok(readOnlyRole);
+
+    const viewer = await createUser({
+      email: "external-org-viewer@example.com",
+      password: "ValidPassword1!",
+      role: "EXTERNAL_ORG_AUDITOR"
+    });
+    const admin = await createUser({
+      email: "external-org-seed-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const adminCookie = await login(admin.email, "ValidPassword1!");
+
+    const createResponse = await request("/admin/external-orgs", {
+      method: "POST",
+      cookie: adminCookie,
+      body: {
+        name: "Read Only Org",
+        type: "Dienstleister"
+      }
+    });
+    assert.equal(createResponse.status, 201);
+
+    const cookie = await login(viewer.email, "ValidPassword1!");
+
+    const listResponse = await request("/admin/external-orgs", { cookie });
+    assert.equal(listResponse.status, 200);
+
+    const lookupResponse = await request("/admin/external-orgs/lookup", { cookie });
+    assert.equal(lookupResponse.status, 200);
+
+    const createDeniedResponse = await request("/admin/external-orgs", {
+      method: "POST",
+      cookie,
+      body: {
+        name: "Should Fail",
+        type: "Kanzlei"
+      }
+    });
+    assert.equal(createDeniedResponse.status, 403);
   });
 
   it("user creation validates role definitions and external organization", async () => {

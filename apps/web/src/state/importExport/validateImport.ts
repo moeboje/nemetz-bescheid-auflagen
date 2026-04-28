@@ -1,4 +1,6 @@
 import { getRuntimeConfigSnapshot } from "../../config/runtimeConfig";
+import { CHECKLIST_ITEM_STATUS_VALUES } from "../../data/projectChecklists";
+import { PROJECT_STATUS_VALUES, PROJECT_SUBMISSION_TYPE_VALUES } from "../../data/projects";
 import { STORAGE_VERSION } from "../persistence";
 import type { ExportDataBundle, ExportPayload } from "./types";
 
@@ -143,6 +145,7 @@ function normalizePayloadShape(value: unknown): ExportPayload | null {
         authorities: source.authorities as ExportDataBundle["authorities"],
         users: source.users as ExportDataBundle["users"],
         projects: source.projects as ExportDataBundle["projects"],
+        projectChecklists: source.projectChecklists as ExportDataBundle["projectChecklists"],
         legalDocs: source.legalDocs as ExportDataBundle["legalDocs"],
         obligations: source.obligations as ExportDataBundle["obligations"],
         deadlines: source.deadlines as ExportDataBundle["deadlines"],
@@ -228,17 +231,6 @@ function validateUsers(
       pushMessage(errors, "import.validation.invalidId", `${path}.id`);
     }
 
-    const hasLegacyDisplayName = isNonEmptyString(object.displayName);
-    const hasRequiredFields =
-      isNonEmptyString(object.firstName) &&
-      isNonEmptyString(object.lastName) &&
-      isNonEmptyString(object.companyRole) &&
-      isNonEmptyString(object.email);
-
-    if (!hasLegacyDisplayName && !hasRequiredFields) {
-      pushMessage(errors, "import.validation.invalidObject", path);
-    }
-
     if (isNonEmptyString(object.email) && !isValidEmail(object.email)) {
       pushMessage(errors, "import.validation.invalidObject", `${path}.email`);
     }
@@ -246,6 +238,109 @@ function validateUsers(
     if (hasValue(object.phone) && typeof object.phone !== "string") {
       pushMessage(errors, "import.validation.invalidObject", `${path}.phone`);
     }
+  });
+}
+
+function validateProjects(
+  value: unknown,
+  errors: ImportValidationMessage[]
+) {
+  if (!hasValue(value)) {
+    return;
+  }
+
+  const rows = ensureArray(value, "data.projects", errors);
+  validateArrayIds(rows, "data.projects", errors);
+
+  rows.forEach((row, index) => {
+    const path = `data.projects[${index}]`;
+    const object = ensureRecord(row, path, errors);
+    if (!object) {
+      return;
+    }
+
+    if (
+      hasValue(object.status) &&
+      (!isNonEmptyString(object.status) ||
+        !PROJECT_STATUS_VALUES.includes(object.status as (typeof PROJECT_STATUS_VALUES)[number]))
+    ) {
+      pushMessage(errors, "import.validation.invalidObject", `${path}.status`);
+    }
+
+    if (
+      hasValue(object.submissionType) &&
+      (!isNonEmptyString(object.submissionType) ||
+        !PROJECT_SUBMISSION_TYPE_VALUES.includes(
+          object.submissionType as (typeof PROJECT_SUBMISSION_TYPE_VALUES)[number]
+        ))
+    ) {
+      pushMessage(errors, "import.validation.invalidObject", `${path}.submissionType`);
+    }
+  });
+}
+
+function validateProjectChecklists(
+  value: unknown,
+  errors: ImportValidationMessage[]
+) {
+  if (!hasValue(value)) {
+    return;
+  }
+
+  const rows = ensureArray(value, "data.projectChecklists", errors);
+  validateArrayIds(rows, "data.projectChecklists", errors);
+
+  rows.forEach((row, index) => {
+    const path = `data.projectChecklists[${index}]`;
+    const checklist = ensureRecord(row, path, errors);
+    if (!checklist) {
+      return;
+    }
+
+    if (!isNonEmptyString(checklist.projectId)) {
+      pushMessage(errors, "import.validation.invalidId", `${path}.projectId`);
+    }
+
+    const sections = ensureArray(checklist.sections, `${path}.sections`, errors);
+    sections.forEach((sectionRow, sectionIndex) => {
+      const sectionPath = `${path}.sections[${sectionIndex}]`;
+      const section = ensureRecord(sectionRow, sectionPath, errors);
+      if (!section) {
+        return;
+      }
+
+      if (!isNonEmptyString(section.id)) {
+        pushMessage(errors, "import.validation.invalidId", `${sectionPath}.id`);
+      }
+      if (!isNonEmptyString(section.title)) {
+        pushMessage(errors, "import.validation.invalidObject", `${sectionPath}.title`);
+      }
+
+      const items = ensureArray(section.items, `${sectionPath}.items`, errors);
+      items.forEach((itemRow, itemIndex) => {
+        const itemPath = `${sectionPath}.items[${itemIndex}]`;
+        const item = ensureRecord(itemRow, itemPath, errors);
+        if (!item) {
+          return;
+        }
+
+        if (!isNonEmptyString(item.id)) {
+          pushMessage(errors, "import.validation.invalidId", `${itemPath}.id`);
+        }
+        if (!isNonEmptyString(item.title)) {
+          pushMessage(errors, "import.validation.invalidObject", `${itemPath}.title`);
+        }
+        if (
+          hasValue(item.status) &&
+          (!isNonEmptyString(item.status) ||
+            !CHECKLIST_ITEM_STATUS_VALUES.includes(
+              item.status as (typeof CHECKLIST_ITEM_STATUS_VALUES)[number]
+            ))
+        ) {
+          pushMessage(errors, "import.validation.invalidObject", `${itemPath}.status`);
+        }
+      });
+    });
   });
 }
 
@@ -316,6 +411,39 @@ function countEvidenceAttachmentsInTaskState(value: unknown) {
   }, 0);
 }
 
+function validateProjectReplaceDependencies(
+  data: ExportDataBundle,
+  errors: ImportValidationMessage[]
+) {
+  if (!hasValue(data.projects)) {
+    return;
+  }
+
+  const missingDependencies = [
+    !hasValue(data.legalDocs),
+    !hasValue(data.obligations),
+    !hasValue(data.deadlines),
+    !hasValue(data.taskState)
+  ].some(Boolean);
+
+  if (missingDependencies) {
+    pushMessage(errors, "import.validation.projectReplaceRequiresDependents", "data.projects");
+  }
+}
+
+function validateLegalDocReplaceDependencies(
+  data: ExportDataBundle,
+  errors: ImportValidationMessage[]
+) {
+  if (!hasValue(data.legalDocs)) {
+    return;
+  }
+
+  if (!hasValue(data.obligations) || !hasValue(data.deadlines)) {
+    pushMessage(errors, "import.validation.legalDocReplaceRequiresDependents", "data.legalDocs");
+  }
+}
+
 export function validateImport(value: unknown): ImportValidationResult {
   const errors: ImportValidationMessage[] = [];
   const warnings: ImportValidationMessage[] = [];
@@ -352,13 +480,16 @@ export function validateImport(value: unknown): ImportValidationResult {
   validateAuthoritiesSnapshot(data.authorities, errors);
 
   validateUsers(data.users, errors);
-  validateOptionalArray(data.projects, "data.projects", errors);
+  validateProjects(data.projects, errors);
+  validateProjectChecklists(data.projectChecklists, errors);
   validateOptionalArray(data.legalDocs, "data.legalDocs", errors);
   validateOptionalArray(data.obligations, "data.obligations", errors);
   validateOptionalArray(data.deadlines, "data.deadlines", errors);
   validateOptionalArray(data.auditLog, "data.auditLog", errors);
   validateOptionalArray(data.notifications, "data.notifications", errors);
   validateTaskState(data.taskState, errors, warnings);
+  validateProjectReplaceDependencies(data, errors);
+  validateLegalDocReplaceDependencies(data, errors);
 
   const importedAttachmentCount =
     countEvidenceAttachmentsInEntityArray(data.deadlines) +
@@ -367,11 +498,14 @@ export function validateImport(value: unknown): ImportValidationResult {
     pushMessage(warnings, "import.validation.attachmentsMissingContent");
   }
 
-  if (!hasValue(data.users)) {
-    pushMessage(warnings, "import.validation.missingOptionalKey", "data.users");
+  if (hasValue(data.users)) {
+    pushMessage(warnings, "import.validation.usersIgnoredOnImport", "data.users");
   }
   if (!hasValue(data.projects)) {
     pushMessage(warnings, "import.validation.missingOptionalKey", "data.projects");
+  }
+  if (!hasValue(data.projectChecklists)) {
+    pushMessage(warnings, "import.validation.missingOptionalKey", "data.projectChecklists");
   }
   if (!hasValue(data.legalDocs)) {
     pushMessage(warnings, "import.validation.missingOptionalKey", "data.legalDocs");

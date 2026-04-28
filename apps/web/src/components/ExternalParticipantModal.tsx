@@ -16,7 +16,9 @@ type ExternalParticipantModalProps = {
   open: boolean;
   onClose: () => void;
   participant?: ExternalParticipant;
-  onSave: (input: Omit<ExternalParticipant, "id" | "createdAt" | "updatedAt">) => void;
+  onSave: (
+    input: Omit<ExternalParticipant, "id" | "createdAt" | "updatedAt">
+  ) => boolean | Promise<boolean>;
 };
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -50,11 +52,11 @@ export default function ExternalParticipantModal({
   const hasEmailError = form.email ? !emailPattern.test(form.email) : false;
   const isSaveDisabled = !form.type || !form.name || hasEmailError;
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (isSaveDisabled) {
       return;
     }
-    onSave({
+    const saved = await onSave({
       type: form.type,
       organization: form.organization || undefined,
       name: form.name,
@@ -64,7 +66,9 @@ export default function ExternalParticipantModal({
       archivedAt: participant?.archivedAt,
       isArchived: participant?.isArchived ?? false
     });
-    onClose();
+    if (saved) {
+      onClose();
+    }
   };
 
   return (
@@ -72,13 +76,14 @@ export default function ExternalParticipantModal({
       open={open}
       onClose={onClose}
       closeAriaLabel={t("modal.close")}
+      mobileFullscreen
       header={participant ? t("projects.external.edit") : t("projects.external.add")}
       footer={
         <div className="modalFooter">
           <Button variant="secondary" onClick={onClose}>
             {t("common.cancel")}
           </Button>
-          <Button onClick={handleSave} disabled={isSaveDisabled}>
+          <Button onClick={() => void handleSave()} disabled={isSaveDisabled}>
             {t("common.save")}
           </Button>
         </div>

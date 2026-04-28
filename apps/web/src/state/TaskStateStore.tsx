@@ -1,45 +1,47 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useAuth } from "./AuthStore";
 import { useAuditLog } from "./AuditLogStore";
 import { useUsers } from "./UsersStore";
-import { loadJSON, saveJSON, STORAGE_KEYS } from "./persistence";
+import { clearPersistedValue, loadJSON, STORAGE_KEYS } from "./persistence";
+import {
+  addTaskStateEvidence as apiAddTaskStateEvidence,
+  bulkDeleteTaskState,
+  bulkReplaceTaskState,
+  cleanupOldTaskState,
+  completeTaskState,
+  listTaskState,
+  markTaskStateAttachmentUnavailable,
+  reconcileLegacyTaskState,
+  reopenTaskState as apiReopenTaskState,
+  setTaskStateStatus as apiSetTaskStateStatus
+} from "../api/taskState";
 import {
   countAttachmentsByKind,
   createStableId,
   inferAttachmentKind,
   type AttachmentMeta
 } from "../types/attachments";
-import type { Evidence, EvidenceOutcome } from "../types/evidence";
+import type { Evidence } from "../types/evidence";
+import type {
+  EvidenceInput,
+  TaskInstanceStatus,
+  TaskStateEntry,
+  TaskStateMap
+} from "../types/taskState";
 
-export type TaskInstanceStatus = "OPEN" | "IN_PROGRESS" | "DONE";
-
-export type TaskStateEntry = {
-  status: TaskInstanceStatus;
-  completedAt?: string;
-  completedByUserId?: string;
-  completedByLabel?: string;
-  evidence?: Evidence[];
-  updatedAt: string;
-};
-
-export type TaskStateMap = Record<string, TaskStateEntry>;
-
-export type EvidenceInput = {
-  note?: string;
-  outcome?: EvidenceOutcome;
-  attachments: AttachmentMeta[];
-};
+export type { EvidenceInput, TaskInstanceStatus, TaskStateEntry, TaskStateMap } from "../types/taskState";
 
 type TaskStateContextValue = {
   taskState: TaskStateMap;
-  setTaskStatus: (instanceId: string, status: TaskInstanceStatus) => void;
-  markDone: (instanceId: string) => void;
-  markDoneWithEvidence: (instanceId: string, input: EvidenceInput) => void;
-  addEvidence: (instanceId: string, input: EvidenceInput) => void;
-  markAttachmentUnavailable: (instanceId: string, attachmentId: string) => void;
-  reopen: (instanceId: string) => void;
-  cleanupOld: (horizonDays?: number) => number;
-  replaceTaskState: (value: TaskStateMap) => void;
-  resetTaskState: () => void;
+  setTaskStatus: (instanceId: string, status: TaskInstanceStatus) => Promise<void>;
+  markDone: (instanceId: string) => Promise<void>;
+  markDoneWithEvidence: (instanceId: string, input: EvidenceInput) => Promise<void>;
+  addEvidence: (instanceId: string, input: EvidenceInput) => Promise<void>;
+  markAttachmentUnavailable: (instanceId: string, attachmentId: string) => Promise<boolean>;
+  reopen: (instanceId: string) => Promise<void>;
+  cleanupOld: (horizonDays?: number) => Promise<number>;
+  replaceTaskState: (value: TaskStateMap) => Promise<void>;
+  resetTaskState: () => Promise<void>;
 };
 
 const TaskStateContext = createContext<TaskStateContextValue | undefined>(undefined);
@@ -84,7 +86,6 @@ function parseInstanceId(rawKey: string): string | null {
     return rawKey;
   }
 
-  // Legacy format from L2/L3 drafts: ob-{obligationId}-{dueDate}
   if (rawKey.startsWith("ob-") && rawKey.length > 14) {
     const dueDateISO = rawKey.slice(-10);
     const between = rawKey.slice(3, -11);
@@ -204,6 +205,14 @@ function normalizeTaskStateMap(value: unknown): TaskStateMap {
   return Object.fromEntries(rows);
 }
 
+function hasTaskStateEntries(value: TaskStateMap) {
+  return Object.keys(value).length > 0;
+}
+
+function readLegacyTaskState() {
+  return normalizeTaskStateMap(loadJSON<TaskStateMap>(STORAGE_KEYS.taskState, { fallback: {} }) ?? {});
+}
+
 function buildTaskCompletedAuditSummary(input: EvidenceInput) {
   const counts = countAttachmentsByKind(input.attachments ?? []);
   return `Counts PHOTO:${counts.PHOTO}, DOCUMENT:${counts.DOCUMENT}, REPORT:${counts.REPORT}${
@@ -211,103 +220,134 @@ function buildTaskCompletedAuditSummary(input: EvidenceInput) {
   }`;
 }
 
+function clearLegacyTaskState() {
+  clearPersistedValue(STORAGE_KEYS.taskState);
+}
+
 export function TaskStateProvider({ children }: { children: React.ReactNode }) {
+  const { user: authUser } = useAuth();
   const { logEvent } = useAuditLog();
   const { currentUser, getUserLabel } = useUsers();
-  const [taskState, setTaskState] = useState<TaskStateMap>(() =>
-    loadJSON<TaskStateMap>(STORAGE_KEYS.taskState, {
-      fallback: {},
-      migrate: (value) => normalizeTaskStateMap(value)
-    }) ?? {}
-  );
+  const [taskState, setTaskState] = useState<TaskStateMap>({});
+  const legacyCleanupReadyRef = useRef(false);
 
-  React.useEffect(() => {
-    saveJSON(STORAGE_KEYS.taskState, taskState);
-  }, [taskState]);
+  const clearLegacyTaskStateIfReady = useCallback(() => {
+    if (legacyCleanupReadyRef.current) {
+      clearLegacyTaskState();
+    }
+  }, []);
+
+  const reloadTaskState = useCallback(async () => {
+    const legacyTaskState = readLegacyTaskState();
+
+    if (!authUser || authUser.type === "EXTERNAL") {
+      setTaskState({});
+      legacyCleanupReadyRef.current = false;
+      return {};
+    }
+
+    let serverTaskState: TaskStateMap;
+
+    try {
+      serverTaskState = normalizeTaskStateMap(await listTaskState());
+    } catch {
+      setTaskState({});
+      legacyCleanupReadyRef.current = false;
+      return {};
+    }
+
+    if (!hasTaskStateEntries(legacyTaskState)) {
+      setTaskState(serverTaskState);
+      legacyCleanupReadyRef.current = true;
+      clearLegacyTaskState();
+      return serverTaskState;
+    }
+
+    try {
+      const mergedTaskState = normalizeTaskStateMap(
+        await reconcileLegacyTaskState(legacyTaskState)
+      );
+      setTaskState(mergedTaskState);
+      legacyCleanupReadyRef.current = true;
+      clearLegacyTaskState();
+      return mergedTaskState;
+    } catch {
+      setTaskState(serverTaskState);
+      legacyCleanupReadyRef.current = false;
+      return serverTaskState;
+    }
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!authUser || authUser.type === "EXTERNAL") {
+      setTaskState({});
+      legacyCleanupReadyRef.current = false;
+      return;
+    }
+
+    void reloadTaskState();
+  }, [authUser, reloadTaskState]);
 
   const setTaskStatus = useCallback(
-    (instanceId: string, status: TaskInstanceStatus) => {
+    async (instanceId: string, status: TaskInstanceStatus) => {
       const normalizedId = parseInstanceId(instanceId);
       if (!normalizedId) {
         return;
       }
-      let changed = false;
-      setTaskState((prev) => {
-        const previous = prev[normalizedId];
-        if (previous?.status === status) {
-          return prev;
-        }
-        changed = true;
-        const updatedAt = nowStamp();
-        const isDone = status === "DONE";
-        const next: TaskStateEntry = {
-          status,
-          updatedAt,
-          completedAt: isDone ? updatedAt : undefined,
-          completedByUserId: isDone ? currentUser?.id : undefined,
-          completedByLabel: isDone ? getUserLabel(currentUser?.id) : undefined,
-          evidence: previous?.evidence
-        };
-        return {
-          ...prev,
-          [normalizedId]: next
-        };
-      });
-      if (changed) {
-        logEvent({
-          actorLabel: "Demo User",
-          entityType: "TASK",
-          entityId: normalizedId,
-          action: "STATUS_CHANGED",
-          summary: `Task status set to ${status}`
-        });
+      if (taskState[normalizedId]?.status === status) {
+        return;
       }
+
+      const nextEntry = normalizeTaskStateMap({
+        [normalizedId]: await apiSetTaskStateStatus(normalizedId, status)
+      })[normalizedId];
+      if (!nextEntry) {
+        return;
+      }
+
+      setTaskState((prev) => ({
+        ...prev,
+        [normalizedId]: nextEntry
+      }));
+      clearLegacyTaskStateIfReady();
+
+      logEvent({
+        actorLabel: getUserLabel(currentUser?.id) || "Demo User",
+        entityType: "TASK",
+        entityId: normalizedId,
+        action: "STATUS_CHANGED",
+        summary: `Task status set to ${status}`
+      });
     },
-    [currentUser?.id, getUserLabel, logEvent]
+    [clearLegacyTaskStateIfReady, currentUser?.id, getUserLabel, logEvent, taskState]
   );
 
   const markDone = useCallback(
-    (instanceId: string) => {
-      setTaskStatus(instanceId, "DONE");
+    async (instanceId: string) => {
+      await setTaskStatus(instanceId, "DONE");
     },
     [setTaskStatus]
   );
 
   const addEvidence = useCallback(
-    (instanceId: string, input: EvidenceInput) => {
+    async (instanceId: string, input: EvidenceInput) => {
       const normalizedId = parseInstanceId(instanceId);
       if (!normalizedId) {
         return;
       }
-      const now = nowStamp();
-      const entry = createEvidence({
-        note: input.note,
-        outcome: input.outcome,
-        attachments: input.attachments,
-        createdAt: now,
-        createdByUserId: currentUser?.id,
-        createdByLabel: getUserLabel(currentUser?.id)
-      });
-      if (!entry) {
+
+      const nextEntry = normalizeTaskStateMap({
+        [normalizedId]: await apiAddTaskStateEvidence(normalizedId, input)
+      })[normalizedId];
+      if (!nextEntry) {
         return;
       }
 
-      setTaskState((prev) => {
-        const previous = prev[normalizedId];
-        const existingEvidence = previous?.evidence ?? [];
-        return {
-          ...prev,
-          [normalizedId]: {
-            status: "DONE",
-            completedAt: previous?.completedAt ?? now,
-            completedByUserId: previous?.completedByUserId ?? currentUser?.id,
-            completedByLabel:
-              previous?.completedByLabel ?? getUserLabel(previous?.completedByUserId ?? currentUser?.id),
-            evidence: [entry, ...existingEvidence],
-            updatedAt: now
-          }
-        };
-      });
+      setTaskState((prev) => ({
+        ...prev,
+        [normalizedId]: nextEntry
+      }));
+      clearLegacyTaskStateIfReady();
 
       logEvent({
         actorLabel: getUserLabel(currentUser?.id) || "Demo User",
@@ -317,126 +357,135 @@ export function TaskStateProvider({ children }: { children: React.ReactNode }) {
         summary: buildTaskCompletedAuditSummary(input)
       });
     },
-    [currentUser?.id, getUserLabel, logEvent]
+    [clearLegacyTaskStateIfReady, currentUser?.id, getUserLabel, logEvent]
   );
 
   const markDoneWithEvidence = useCallback(
-    (instanceId: string, input: EvidenceInput) => {
-      addEvidence(instanceId, input);
-    },
-    [addEvidence]
-  );
-
-  const markAttachmentUnavailable = useCallback(
-    (instanceId: string, attachmentId: string) => {
+    async (instanceId: string, input: EvidenceInput) => {
       const normalizedId = parseInstanceId(instanceId);
-      if (!normalizedId || !attachmentId) {
+      if (!normalizedId) {
         return;
       }
 
-      let changed = false;
-      const now = nowStamp();
-      setTaskState((prev) => {
-        const current = prev[normalizedId];
-        if (!current?.evidence?.length) {
-          return prev;
-        }
+      const nextEntry = normalizeTaskStateMap({
+        [normalizedId]: await completeTaskState(normalizedId, input)
+      })[normalizedId];
+      if (!nextEntry) {
+        return;
+      }
 
-        const nextEvidence = current.evidence.map((entry) => ({
-          ...entry,
-          attachments: entry.attachments.map((attachment) => {
-            if (attachment.id !== attachmentId || attachment.storage === "none") {
-              return attachment;
-            }
-            changed = true;
-            return {
-              ...attachment,
-              storage: "none"
-            };
-          })
-        }));
+      setTaskState((prev) => ({
+        ...prev,
+        [normalizedId]: nextEntry
+      }));
+      clearLegacyTaskStateIfReady();
 
-        if (!changed) {
-          return prev;
-        }
+      logEvent({
+        actorLabel: getUserLabel(currentUser?.id) || "Demo User",
+        entityType: "TASK",
+        entityId: normalizedId,
+        action: "TASK_COMPLETED",
+        summary: buildTaskCompletedAuditSummary(input)
+      });
+    },
+    [clearLegacyTaskStateIfReady, currentUser?.id, getUserLabel, logEvent]
+  );
 
-        return {
-          ...prev,
-          [normalizedId]: {
-            ...current,
-            evidence: nextEvidence,
-            updatedAt: now
-          }
-        };
+  const markAttachmentUnavailable = useCallback(
+    async (instanceId: string, attachmentId: string) => {
+      const normalizedId = parseInstanceId(instanceId);
+      if (!normalizedId || !attachmentId) {
+        return false;
+      }
+
+      const result = await markTaskStateAttachmentUnavailable(normalizedId, attachmentId);
+      if (!result.changed || !result.taskStateEntry) {
+        return Boolean(result.changed);
+      }
+
+      const nextEntry = normalizeTaskStateMap({
+        [normalizedId]: result.taskStateEntry
+      })[normalizedId];
+      if (!nextEntry) {
+        return false;
+      }
+
+      setTaskState((prev) => ({
+        ...prev,
+        [normalizedId]: nextEntry
+      }));
+      clearLegacyTaskStateIfReady();
+
+      logEvent({
+        actorLabel: getUserLabel(currentUser?.id) || "Demo User",
+        entityType: "TASK",
+        entityId: normalizedId,
+        action: "CLEANUP",
+        summary: `Attachment marked unavailable (${attachmentId})`
       });
 
-      if (changed) {
-        logEvent({
-          actorLabel: "Demo User",
-          entityType: "TASK",
-          entityId: normalizedId,
-          action: "CLEANUP",
-          summary: `Attachment marked unavailable (${attachmentId})`
-        });
-      }
+      return true;
     },
-    [logEvent]
+    [clearLegacyTaskStateIfReady, currentUser?.id, getUserLabel, logEvent]
   );
 
   const reopen = useCallback(
-    (instanceId: string) => {
-      setTaskStatus(instanceId, "OPEN");
+    async (instanceId: string) => {
+      const normalizedId = parseInstanceId(instanceId);
+      if (!normalizedId) {
+        return;
+      }
+
+      const nextEntry = normalizeTaskStateMap({
+        [normalizedId]: await apiReopenTaskState(normalizedId)
+      })[normalizedId];
+      if (!nextEntry) {
+        return;
+      }
+
+      setTaskState((prev) => ({
+        ...prev,
+        [normalizedId]: nextEntry
+      }));
+      clearLegacyTaskStateIfReady();
     },
-    [setTaskStatus]
+    [clearLegacyTaskStateIfReady]
   );
 
   const cleanupOld = useCallback(
-    (horizonDays = 365) => {
-      const now = new Date(`${todayISO()}T00:00:00`);
-      const maxPast = new Date(now);
-      maxPast.setDate(maxPast.getDate() - 730);
-      const maxFuture = new Date(now);
-      maxFuture.setDate(maxFuture.getDate() + horizonDays);
+    async (horizonDays = 365) => {
+      const result = await cleanupOldTaskState(horizonDays);
+      const next = normalizeTaskStateMap(result.taskState);
+      setTaskState(next);
+      clearLegacyTaskStateIfReady();
 
-      let removedCount = 0;
-      setTaskState((prev) => {
-        const nextEntries = Object.entries(prev).filter(([instanceId, entry]) => {
-          const dueDateISO = instanceId.split(":")[2] ?? "";
-          const dueDate = parseISODate(dueDateISO);
-          const updatedAt = new Date(entry.updatedAt);
-          const isTooOld = !Number.isNaN(updatedAt.getTime()) && updatedAt < maxPast;
-          const isOutsideHorizon =
-            !dueDate || dueDate < maxPast || dueDate > maxFuture;
-          if (isTooOld || isOutsideHorizon) {
-            removedCount += 1;
-            return false;
-          }
-          return true;
-        });
-        return Object.fromEntries(nextEntries);
-      });
-
-      if (removedCount > 0) {
+      if (result.removedCount > 0) {
         logEvent({
-          actorLabel: "Demo User",
+          actorLabel: getUserLabel(currentUser?.id) || "Demo User",
           entityType: "TASK",
           entityId: "task-state",
           action: "CLEANUP",
-          summary: `TaskState cleanup removed ${removedCount} entries`
+          summary: `TaskState cleanup removed ${result.removedCount} entries`
         });
       }
 
-      return removedCount;
+      return result.removedCount;
     },
-    [logEvent]
+    [clearLegacyTaskStateIfReady, currentUser?.id, getUserLabel, logEvent]
   );
 
-  const replaceTaskState = useCallback((value: TaskStateMap) => {
-    setTaskState(normalizeTaskStateMap(value));
+  const replaceTaskState = useCallback(async (value: TaskStateMap) => {
+    const next = normalizeTaskStateMap(await bulkReplaceTaskState(value));
+    setTaskState(next);
+    legacyCleanupReadyRef.current = true;
+    clearLegacyTaskState();
   }, []);
 
-  const resetTaskState = useCallback(() => {
+  const resetTaskState = useCallback(async () => {
+    await bulkDeleteTaskState();
     setTaskState({});
+    legacyCleanupReadyRef.current = true;
+    clearLegacyTaskState();
   }, []);
 
   const value = useMemo(

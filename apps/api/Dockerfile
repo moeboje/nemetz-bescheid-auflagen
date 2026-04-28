@@ -18,9 +18,11 @@ COPY --from=build /app/apps/api/package*.json ./
 COPY --from=build /app/apps/api/node_modules ./node_modules
 COPY --from=build /app/apps/api/prisma ./prisma
 COPY --from=build /app/apps/api/dist ./dist
-COPY --from=build /app/apps/api/storage ./storage
+COPY apps/api/start-container.sh ./start-container.sh
+COPY apps/api/start-notification-worker.sh ./start-notification-worker.sh
+RUN chmod +x ./start-container.sh ./start-notification-worker.sh && mkdir -p ./storage/uploads
 
 ENV NODE_ENV=production
 EXPOSE 4000
 
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/seed.js && node dist/index.js"]
+CMD ["./start-container.sh"]

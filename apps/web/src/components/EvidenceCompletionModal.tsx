@@ -90,6 +90,7 @@ export default function EvidenceCompletionModal({
       open={open}
       onClose={onClose}
       closeAriaLabel={t("modal.close")}
+      mobileFullscreen
       header={header}
       footer={
         <div className="modalFooter">

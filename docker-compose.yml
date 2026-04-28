@@ -1,28 +1,89 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: portal
+      POSTGRES_PASSWORD: portalpw
+      POSTGRES_DB: portaldev
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U portal -d portaldev"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       PORT: 4000
-      DATABASE_URL: file:/app/apps/api/prisma/dev.db
+      DATABASE_URL: postgresql://portal:portalpw@postgres:5432/portaldev?schema=public
       APP_ORIGIN: http://localhost:8080
+      NOTIFICATION_BASE_URL: ${NOTIFICATION_BASE_URL:-http://localhost:8080}
+      NOTIFICATION_DISPATCH_ENABLED: ${NOTIFICATION_DISPATCH_ENABLED:-false}
+      NOTIFICATION_DRY_RUN: ${NOTIFICATION_DRY_RUN:-true}
+      POWER_AUTOMATE_NOTIFICATION_WEBHOOK_URL: ${POWER_AUTOMATE_NOTIFICATION_WEBHOOK_URL:-}
+      POWER_AUTOMATE_NOTIFICATION_SECRET: ${POWER_AUTOMATE_NOTIFICATION_SECRET:-}
+      NOTIFICATION_FROM_LABEL: ${NOTIFICATION_FROM_LABEL:-Nemetz Portal}
+      NOTIFICATION_MAX_ATTEMPTS: ${NOTIFICATION_MAX_ATTEMPTS:-5}
+      NOTIFICATION_DISPATCH_BATCH_SIZE: ${NOTIFICATION_DISPATCH_BATCH_SIZE:-25}
+      NOTIFICATION_DISPATCH_TIMEOUT_MS: ${NOTIFICATION_DISPATCH_TIMEOUT_MS:-15000}
+      NOTIFICATION_CLAIM_LEASE_SECONDS: ${NOTIFICATION_CLAIM_LEASE_SECONDS:-300}
+      NOTIFICATION_TIMEZONE: ${NOTIFICATION_TIMEZONE:-Europe/Vienna}
       SESSION_SECRET: ${SESSION_SECRET:-replace-me-with-long-random-secret}
       NODE_ENV: production
-      RESET_TOKEN_TTL_MINUTES: 30
+      PASSWORD_RESET_TOKEN_TTL_MINUTES: 120
       SESSION_TTL_DAYS: 7
       COOKIE_SECURE: "false"
       BASE_PATH: /api
-      ADMIN_EMAIL: admin@example.com
-      ADMIN_PASSWORD: ChangeMe123!
-      SEED_DEFAULT_PASSWORD: ChangeMe123!
-    volumes:
-      - api_sqlite:/app/apps/api/prisma
-      - api_outbox:/app/apps/api/storage/mail-outbox
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      SEED_DEFAULT_PASSWORD: ${SEED_DEFAULT_PASSWORD:-}
     networks:
       default:
         aliases:
           - api
+
+  notifications-worker:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["npm", "run", "notifications:worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://portal:portalpw@postgres:5432/portaldev?schema=public
+      APP_ORIGIN: http://localhost:8080
+      NOTIFICATION_BASE_URL: ${NOTIFICATION_BASE_URL:-http://localhost:8080}
+      NOTIFICATION_DISPATCH_ENABLED: ${NOTIFICATION_DISPATCH_ENABLED:-false}
+      NOTIFICATION_DRY_RUN: ${NOTIFICATION_DRY_RUN:-true}
+      POWER_AUTOMATE_NOTIFICATION_WEBHOOK_URL: ${POWER_AUTOMATE_NOTIFICATION_WEBHOOK_URL:-}
+      POWER_AUTOMATE_NOTIFICATION_SECRET: ${POWER_AUTOMATE_NOTIFICATION_SECRET:-}
+      NOTIFICATION_FROM_LABEL: ${NOTIFICATION_FROM_LABEL:-Nemetz Portal}
+      NOTIFICATION_MAX_ATTEMPTS: ${NOTIFICATION_MAX_ATTEMPTS:-5}
+      NOTIFICATION_DISPATCH_BATCH_SIZE: ${NOTIFICATION_DISPATCH_BATCH_SIZE:-25}
+      NOTIFICATION_DISPATCH_TIMEOUT_MS: ${NOTIFICATION_DISPATCH_TIMEOUT_MS:-15000}
+      NOTIFICATION_CLAIM_LEASE_SECONDS: ${NOTIFICATION_CLAIM_LEASE_SECONDS:-300}
+      NOTIFICATION_TIMEZONE: ${NOTIFICATION_TIMEZONE:-Europe/Vienna}
+      NOTIFICATION_DISPATCH_INTERVAL_SECONDS: ${NOTIFICATION_DISPATCH_INTERVAL_SECONDS:-300}
+      SESSION_SECRET: ${SESSION_SECRET:-replace-me-with-long-random-secret}
+      NODE_ENV: production
+      PASSWORD_RESET_TOKEN_TTL_MINUTES: 120
+      SESSION_TTL_DAYS: 7
+      COOKIE_SECURE: "false"
+      BASE_PATH: /api
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      SEED_DEFAULT_PASSWORD: ${SEED_DEFAULT_PASSWORD:-}
+    restart: unless-stopped
 
   web:
     build:
@@ -44,5 +105,4 @@ services:
       - ./ops/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
 
 volumes:
-  api_sqlite:
-  api_outbox:
+  postgres_data:

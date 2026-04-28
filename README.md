@@ -18,6 +18,7 @@ API:
 cd apps/api
 cp .env.example .env
 npm install
+# Set explicit non-default ADMIN_EMAIL and ADMIN_PASSWORD in apps/api/.env before seeding.
 npm run migrate:dev -- --name init_auth
 npm run seed
 npm run dev
@@ -27,6 +28,7 @@ npm run dev
 
 ```bash
 cp .env.example .env
+# Set explicit non-default ADMIN_EMAIL and ADMIN_PASSWORD in .env before starting the stack.
 docker compose up --build
 ```
 

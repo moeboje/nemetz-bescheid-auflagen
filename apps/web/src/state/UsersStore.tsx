@@ -14,7 +14,9 @@ import {
   unlockUser as apiUnlockUser,
   updateUser as apiUpdateUser,
   type AdminUsersListResult,
-  type AdminUsersQuery
+  type AdminUsersQuery,
+  type UserPasswordResetInput,
+  type UserPasswordResetResult
 } from "../api/users";
 import { useAuth } from "./AuthStore";
 
@@ -44,6 +46,8 @@ type UserCreateInput = {
   companyRole?: string;
   isExternal?: boolean;
   initialPassword?: string;
+  mustChangePassword?: boolean;
+  passwordMode?: "link" | "manual" | "auto";
 };
 
 type UserUpdatePatch = Partial<UserCreateInput>;
@@ -53,14 +57,20 @@ export type UsersContextValue = {
   currentUserId: string;
   currentUser: User | undefined;
   setCurrentUserId: (userId: string) => void;
-  addUser: (input: UserCreateInput) => Promise<{ user: User; resetLink?: string; outboxFile?: string }>;
+  addUser: (input: UserCreateInput) => Promise<{
+    user: User;
+    resetLink?: string;
+    temporaryPassword?: string;
+    notificationStatus?: "SENT" | "FAILED";
+    notificationError?: string;
+  }>;
   updateUser: (id: string, patch: UserUpdatePatch) => Promise<User | null>;
   archiveUser: (id: string) => Promise<User | null>;
   restoreUser: (id: string) => Promise<User | null>;
   unlockUser: (id: string) => Promise<User | null>;
   setMfaEnforced: (id: string, enforced: boolean) => Promise<User | null>;
   resetMfa: (id: string) => Promise<User | null>;
-  requestReset: (id: string) => Promise<{ ok: boolean; resetLink?: string; outboxFile?: string }>;
+  requestReset: (id: string, input?: UserPasswordResetInput) => Promise<UserPasswordResetResult>;
   loadAdminUsers: (query?: AdminUsersQuery) => Promise<AdminUsersListResult>;
   getUser: (userId?: string | null) => User | undefined;
   getDisplayName: (userId?: string | null) => string;
@@ -102,7 +112,7 @@ function normalizeRole(input: UserCreateInput | UserUpdatePatch): UserRole {
   if (input.type === "EXTERNAL" || input.isExternal) {
     return "EXTERNAL";
   }
-  return "USER";
+  return "COMPLIANCE_EDITOR";
 }
 
 function matchesType(user: User, filters?: UserSelectionFilter) {
@@ -137,10 +147,13 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
       return [];
     }
 
-    const nextUsers =
-      authUser.role === "ADMIN"
-        ? await listUsers({ includeArchived: true })
-        : await listUserLookup({ includeArchived: true });
+    const canManageUsers =
+      Array.isArray(authUser.effectivePermissions) &&
+      authUser.effectivePermissions.includes("users.manage");
+
+    const nextUsers = canManageUsers
+      ? await listUsers({ includeArchived: true })
+      : await listUserLookup({ includeArchived: true });
 
     const sorted = sortUsers(nextUsers);
     setUsers(sorted);
@@ -208,7 +221,15 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
       return undefined;
     }
 
-    return users.find((user) => user.id === authUser.id) ?? authUser;
+    const matchingUser = users.find((user) => user.id === authUser.id);
+    if (!matchingUser) {
+      return authUser;
+    }
+
+    return {
+      ...matchingUser,
+      effectivePermissions: authUser.effectivePermissions ?? matchingUser.effectivePermissions
+    };
   }, [authUser, users]);
 
   const addUser = useCallback(async (input: UserCreateInput) => {
@@ -224,10 +245,12 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
       titleOrPosition: input.titleOrPosition?.trim() || undefined,
       department: input.department?.trim() || undefined,
       externalCompany: input.externalCompany?.trim() || undefined,
-      externalOrgId: input.externalOrgId?.trim() || undefined,
-      notes: input.notes?.trim() || undefined,
-      initialPassword: input.initialPassword?.trim() || undefined
-    });
+          externalOrgId: input.externalOrgId?.trim() || undefined,
+          notes: input.notes?.trim() || undefined,
+          initialPassword: input.initialPassword?.trim() || undefined,
+          mustChangePassword: input.mustChangePassword,
+          passwordMode: input.passwordMode
+        });
 
     setUsers((prev) => {
       const withoutCurrent = prev.filter((user) => user.id !== created.user.id);
@@ -272,7 +295,8 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
           typeof patch.externalCompany === "string" ? patch.externalCompany.trim() || undefined : undefined,
         externalOrgId:
           typeof patch.externalOrgId === "string" ? patch.externalOrgId.trim() || undefined : undefined,
-        notes: typeof patch.notes === "string" ? patch.notes.trim() || undefined : undefined
+        notes: typeof patch.notes === "string" ? patch.notes.trim() || undefined : undefined,
+        mustChangePassword: patch.mustChangePassword
       });
 
       setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updated) : user))));
@@ -311,8 +335,13 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
     return updated;
   }, []);
 
-  const requestReset = useCallback(async (id: string) => {
-    return requestUserPasswordReset(id);
+  const requestReset = useCallback(async (id: string, input?: UserPasswordResetInput) => {
+    const result = await requestUserPasswordReset(id, input);
+    const updatedUser = result.user;
+    if (updatedUser) {
+      setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updatedUser) : user))));
+    }
+    return result;
   }, []);
 
   const loadAdminUsers = useCallback(async (query: AdminUsersQuery = {}) => {
