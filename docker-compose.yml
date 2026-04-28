@@ -37,11 +37,12 @@ services:
       NOTIFICATION_DISPATCH_TIMEOUT_MS: ${NOTIFICATION_DISPATCH_TIMEOUT_MS:-15000}
       NOTIFICATION_CLAIM_LEASE_SECONDS: ${NOTIFICATION_CLAIM_LEASE_SECONDS:-300}
       NOTIFICATION_TIMEZONE: ${NOTIFICATION_TIMEZONE:-Europe/Vienna}
-      SESSION_SECRET: ${SESSION_SECRET:-replace-me-with-long-random-secret}
-      NODE_ENV: production
+      SESSION_SECRET: ${SESSION_SECRET}
+      # This Compose stack is the documented local HTTP environment on localhost:8080.
+      NODE_ENV: development
       PASSWORD_RESET_TOKEN_TTL_MINUTES: 120
       SESSION_TTL_DAYS: 7
-      COOKIE_SECURE: "false"
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
       BASE_PATH: /api
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
@@ -74,11 +75,12 @@ services:
       NOTIFICATION_CLAIM_LEASE_SECONDS: ${NOTIFICATION_CLAIM_LEASE_SECONDS:-300}
       NOTIFICATION_TIMEZONE: ${NOTIFICATION_TIMEZONE:-Europe/Vienna}
       NOTIFICATION_DISPATCH_INTERVAL_SECONDS: ${NOTIFICATION_DISPATCH_INTERVAL_SECONDS:-300}
-      SESSION_SECRET: ${SESSION_SECRET:-replace-me-with-long-random-secret}
-      NODE_ENV: production
+      SESSION_SECRET: ${SESSION_SECRET}
+      # This Compose stack is the documented local HTTP environment on localhost:8080.
+      NODE_ENV: development
       PASSWORD_RESET_TOKEN_TTL_MINUTES: 120
       SESSION_TTL_DAYS: 7
-      COOKIE_SECURE: "false"
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
       BASE_PATH: /api
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}

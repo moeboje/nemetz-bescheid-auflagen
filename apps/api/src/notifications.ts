@@ -159,25 +159,17 @@ function trimTrailingSlash(value: string) {
   return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
-function isLocalhostUrl(url: URL) {
-  return url.hostname === "localhost" || url.hostname === "127.0.0.1";
-}
-
 function getNotificationBaseUrl(config: AppConfig) {
-  const raw = (config.notificationBaseUrl || config.appOrigin || "").trim();
+  const raw = config.notificationBaseUrl.trim();
   if (!raw) {
-    throw new NotificationDispatchError("NOTIFICATION_BASE_URL or APP_ORIGIN must be configured.", false);
+    throw new NotificationDispatchError("Notification base URL is not configured.", false);
   }
 
   let parsed: URL;
   try {
     parsed = new URL(raw);
   } catch {
-    throw new NotificationDispatchError("NOTIFICATION_BASE_URL must be a valid absolute URL.", false);
-  }
-
-  if (config.nodeEnv === "production" && parsed.protocol !== "https:" && !isLocalhostUrl(parsed)) {
-    throw new NotificationDispatchError("NOTIFICATION_BASE_URL must use HTTPS in production.", false);
+    throw new NotificationDispatchError("Notification base URL must be a valid absolute URL.", false);
   }
 
   return trimTrailingSlash(parsed.toString());
@@ -841,13 +833,30 @@ export async function invalidateOlderPasswordResetTokens(
   });
 }
 
+function getSerializedPasswordResetTokenCreatedAt(
+  issuedAt: Date,
+  latestExistingCreatedAt: Date | null | undefined
+) {
+  if (!latestExistingCreatedAt) {
+    return issuedAt;
+  }
+
+  const issuedAtMs = issuedAt.getTime();
+  const latestMs = latestExistingCreatedAt.getTime();
+  if (issuedAtMs > latestMs) {
+    return issuedAt;
+  }
+
+  return new Date(latestMs + 1);
+}
+
 export async function createAndDispatchPasswordResetNotification(
   prisma: PrismaClient,
   config: AppConfig,
   args: {
     user: RecipientSnapshot;
     ttlMinutes: number;
-    now?: Date;
+    now?: () => Date;
   }
 ): Promise<PasswordResetDeliveryResult> {
   const allowExternalUsers = await getAllowExternalUsers(prisma);
@@ -855,31 +864,52 @@ export async function createAndDispatchPasswordResetNotification(
     throw new NotificationDispatchError("User does not have a deliverable email address.", false);
   }
 
-  const now = args.now ?? new Date();
   const rawToken = generateOpaqueToken(32);
   const tokenHash = hashToken(rawToken);
-  const expiresAt = new Date(now.getTime() + args.ttlMinutes * 60_000);
   const claimToken = generateOpaqueToken(18);
   const resetLink = buildResetPasswordLink(config, rawToken);
   const subject = "Passwort fuer das Nemetz Portal zuruecksetzen";
-  const storedPayload: StoredNotificationPayload = {
-    title: "Passwort zuruecksetzen",
-    message: "Du kannst ueber den folgenden Link ein neues Passwort vergeben.",
-    severity: "INFO",
-    expiresAt: expiresAt.toISOString(),
-    entity: {
-      type: "USER",
-      id: args.user.id,
-      label: getDisplayName(args.user) || args.user.email
-    }
-  };
 
   const created = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw(
+      Prisma.sql`SELECT 1 FROM "User" WHERE "id" = ${args.user.id} FOR UPDATE`
+    );
+
+    const issuedAt = args.now?.() ?? new Date();
+    const latestExistingToken = await tx.passwordResetToken.findFirst({
+      where: {
+        userId: args.user.id
+      },
+      select: {
+        createdAt: true
+      },
+      orderBy: {
+        createdAt: "desc"
+      }
+    });
+    const tokenCreatedAt = getSerializedPasswordResetTokenCreatedAt(
+      issuedAt,
+      latestExistingToken?.createdAt
+    );
+    const expiresAt = new Date(tokenCreatedAt.getTime() + args.ttlMinutes * 60_000);
+    const storedPayload: StoredNotificationPayload = {
+      title: "Passwort zuruecksetzen",
+      message: "Du kannst ueber den folgenden Link ein neues Passwort vergeben.",
+      severity: "INFO",
+      expiresAt: expiresAt.toISOString(),
+      entity: {
+        type: "USER",
+        id: args.user.id,
+        label: getDisplayName(args.user) || args.user.email
+      }
+    };
+
     const token = await tx.passwordResetToken.create({
       data: {
         userId: args.user.id,
         tokenHash,
-        expiresAt
+        expiresAt,
+        createdAt: tokenCreatedAt
       }
     });
 
@@ -893,11 +923,11 @@ export async function createAndDispatchPasswordResetNotification(
         subject,
         payloadJson: toJsonInput(storedPayload),
         status: "CLAIMED",
-        scheduledFor: now,
-        claimedAt: now,
+        scheduledFor: tokenCreatedAt,
+        claimedAt: tokenCreatedAt,
         claimToken,
         attemptCount: 1,
-        lastAttemptAt: now,
+        lastAttemptAt: tokenCreatedAt,
         idempotencyKey: `password-reset:${token.id}`,
         recipientUser: {
           connect: {
@@ -910,7 +940,9 @@ export async function createAndDispatchPasswordResetNotification(
     return {
       entry,
       tokenId: token.id,
-      tokenCreatedAt: token.createdAt
+      tokenCreatedAt: token.createdAt,
+      expiresAt,
+      storedPayload
     };
   });
 
@@ -920,7 +952,7 @@ export async function createAndDispatchPasswordResetNotification(
   try {
     const provider = await postToPowerAutomate(
       config,
-      buildPowerAutomatePayload(config, entry, storedPayload, {
+      buildPowerAutomatePayload(config, entry, created.storedPayload, {
         linkOverride: resetLink
       })
     );
@@ -967,7 +999,7 @@ export async function createAndDispatchPasswordResetNotification(
 
     return {
       notificationId: entry.id,
-      expiresAt,
+      expiresAt: created.expiresAt,
       deliveryStatus: "SENT",
       resetLink: config.nodeEnv === "production" && !config.notificationDryRun ? undefined : resetLink
     };
@@ -1015,7 +1047,7 @@ export async function createAndDispatchPasswordResetNotification(
 
     return {
       notificationId: entry.id,
-      expiresAt,
+      expiresAt: created.expiresAt,
       deliveryStatus: "FAILED",
       deliveryError: normalizedError,
       resetLink: config.nodeEnv === "production" && !config.notificationDryRun ? undefined : resetLink

@@ -14,6 +14,10 @@
   - `cd apps/api && npm test` ist gruen.
   - `cd apps/api && npm run build` ist gruen.
   - `cd apps/web && npm run build` ist gruen.
+- Nachpflege fuer den Remediation-Lauf 24.04.2026:
+  - Produktions-Linkbasen fuer Reset- und Notification-Links werden fail-closed in `loadConfig()` validiert.
+  - Unter `NODE_ENV=production` muessen `NOTIFICATION_BASE_URL` oder `APP_ORIGIN` explizit gesetzt sein und als absolute non-loopback-HTTPS-URL gueltig sein.
+  - `localhost`, `127.0.0.1` und `::1` bleiben nur fuer lokale Entwicklung bzw. lokalen Compose-Betrieb erlaubt.
 - Konsequenz fuer diesen Plan:
   - Phase E1 ist in dieser Repo-Lage kein Greenfield-Bau mehr, sondern Abschluss-, Haertungs- und Rollout-Plan fuer bereits vorhandene Serverbausteine.
   - Phase E2 bleibt der geplante Ausbau fuer Admin-/Systemsicht, Komfort und zusaetzliche Ereignisse.
@@ -270,7 +274,7 @@
   - `NOTIFICATION_BASE_URL`
 - Umgang mit falscher/missing Base URL:
   - fehlende oder ungueltige Base URL ist ein terminaler Konfigurationsfehler.
-  - in Produktion nur HTTPS, ausser fuer localhost.
+  - in Produktion nur absolute HTTPS-URLs; `localhost`, `127.0.0.1` und `::1` sind dort nicht erlaubt.
 - Dry-Run:
   - Links werden auch im Dry-Run erzeugt.
 - `/compliance`-Prefix:

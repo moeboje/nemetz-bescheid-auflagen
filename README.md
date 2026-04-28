@@ -24,7 +24,7 @@ npm run seed
 npm run dev
 ```
 
-## Docker Compose (same-origin via Nginx)
+## Docker Compose (local HTTP dev stack via Nginx)
 
 ```bash
 cp .env.example .env
@@ -33,6 +33,10 @@ docker compose up --build
 ```
 
 Danach ist das Portal auf `http://localhost:8080` erreichbar.
+
+Dieser Compose-Stack ist bewusst die lokale HTTP-Entwicklungsumgebung ohne TLS. Deshalb laeuft er mit `NODE_ENV=development` und `COOKIE_SECURE=false`, damit der Login auf `http://localhost:8080` funktioniert.
+
+Produktion bleibt davon getrennt: dort sind `NODE_ENV=production`, ein starkes `SESSION_SECRET`, HTTPS und `COOKIE_SECURE=true` zwingend.
 
 - Web: `/`
 - API: `/api/*`

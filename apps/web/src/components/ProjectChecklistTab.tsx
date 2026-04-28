@@ -10,7 +10,9 @@ import type {
   ChecklistItemStatus,
   ProjectChecklist
 } from "../data/projectChecklists";
+import { getUserDisplayName } from "../data/users";
 import { t } from "../i18n";
+import { useAuth } from "../state/AuthStore";
 import { useAuditLog } from "../state/AuditLogStore";
 import {
   checklistHasEmptyTitles,
@@ -59,6 +61,7 @@ export default function ProjectChecklistTab({
   canEdit,
   projectTitle
 }: ProjectChecklistTabProps) {
+  const { user } = useAuth();
   const { logEvent } = useAuditLog();
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
@@ -69,6 +72,15 @@ export default function ProjectChecklistTab({
   const [collapsedSectionIds, setCollapsedSectionIds] = React.useState<string[]>([]);
   const [hideDoneItems, setHideDoneItems] = React.useState(false);
   const statusOptions = React.useMemo(() => getChecklistItemStatusOptions(), []);
+  const checklistActorLabel = React.useMemo(() => {
+    const displayName = getUserDisplayName(user).trim();
+    if (displayName) {
+      return displayName;
+    }
+
+    const email = user?.email?.trim() ?? "";
+    return email || "Aktueller Benutzer";
+  }, [user]);
 
   const loadChecklist = React.useCallback(async () => {
     setLoading(true);
@@ -140,7 +152,7 @@ export default function ProjectChecklistTab({
       setServerChecklist(cloned);
       setDraftChecklist(cloned);
       logEvent({
-        actorLabel: "Demo User",
+        actorLabel: checklistActorLabel,
         entityType: "PROJECT",
         entityId: projectId,
         action: "UPDATED",
@@ -167,7 +179,7 @@ export default function ProjectChecklistTab({
       setServerChecklist(cloned);
       setDraftChecklist(cloned);
       logEvent({
-        actorLabel: "Demo User",
+        actorLabel: checklistActorLabel,
         entityType: "PROJECT",
         entityId: projectId,
         action: "UPDATED",
@@ -198,7 +210,7 @@ export default function ProjectChecklistTab({
       setDraftChecklist(null);
       setCollapsedSectionIds([]);
       logEvent({
-        actorLabel: "Demo User",
+        actorLabel: checklistActorLabel,
         entityType: "PROJECT",
         entityId: projectId,
         action: "UPDATED",

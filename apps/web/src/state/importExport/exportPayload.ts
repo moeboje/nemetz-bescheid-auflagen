@@ -28,11 +28,21 @@ type ServerDomainReaderResult = {
   taskState: Awaited<ReturnType<typeof readTaskStateForExport>>;
 };
 
+type StorageExportPayloadOverrides = Pick<ExportDataBundle, "auditLog" | "notifications">;
+
 export const GENERIC_EXPORT_LIMITATION_META: NonNullable<ExportPayload["meta"]> = {
   warnings: [
-    "Users are server-managed and are intentionally omitted from generic exports because generic imports do not restore users."
+    "This JSON export is only a partial recovery artifact. It does not provide a full disaster-recovery backup of all server-managed administration and security data.",
+    "Users, roles, external organizations, security settings, notification settings and notification outbox history are server-managed and are intentionally omitted from generic exports because generic imports do not restore them."
   ],
-  omittedDomains: ["users"]
+  omittedDomains: [
+    "users",
+    "roles",
+    "externalOrgs",
+    "securitySettings",
+    "notificationSettings",
+    "notificationOutbox"
+  ]
 };
 
 export class RecoveryExportError extends Error {
@@ -154,7 +164,9 @@ async function readServerDomainsForExport(): Promise<ServerDomainReaderResult> {
   ) as ServerDomainReaderResult;
 }
 
-export async function buildStorageExportPayload() {
+export async function buildStorageExportPayload(
+  overrides: StorageExportPayloadOverrides = {}
+) {
   const serverDomains = await readServerDomainsForExport();
   const payload = buildExportPayload({
     scopes: serverDomains.scopes,
@@ -165,8 +177,8 @@ export async function buildStorageExportPayload() {
     obligations: serverDomains.obligations,
     deadlines: serverDomains.deadlines,
     taskState: serverDomains.taskState,
-    auditLog: readStorageValue(STORAGE_KEYS.auditLog, []),
-    notifications: readStorageValue(STORAGE_KEYS.notifications, [])
+    auditLog: overrides.auditLog ?? readStorageValue(STORAGE_KEYS.auditLog, []),
+    notifications: overrides.notifications ?? readStorageValue(STORAGE_KEYS.notifications, [])
   }, {
     meta: GENERIC_EXPORT_LIMITATION_META
   });

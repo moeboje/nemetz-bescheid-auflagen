@@ -15,6 +15,7 @@ import { createProjectChecklistsRouter } from "./routes/projectChecklists.js";
 import { createProjectsRouter } from "./routes/projects.js";
 import { createScopesRouter } from "./routes/scopes.js";
 import { createTaskStateRouter } from "./routes/taskState.js";
+import { createLegacyRecoveryGuard } from "./legacyRecovery.js";
 import {
   createRateLimiter,
   decryptString,
@@ -1563,6 +1564,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   app.use(csrfProtectionMiddleware);
 
   const router = express.Router();
+  router.use(createLegacyRecoveryGuard(prisma, config));
   router.use(createAuthoritiesRouter(prisma));
   router.use(createDeadlinesRouter(prisma));
   router.use(createLegalDocsRouter(prisma));

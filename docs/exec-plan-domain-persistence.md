@@ -368,6 +368,38 @@
 - keine Aenderungen an PowerAutomate, E-Mail-Templates oder der Admin-UI ausser der bereits serverseitig korrigierten ATTENTION-Semantik.
 - keine Prisma-Schema- oder Persistenzaenderung ausserhalb der bestehenden Notification-Admin-Logik und ihrer Tests.
 
+## 2t. Remediation-Lauf 2026-04-23 fuer aktuelle Review-Blocker und Rest-Risiken
+- Dies ist keine neue Persistenzphase und keine neue Feature-Phase.
+- Ziel dieses Laufs ist ausschliesslich die minimal-invasive Behebung aktueller Review-Findings vor einem erneuten Release-Review.
+- Zulaessiger Umfang:
+- Produktionsruntime fail-closed gegen fehlendes oder Platzhalter-`SESSION_SECRET` sowie gegen `COOKIE_SECURE=false` unter `NODE_ENV=production` absichern; Compose- und Beispielkonfiguration daran angleichen.
+- `migrationBootstrap` auf das aktive `Project.submissionType`-Modell ausrichten; obsolete `SubmissionProfile`-/`ProjectSubmissionProfileAssignment`-Objekte duerfen fuer aktuelle no-history-Baselines nicht mehr Voraussetzung sein.
+- nicht-atomare, destruktive Multi-Domain-Aktionen in der Admin-Datenverwaltung (`Import`, `Reset`, `Demo-Replace`) bis zu einem serverseitig orchestrierten Recovery-Pfad fail-closed sperren statt weiter als sicherer Gesamt-Recovery-Mechanismus zu erscheinen.
+- generischen Export und Recovery-Kommunikation ehrlich als Teil-Export mit begrenztem Scope dokumentieren; kein vollstaendiges Restore/Disaster-Recovery suggerieren.
+- Web-Doku (`apps/web/README.md`, `apps/web/docs/DATA_CONTRACT.md`) auf den realen serverseitigen Betriebsmodus aktualisieren.
+- Passwort-Reset-Token pro Benutzer so serialisieren, dass keine gleichzeitigen aktiven Tokens mit identischem `createdAt` als Zeitanker entstehen.
+- lokale Projektchecklisten-Historie mit dem echten eingeloggten Benutzer statt `Demo User` beschriften.
+- Nicht-Ziele:
+- keine neue Import-/Restore-Architektur.
+- keine Azure-Deploy-Arbeit.
+- keine neue Snapshot- oder `localStorage`-Source-of-Truth fuer migrierte Domänen.
+- keine neuen Dependencies und keine UX-Neugestaltung ausser klaren Sicherheits-/Scope-Hinweisen und fail-closed Sperren.
+
+## 2u. Remediation-Lauf 2026-04-24 fuer die zwei verbleibenden P1-Rollout-Blocker
+- Dies ist keine neue Persistenzphase, keine neue Feature-Phase und keine Azure-Arbeit.
+- Ziel dieses Laufs ist ausschliesslich die minimal-invasive Behebung der zwei verbleibenden P1-Findings aus dem finalen Gesamt-Review.
+- Zulaessiger Umfang:
+- Produktions-Linkbasen fuer Reset-, Notification- und sonstige Portal-Links fail-closed zentral in `loadConfig()` haerten.
+- `NOTIFICATION_BASE_URL` oder `APP_ORIGIN` muessen unter `NODE_ENV=production` explizit gesetzt und als absolute non-loopback-HTTPS-URL gueltig sein.
+- lokale Entwicklung und die dokumentierte lokale Compose-HTTP-Umgebung mit `localhost` bleiben funktionsfaehig.
+- serverseitige Legacy-Recovery-/Snapshot-/Bulk-Replace-Endpunkte fuer bereits migrierte Domänen standardmaessig fail-closed blockieren.
+- Blockierung gilt fuer `scopes`, `authorities`, `projects`, `projectChecklists`, `legalDocs`, `obligations`, `deadlines` und `taskState`; normale Fach-CRUDs und ungefaehrliche Wartungsaktionen bleiben unberuehrt.
+- Freischaltung solcher Legacy-Endpunkte nur noch ueber ein explizites, standardmaessig deaktiviertes Runtime-Flag `ENABLE_LEGACY_RECOVERY_ENDPOINTS=true`.
+- Nicht-Ziele:
+- keine neuen Recovery-Workflows.
+- keine Rueckkehr zu Snapshot oder `localStorage` als Source of Truth.
+- keine PowerAutomate-Flow-Aenderungen, keine neuen Dependencies und keine UX-Neugestaltung ausser bestehender Sperrkommunikation.
+
 ## 3. Ist-Zustand
 - Browser-persistiert fachlich aktiv ist aktuell nur noch `taskState`; zusätzliche UI-/Recovery-Daten liegen weiterhin via `apps/web/src/state/persistence.ts` lokal.
 - `ScopesStore`, `AuthoritiesStore`, `ProjectsStore`, `LegalDocsStore`, `ObligationsStore` und `DeadlinesStore` sind bereits API-backed und löschen ihre alten Domänen-Storage-Keys aktiv.
