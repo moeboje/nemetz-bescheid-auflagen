@@ -20,8 +20,11 @@ export type AuthorizationPermissions = {
   canEditMasterData: boolean;
   canCreateProject: boolean;
   canEditProject: boolean;
+  canCreateLegalDocs: boolean;
   canEditLegalDocs: boolean;
+  canCreateObligations: boolean;
   canEditObligations: boolean;
+  canCreateDeadlines: boolean;
   canEditDeadlines: boolean;
   canCompleteTasks: boolean;
   canViewProjects: boolean;
@@ -75,6 +78,8 @@ export function AuthorizationProvider({ children }: { children: React.ReactNode 
     const canViewExternalOrgsAdmin =
       hasAdminAccess && (hasPermission("externalOrgs.view") || hasPermission("externalOrgs.manage"));
     const canManageExternalOrgsAdmin = hasAdminAccess && hasPermission("externalOrgs.manage");
+    const canViewTasks = !isExternal && hasPermission("tasks.view");
+    const canCompleteTasks = !isExternal && (hasPermission("tasks.complete") || hasPermission("tasks.edit"));
 
     return {
       actor: {
@@ -106,15 +111,18 @@ export function AuthorizationProvider({ children }: { children: React.ReactNode 
         canEditMasterData: hasPermission("masterData.manage"),
         canCreateProject: hasPermission("projects.create"),
         canEditProject: hasPermission("projects.edit"),
+        canCreateLegalDocs: hasPermission("legalDocs.create"),
         canEditLegalDocs: hasPermission("legalDocs.edit"),
+        canCreateObligations: hasPermission("obligations.create"),
         canEditObligations: hasPermission("obligations.edit"),
+        canCreateDeadlines: hasPermission("deadlines.create"),
         canEditDeadlines: hasPermission("deadlines.edit"),
-        canCompleteTasks: hasPermission("tasks.complete") || hasPermission("tasks.edit"),
+        canCompleteTasks,
         canViewProjects: hasPermission("projects.view"),
         canViewLegalDocs: hasPermission("legalDocs.view"),
         canViewObligations: hasPermission("obligations.view"),
         canViewDeadlines: hasPermission("deadlines.view"),
-        canViewTasks: hasPermission("tasks.view"),
+        canViewTasks,
         canViewScopes: hasPermission("masterData.view") || hasPermission("masterData.manage"),
         canViewReports: hasPermission("reports.view")
       },

@@ -26,6 +26,9 @@ export type ProjectInternalParticipant = {
 export type ExternalParticipant = {
   id: string;
   type: ExternalParticipantType;
+  externalOrgId?: string;
+  externalUserId?: string;
+  accessStatus?: "LINKED" | "INVITE_SENT" | "RESET_REQUIRED" | "LEGACY_ONLY";
   organization?: string;
   name: string;
   email?: string;

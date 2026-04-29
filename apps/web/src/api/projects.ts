@@ -25,6 +25,8 @@ type ProjectInput = {
   isArchived?: boolean;
 };
 
+export type ProjectExternalParticipantInput = Project["externalParticipants"][number];
+
 export async function listProjects() {
   return apiRequest<Project[]>("/projects");
 }

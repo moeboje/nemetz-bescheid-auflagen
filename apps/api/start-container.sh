@@ -5,6 +5,8 @@ set -eu
 LC_ALL=C
 export LC_ALL
 
+node scripts/assert-prisma-client.mjs
+
 run_with_retries() {
   attempt=0
   max_attempts="$1"

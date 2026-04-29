@@ -23,14 +23,20 @@ type ObligationCreateInput = Omit<
   "id" | "createdAt" | "updatedAt" | "isArchived" | "archivedAt"
 > & {
   id?: string;
+  projectId?: string;
 };
 
 export type ObligationsContextValue = {
   obligations: Obligation[];
+  mutationError?: string;
+  clearMutationError: () => void;
   addObligation: (
     input: ObligationCreateInput
   ) => Promise<Obligation | null>;
-  updateObligation: (id: string, input: Partial<Obligation>) => Promise<Obligation | null>;
+  updateObligation: (
+    id: string,
+    input: Partial<Obligation> & { projectId?: string }
+  ) => Promise<Obligation | null>;
   archiveObligation: (id: string) => Promise<Obligation | null>;
   restoreObligation: (id: string) => Promise<Obligation | null>;
   getObligationsForLegalDoc: (legalDocId: string) => Obligation[];
@@ -126,6 +132,9 @@ function normalizeObligation(value: Partial<Obligation>, index: number): Obligat
     sourceSuggestionId: value.sourceSuggestionId ?? undefined,
     sourceRunId: value.sourceRunId ?? undefined,
     criticality: value.criticality ?? undefined,
+    recurrenceEndDate: value.recurrenceEndDate ?? undefined,
+    externalOrgId: value.externalOrgId ?? undefined,
+    externalUserId: value.externalUserId ?? undefined,
     emailReminderEnabled: normalizedReminder.emailReminderEnabled,
     emailReminderDaysBefore: normalizedReminder.emailReminderDaysBefore,
     evidenceRequirements: normalizeEvidenceRequirements(value.evidenceRequirements),
@@ -156,10 +165,22 @@ function mergeObligation(existing: Obligation, incoming: Obligation) {
   };
 }
 
+function getMutationErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return "request_failed";
+}
+
 export function ObligationsProvider({ children }: { children: React.ReactNode }) {
   const { user: authUser } = useAuth();
   const { logEvent } = useAuditLog();
   const [obligations, setObligations] = useState<Obligation[]>([]);
+  const [mutationError, setMutationError] = useState<string | undefined>();
+
+  const clearMutationError = useCallback(() => {
+    setMutationError(undefined);
+  }, []);
 
   const reloadObligations = useCallback(async () => {
     if (!authUser || authUser.type === "EXTERNAL") {
@@ -191,21 +212,26 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
     async (
       input: ObligationCreateInput
     ) => {
+      setMutationError(undefined);
       try {
         const normalized = normalizeObligations([
           await apiCreateObligation({
             id: input.id,
             legalDocId: input.legalDocId,
+            projectId: input.projectId,
             title: input.title,
             infoTextLong: input.infoTextLong ?? "",
             level: input.level,
             criticality: input.criticality,
             scheduleType: input.scheduleType,
             firstDueDate: input.firstDueDate,
+            recurrenceEndDate: input.recurrenceEndDate,
             intervalUnit: input.intervalUnit,
             intervalValue: input.intervalValue,
             ownerUserId: input.ownerUserId,
             deputyUserId: input.deputyUserId,
+            externalOrgId: input.externalOrgId,
+            externalUserId: input.externalUserId,
             origin: input.origin ?? "MANUAL",
             sourceSuggestionId: input.sourceSuggestionId,
             sourceRunId: input.sourceRunId,
@@ -229,7 +255,8 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
           summary: normalized.title
         });
         return normalized;
-      } catch {
+      } catch (error) {
+        setMutationError(getMutationErrorMessage(error));
         return null;
       }
     },
@@ -237,15 +264,17 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
   );
 
   const updateObligation = useCallback(
-    async (id: string, input: Partial<Obligation>) => {
+    async (id: string, input: Partial<Obligation> & { projectId?: string }) => {
       const existing = obligations.find((obligation) => obligation.id === id);
       if (!existing) {
         return null;
       }
 
+      setMutationError(undefined);
       try {
         const updatedObligation = normalizeObligations([
           await apiUpdateObligation(id, {
+            projectId: input.projectId,
             legalDocId:
               input.legalDocId !== undefined ? input.legalDocId : existing.legalDocId,
             title: input.title !== undefined ? input.title : existing.title,
@@ -258,6 +287,10 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
               input.scheduleType !== undefined ? input.scheduleType : existing.scheduleType,
             firstDueDate:
               input.firstDueDate !== undefined ? input.firstDueDate : existing.firstDueDate,
+            recurrenceEndDate:
+              input.recurrenceEndDate !== undefined
+                ? input.recurrenceEndDate
+                : existing.recurrenceEndDate,
             intervalUnit:
               input.intervalUnit !== undefined ? input.intervalUnit : existing.intervalUnit,
             intervalValue:
@@ -266,6 +299,10 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
               input.ownerUserId !== undefined ? input.ownerUserId : existing.ownerUserId,
             deputyUserId:
               input.deputyUserId !== undefined ? input.deputyUserId : existing.deputyUserId,
+            externalOrgId:
+              input.externalOrgId !== undefined ? input.externalOrgId : existing.externalOrgId,
+            externalUserId:
+              input.externalUserId !== undefined ? input.externalUserId : existing.externalUserId,
             origin: input.origin !== undefined ? input.origin : existing.origin,
             sourceSuggestionId:
               input.sourceSuggestionId !== undefined
@@ -309,7 +346,8 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
           summary: existing.title
         });
         return updatedObligation;
-      } catch {
+      } catch (error) {
+        setMutationError(getMutationErrorMessage(error));
         return null;
       }
     },
@@ -343,7 +381,8 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
           summary: existing.title
         });
         return updatedObligation;
-      } catch {
+      } catch (error) {
+        setMutationError(getMutationErrorMessage(error));
         return null;
       }
     },
@@ -377,7 +416,8 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
           summary: existing.title
         });
         return updatedObligation;
-      } catch {
+      } catch (error) {
+        setMutationError(getMutationErrorMessage(error));
         return null;
       }
     },
@@ -412,6 +452,8 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
   const value = useMemo(
     () => ({
       obligations,
+      mutationError,
+      clearMutationError,
       addObligation,
       updateObligation,
       archiveObligation,
@@ -426,6 +468,8 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
       archiveObligation,
       getObligationsForLegalDoc,
       obligations,
+      mutationError,
+      clearMutationError,
       reloadObligations,
       replaceObligations,
       resetObligations,

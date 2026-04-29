@@ -32,6 +32,20 @@ function buildUserOptionLabel(input: {
   return base;
 }
 
+function matchesTypeFilter(input: {
+  isExternal: boolean;
+  includeExternal: boolean;
+  includeInternal: boolean;
+}) {
+  if (input.isExternal && !input.includeExternal) {
+    return false;
+  }
+  if (!input.isExternal && !input.includeInternal) {
+    return false;
+  }
+  return true;
+}
+
 export default function UserMultiSelect({
   value,
   onChange,
@@ -55,7 +69,14 @@ export default function UserMultiSelect({
           return;
         }
         const selected = getUser(userId);
-        if (selected) {
+        if (
+          selected &&
+          matchesTypeFilter({
+            isExternal: selected.isExternal || selected.type === "EXTERNAL",
+            includeExternal,
+            includeInternal
+          })
+        ) {
           byId.set(selected.id, selected);
         }
       });

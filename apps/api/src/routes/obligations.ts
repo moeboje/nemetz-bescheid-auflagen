@@ -26,10 +26,13 @@ type ObligationDto = {
   criticality?: "LOW" | "MEDIUM" | "HIGH";
   scheduleType: "ONCE" | "RECURRING" | "ONCE_THEN_RECURRING";
   firstDueDate?: string;
+  recurrenceEndDate?: string;
   intervalUnit?: "DAY" | "WEEK" | "MONTH" | "QUARTER" | "YEAR";
   intervalValue?: number;
   ownerUserId?: string;
   deputyUserId?: string;
+  externalOrgId?: string;
+  externalUserId?: string;
   origin?: "MANUAL" | "AI_ACCEPTED";
   sourceSuggestionId?: string;
   sourceRunId?: string;
@@ -44,12 +47,18 @@ type ObligationDto = {
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
+type ObligationWriteDto = ObligationDto & {
+  projectId?: string;
+};
+
 type ObligationRelationValidationResult =
   | {
       ok: true;
       legalDocId: string;
       ownerUserId?: string;
       deputyUserId?: string;
+      externalOrgId?: string;
+      externalUserId?: string;
     }
   | {
       ok: false;
@@ -72,6 +81,53 @@ function toOptionalTrimmedString(value: unknown) {
 
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function parseIsoDateOnly(value: string | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed.toISOString().slice(0, 10) === value ? parsed : null;
+}
+
+function normalizeRecurrenceEndDate(input: {
+  scheduleType: ObligationDto["scheduleType"];
+  firstDueDate?: string;
+  recurrenceEndDate?: string;
+}):
+  | { ok: true; recurrenceEndDate?: string }
+  | { ok: false; status: number; message: string } {
+  const recurrenceEndDate = toOptionalTrimmedString(input.recurrenceEndDate);
+  if (!recurrenceEndDate) {
+    return { ok: true };
+  }
+
+  if (input.scheduleType === "ONCE") {
+    return { ok: true };
+  }
+
+  const parsedEndDate = parseIsoDateOnly(recurrenceEndDate);
+  if (!parsedEndDate) {
+    return { ok: false, status: 400, message: "recurrenceEndDate must be a valid YYYY-MM-DD date." };
+  }
+
+  const firstDueDate = toOptionalTrimmedString(input.firstDueDate);
+  const parsedFirstDueDate = parseIsoDateOnly(firstDueDate);
+  if (parsedFirstDueDate && recurrenceEndDate < firstDueDate!) {
+    return { ok: false, status: 400, message: "recurrenceEndDate must not be before firstDueDate." };
+  }
+
+  return { ok: true, recurrenceEndDate };
 }
 
 function toPositiveInteger(value: unknown) {
@@ -214,10 +270,13 @@ function normalizeObligationDto(value: unknown, index: number): ObligationDto | 
     criticality: normalizeCriticality(row.criticality),
     scheduleType: normalizeScheduleType(row.scheduleType),
     firstDueDate: toOptionalTrimmedString(row.firstDueDate),
+    recurrenceEndDate: toOptionalTrimmedString(row.recurrenceEndDate),
     intervalUnit: normalizeIntervalUnit(row.intervalUnit),
     intervalValue: toPositiveInteger(row.intervalValue),
     ownerUserId: toOptionalTrimmedString(row.ownerUserId),
     deputyUserId: toOptionalTrimmedString(row.deputyUserId),
+    externalOrgId: toOptionalTrimmedString(row.externalOrgId),
+    externalUserId: toOptionalTrimmedString(row.externalUserId),
     origin: normalizeOrigin(row.origin),
     sourceSuggestionId: toOptionalTrimmedString(row.sourceSuggestionId),
     sourceRunId: toOptionalTrimmedString(row.sourceRunId),
@@ -262,10 +321,13 @@ function toObligationDto(obligation: DbObligation): ObligationDto {
     criticality: normalizeCriticality(obligation.criticality),
     scheduleType: normalizeScheduleType(obligation.scheduleType),
     firstDueDate: obligation.firstDueDate ?? undefined,
+    recurrenceEndDate: obligation.recurrenceEndDate ?? undefined,
     intervalUnit: normalizeIntervalUnit(obligation.intervalUnit),
     intervalValue: obligation.intervalValue ?? undefined,
     ownerUserId: obligation.ownerUserId ?? undefined,
     deputyUserId: obligation.deputyUserId ?? undefined,
+    externalOrgId: obligation.externalOrgId ?? undefined,
+    externalUserId: obligation.externalUserId ?? undefined,
     origin: normalizeOrigin(obligation.origin),
     sourceSuggestionId: obligation.sourceSuggestionId ?? undefined,
     sourceRunId: obligation.sourceRunId ?? undefined,
@@ -289,10 +351,13 @@ function toObligationCreateInput(input: ObligationDto): Prisma.ObligationUncheck
     criticality: input.criticality ?? null,
     scheduleType: input.scheduleType,
     firstDueDate: input.firstDueDate || null,
+    recurrenceEndDate: input.recurrenceEndDate ?? null,
     intervalUnit: input.intervalUnit ?? null,
     intervalValue: input.intervalValue ?? null,
     ownerUserId: input.ownerUserId ?? null,
     deputyUserId: input.deputyUserId ?? null,
+    externalOrgId: input.externalOrgId ?? null,
+    externalUserId: input.externalUserId ?? null,
     origin: input.origin ?? null,
     sourceSuggestionId: input.sourceSuggestionId ?? null,
     sourceRunId: input.sourceRunId ?? null,
@@ -315,10 +380,13 @@ function toObligationUpdateInput(input: ObligationDto): Prisma.ObligationUncheck
     criticality: input.criticality ?? null,
     scheduleType: input.scheduleType,
     firstDueDate: input.firstDueDate || null,
+    recurrenceEndDate: input.recurrenceEndDate ?? null,
     intervalUnit: input.intervalUnit ?? null,
     intervalValue: input.intervalValue ?? null,
     ownerUserId: input.ownerUserId ?? null,
     deputyUserId: input.deputyUserId ?? null,
+    externalOrgId: input.externalOrgId ?? null,
+    externalUserId: input.externalUserId ?? null,
     origin: input.origin ?? null,
     sourceSuggestionId: input.sourceSuggestionId ?? null,
     sourceRunId: input.sourceRunId ?? null,
@@ -422,8 +490,11 @@ async function validateObligationRelations(
   prisma: PrismaClient,
   input: {
     legalDocId: string;
+    projectId?: string;
     ownerUserId?: string;
     deputyUserId?: string;
+    externalOrgId?: string;
+    externalUserId?: string;
   }
 ): Promise<ObligationRelationValidationResult> {
   const legalDocId = ensureStringField(input.legalDocId);
@@ -436,15 +507,23 @@ async function validateObligationRelations(
       id: legalDocId
     },
     select: {
-      id: true
+      id: true,
+      projectId: true
     }
   });
   if (!legalDoc) {
     return { ok: false, status: 404, message: "Legal document not found." };
   }
 
+  const projectId = toOptionalTrimmedString(input.projectId);
+  if (projectId && legalDoc.projectId !== projectId) {
+    return { ok: false, status: 400, message: "legalDocId does not belong to projectId." };
+  }
+
   const ownerUserId = toOptionalTrimmedString(input.ownerUserId);
   const deputyUserId = toOptionalTrimmedString(input.deputyUserId);
+  let externalOrgId = toOptionalTrimmedString(input.externalOrgId);
+  const externalUserId = toOptionalTrimmedString(input.externalUserId);
 
   if (ownerUserId) {
     const owner = await prisma.user.findUnique({
@@ -452,12 +531,17 @@ async function validateObligationRelations(
         id: ownerUserId
       },
       select: {
-        id: true
+        id: true,
+        type: true,
+        isArchived: true
       }
     });
 
     if (!owner) {
       return { ok: false, status: 404, message: "Owner user not found." };
+    }
+    if (owner.isArchived || String(owner.type).toUpperCase() === "EXTERNAL") {
+      return { ok: false, status: 400, message: "Owner user must be an active internal user." };
     }
   }
 
@@ -467,31 +551,97 @@ async function validateObligationRelations(
         id: deputyUserId
       },
       select: {
-        id: true
+        id: true,
+        type: true,
+        isArchived: true
       }
     });
 
     if (!deputy) {
       return { ok: false, status: 404, message: "Deputy user not found." };
     }
+    if (deputy.isArchived || String(deputy.type).toUpperCase() === "EXTERNAL") {
+      return { ok: false, status: 400, message: "Deputy user must be an active internal user." };
+    }
+  }
+
+  let externalUser:
+    | {
+        id: string;
+        type: string;
+        isArchived: boolean;
+        externalOrgId: string | null;
+      }
+    | null = null;
+
+  if (externalUserId) {
+    externalUser = await prisma.user.findUnique({
+      where: {
+        id: externalUserId
+      },
+      select: {
+        id: true,
+        type: true,
+        isArchived: true,
+        externalOrgId: true
+      }
+    });
+
+    if (!externalUser || externalUser.isArchived) {
+      return { ok: false, status: 400, message: "External user must be active." };
+    }
+    if (String(externalUser.type).toUpperCase() !== "EXTERNAL") {
+      return { ok: false, status: 400, message: "externalUserId must reference an external user." };
+    }
+    if (!externalOrgId) {
+      if (!externalUser.externalOrgId) {
+        return { ok: false, status: 400, message: "externalOrgId is required for the selected external user." };
+      }
+      externalOrgId = externalUser.externalOrgId;
+    }
+  }
+
+  if (externalOrgId) {
+    const externalOrg = await prisma.externalOrganization.findUnique({
+      where: {
+        id: externalOrgId
+      },
+      select: {
+        id: true,
+        isArchived: true
+      }
+    });
+
+    if (!externalOrg || externalOrg.isArchived) {
+      return { ok: false, status: 400, message: "External organization must be active." };
+    }
+  }
+
+  if (externalUser && externalOrgId && externalUser.externalOrgId !== externalOrgId) {
+    return { ok: false, status: 400, message: "externalUserId does not belong to externalOrgId." };
   }
 
   return {
     ok: true,
     legalDocId,
     ownerUserId,
-    deputyUserId
+    deputyUserId,
+    externalOrgId,
+    externalUserId
   };
 }
 
 async function normalizeObligationForWrite(
   prisma: PrismaClient,
-  input: ObligationDto
+  input: ObligationWriteDto
 ) {
   const relationValidation = await validateObligationRelations(prisma, {
     legalDocId: input.legalDocId,
+    projectId: input.projectId,
     ownerUserId: input.ownerUserId,
-    deputyUserId: input.deputyUserId
+    deputyUserId: input.deputyUserId,
+    externalOrgId: input.externalOrgId,
+    externalUserId: input.externalUserId
   });
 
   if (!relationValidation.ok) {
@@ -502,6 +652,17 @@ async function normalizeObligationForWrite(
     emailReminderEnabled: Boolean(input.emailReminderEnabled),
     emailReminderDaysBefore: input.emailReminderDaysBefore
   });
+  const scheduleType = normalizeScheduleType(input.scheduleType);
+  const firstDueDate = toOptionalTrimmedString(input.firstDueDate);
+  const recurrenceValidation = normalizeRecurrenceEndDate({
+    scheduleType,
+    firstDueDate,
+    recurrenceEndDate: input.recurrenceEndDate
+  });
+
+  if (!recurrenceValidation.ok) {
+    return recurrenceValidation;
+  }
 
   return {
     ok: true as const,
@@ -512,12 +673,15 @@ async function normalizeObligationForWrite(
       infoTextLong: input.infoTextLong ?? "",
       level: normalizeLevel(input.level),
       criticality: normalizeCriticality(input.criticality),
-      scheduleType: normalizeScheduleType(input.scheduleType),
-      firstDueDate: toOptionalTrimmedString(input.firstDueDate),
+      scheduleType,
+      firstDueDate,
+      recurrenceEndDate: recurrenceValidation.recurrenceEndDate,
       intervalUnit: normalizeIntervalUnit(input.intervalUnit),
       intervalValue: toPositiveInteger(input.intervalValue),
       ownerUserId: relationValidation.ownerUserId,
       deputyUserId: relationValidation.deputyUserId,
+      externalOrgId: relationValidation.externalOrgId,
+      externalUserId: relationValidation.externalUserId,
       origin: normalizeOrigin(input.origin),
       sourceSuggestionId: toOptionalTrimmedString(input.sourceSuggestionId),
       sourceRunId: toOptionalTrimmedString(input.sourceRunId),
@@ -600,16 +764,20 @@ export function createObligationsRouter(prisma: PrismaClient) {
       const normalized = await normalizeObligationForWrite(prisma, {
         id: obligationId,
         legalDocId,
+        projectId: toOptionalTrimmedString(req.body?.projectId),
         title,
         infoTextLong: ensureStringField(req.body?.infoTextLong),
         level: normalizeLevel(req.body?.level),
         criticality: normalizeCriticality(req.body?.criticality),
         scheduleType: normalizeScheduleType(req.body?.scheduleType),
         firstDueDate: ensureStringField(req.body?.firstDueDate),
+        recurrenceEndDate: toOptionalTrimmedString(req.body?.recurrenceEndDate),
         intervalUnit: normalizeIntervalUnit(req.body?.intervalUnit),
         intervalValue: toPositiveInteger(req.body?.intervalValue),
         ownerUserId: toOptionalTrimmedString(req.body?.ownerUserId),
         deputyUserId: toOptionalTrimmedString(req.body?.deputyUserId),
+        externalOrgId: toOptionalTrimmedString(req.body?.externalOrgId),
+        externalUserId: toOptionalTrimmedString(req.body?.externalUserId),
         origin: normalizeOrigin(req.body?.origin) ?? "MANUAL",
         sourceSuggestionId: toOptionalTrimmedString(req.body?.sourceSuggestionId),
         sourceRunId: toOptionalTrimmedString(req.body?.sourceRunId),
@@ -656,8 +824,11 @@ export function createObligationsRouter(prisma: PrismaClient) {
       }
 
       const existing = toObligationDto(existingRecord);
-      const merged: ObligationDto = {
+      const merged: ObligationWriteDto = {
         ...existing,
+        projectId: hasOwn(req.body, "projectId")
+          ? toOptionalTrimmedString(req.body?.projectId)
+          : undefined,
         legalDocId: hasOwn(req.body, "legalDocId")
           ? ensureStringField(req.body?.legalDocId)
           : existing.legalDocId,
@@ -675,6 +846,9 @@ export function createObligationsRouter(prisma: PrismaClient) {
         firstDueDate: hasOwn(req.body, "firstDueDate")
           ? toOptionalTrimmedString(req.body?.firstDueDate)
           : existing.firstDueDate,
+        recurrenceEndDate: hasOwn(req.body, "recurrenceEndDate")
+          ? toOptionalTrimmedString(req.body?.recurrenceEndDate)
+          : existing.recurrenceEndDate,
         intervalUnit: hasOwn(req.body, "intervalUnit")
           ? normalizeIntervalUnit(req.body?.intervalUnit)
           : existing.intervalUnit,
@@ -687,6 +861,12 @@ export function createObligationsRouter(prisma: PrismaClient) {
         deputyUserId: hasOwn(req.body, "deputyUserId")
           ? toOptionalTrimmedString(req.body?.deputyUserId)
           : existing.deputyUserId,
+        externalOrgId: hasOwn(req.body, "externalOrgId")
+          ? toOptionalTrimmedString(req.body?.externalOrgId)
+          : existing.externalOrgId,
+        externalUserId: hasOwn(req.body, "externalUserId")
+          ? toOptionalTrimmedString(req.body?.externalUserId)
+          : existing.externalUserId,
         origin: hasOwn(req.body, "origin")
           ? normalizeOrigin(req.body?.origin)
           : existing.origin,
@@ -757,7 +937,7 @@ export function createObligationsRouter(prisma: PrismaClient) {
         return;
       }
 
-      const updated = existing.isArchived
+      const updatedRecord = existing.isArchived
         ? existing
         : await prisma.obligation.update({
             where: {
@@ -768,6 +948,11 @@ export function createObligationsRouter(prisma: PrismaClient) {
               isArchived: true
             }
           });
+      const updated = existing.isArchived ? existing : await findObligationById(prisma, updatedRecord.id);
+      if (!updated) {
+        res.status(500).json({ ok: false, message: "Obligation could not be archived." });
+        return;
+      }
 
       res.json({
         ok: true,
@@ -793,7 +978,7 @@ export function createObligationsRouter(prisma: PrismaClient) {
         return;
       }
 
-      const updated = !existing.isArchived && !existing.archivedAt
+      const updatedRecord = !existing.isArchived && !existing.archivedAt
         ? existing
         : await prisma.obligation.update({
             where: {
@@ -804,6 +989,14 @@ export function createObligationsRouter(prisma: PrismaClient) {
               isArchived: false
             }
           });
+      const updated =
+        !existing.isArchived && !existing.archivedAt
+          ? existing
+          : await findObligationById(prisma, updatedRecord.id);
+      if (!updated) {
+        res.status(500).json({ ok: false, message: "Obligation could not be restored." });
+        return;
+      }
 
       res.json({
         ok: true,

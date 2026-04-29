@@ -129,6 +129,9 @@ function normalizeExternalParticipant(
   return {
     id: typeof participant.id === "string" && participant.id.trim() ? participant.id : fallbackId,
     type: participant.type ?? "OTHER",
+    externalOrgId: participant.externalOrgId ?? undefined,
+    externalUserId: participant.externalUserId ?? undefined,
+    accessStatus: participant.accessStatus ?? undefined,
     organization: participant.organization ?? "",
     name: participant.name,
     email: participant.email ?? "",

@@ -22,10 +22,13 @@ export type Obligation = {
   level: "MANDATORY" | "RECOMMENDED";
   scheduleType: "ONCE" | "RECURRING" | "ONCE_THEN_RECURRING";
   firstDueDate?: string;
+  recurrenceEndDate?: string;
   intervalUnit?: "DAY" | "WEEK" | "MONTH" | "QUARTER" | "YEAR";
   intervalValue?: number;
   ownerUserId?: string;
   deputyUserId?: string;
+  externalOrgId?: string;
+  externalUserId?: string;
   origin?: "MANUAL" | "AI_ACCEPTED";
   sourceSuggestionId?: string;
   sourceRunId?: string;

@@ -12,6 +12,12 @@ import type { Obligation } from "./ObligationsStore";
 import type { AttachmentMeta } from "../types/attachments";
 import type { Evidence, EvidenceOutcome } from "../types/evidence";
 import { t } from "../i18n";
+import {
+  addDateOnlyDays,
+  addDateOnlyInterval,
+  normalizeDateOnly,
+  todayDateOnlyLocal
+} from "../utils/dateOnly";
 
 export type TaskType = "OBLIGATION" | "DEADLINE";
 export type TaskStatus = "OPEN" | "IN_PROGRESS" | "DONE" | "OVERDUE";
@@ -52,34 +58,19 @@ type TaskSeed = Omit<
 const TASK_HORIZON_DAYS = 365;
 
 function todayStamp() {
-  return new Date().toISOString().slice(0, 10);
+  return todayDateOnlyLocal();
 }
 
-function toDate(value: string) {
-  return new Date(`${value}T00:00:00`);
+function addInterval(
+  dateOnly: string,
+  unit: NonNullable<Obligation["intervalUnit"]>,
+  value: number
+) {
+  return addDateOnlyInterval(dateOnly, unit, value);
 }
 
-function addInterval(date: Date, unit: NonNullable<Obligation["intervalUnit"]>, value: number) {
-  const next = new Date(date);
-  switch (unit) {
-    case "DAY":
-      next.setDate(next.getDate() + value);
-      break;
-    case "WEEK":
-      next.setDate(next.getDate() + value * 7);
-      break;
-    case "QUARTER":
-      next.setMonth(next.getMonth() + value * 3);
-      break;
-    case "YEAR":
-      next.setFullYear(next.getFullYear() + value);
-      break;
-    case "MONTH":
-    default:
-      next.setMonth(next.getMonth() + value);
-      break;
-  }
-  return next;
+function addDays(dateOnly: string, days: number) {
+  return addDateOnlyDays(dateOnly, days);
 }
 
 function buildDeadlineTaskId(deadlineId: string) {
@@ -95,9 +86,8 @@ export function generateTasksFromObligations(
   horizonDays = TASK_HORIZON_DAYS
 ): TaskSeed[] {
   const tasks: TaskSeed[] = [];
-  const today = new Date(`${todayStamp()}T00:00:00`);
-  const horizonEnd = new Date(today);
-  horizonEnd.setDate(horizonEnd.getDate() + horizonDays);
+  const today = todayStamp();
+  const horizonEnd = addDays(today, horizonDays) ?? today;
 
   obligations
     .filter((obligation) => !obligation.isArchived)
@@ -130,25 +120,44 @@ export function generateTasksFromObligations(
         return;
       }
 
-      const startDate = obligation.firstDueDate ? toDate(obligation.firstDueDate) : today;
-      if (Number.isNaN(startDate.getTime())) {
+      const startDate = obligation.firstDueDate
+        ? normalizeDateOnly(obligation.firstDueDate)
+        : today;
+      if (!startDate) {
         return;
       }
+      const recurrenceEndDate = obligation.recurrenceEndDate
+        ? normalizeDateOnly(obligation.recurrenceEndDate)
+        : undefined;
+      if (obligation.recurrenceEndDate && !recurrenceEndDate) {
+        return;
+      }
+      const effectiveHorizonEnd =
+        recurrenceEndDate && recurrenceEndDate < horizonEnd ? recurrenceEndDate : horizonEnd;
 
-      let cursor = new Date(startDate);
+      let cursor = startDate;
 
       if (obligation.scheduleType === "ONCE_THEN_RECURRING") {
         if (!obligation.firstDueDate) {
           return;
         }
-        createSeed(obligation.firstDueDate);
-        cursor = addInterval(startDate, unit, value);
+        if (!recurrenceEndDate || startDate <= recurrenceEndDate) {
+          createSeed(startDate);
+        }
+        const nextCursor = addInterval(startDate, unit, value);
+        if (!nextCursor || nextCursor <= startDate) {
+          return;
+        }
+        cursor = nextCursor;
       }
 
-      while (cursor <= horizonEnd) {
-        const dueDate = cursor.toISOString().slice(0, 10);
-        createSeed(dueDate);
-        cursor = addInterval(cursor, unit, value);
+      while (cursor <= effectiveHorizonEnd) {
+        createSeed(cursor);
+        const nextCursor = addInterval(cursor, unit, value);
+        if (!nextCursor || nextCursor <= cursor) {
+          break;
+        }
+        cursor = nextCursor;
       }
     });
 

@@ -32,52 +32,53 @@ enum ChecklistItemStatus {
 }
 
 model User {
-  id                       String                @id @default(cuid())
-  firstName                String
-  lastName                 String
-  email                    String                @unique
-  phone                    String?
-  role                     String
-  type                     String
-  titleOrPosition          String?
-  department               String?
-  externalCompany          String?
-  externalOrgId            String?
-  notes                    String?
-  isArchived               Boolean               @default(false)
-  passwordHash             String
-  passwordUpdatedAt        DateTime              @default(now())
-  lastPasswordResetAt      DateTime?
-  mustChangePassword       Boolean               @default(false)
-  invitedAt                DateTime?
-  failedLoginCount         Int                   @default(0)
-  lockedUntil              DateTime?
-  lastLoginAt              DateTime?
-  mfaEnabled               Boolean               @default(false)
-  mfaEnforced              Boolean               @default(false)
-  mfaTotpSecretEnc         String?
-  mfaVerifiedAt            DateTime?
-  mfaRecoveryCodesHashJson String?
-  createdAt                DateTime              @default(now())
-  updatedAt                DateTime              @updatedAt
-  sessions                 Session[]
-  resetTokens              PasswordResetToken[]
-  receivedNotifications    NotificationOutbox[]   @relation("NotificationRecipient")
+  id                            String                        @id @default(cuid())
+  firstName                     String
+  lastName                      String
+  email                         String                        @unique
+  phone                         String?
+  role                          String
+  type                          String
+  titleOrPosition               String?
+  department                    String?
+  externalCompany               String?
+  externalOrgId                 String?
+  notes                         String?
+  isArchived                    Boolean                       @default(false)
+  passwordHash                  String
+  passwordUpdatedAt             DateTime                      @default(now())
+  lastPasswordResetAt           DateTime?
+  mustChangePassword            Boolean                       @default(false)
+  invitedAt                     DateTime?
+  failedLoginCount              Int                           @default(0)
+  lockedUntil                   DateTime?
+  lastLoginAt                   DateTime?
+  mfaEnabled                    Boolean                       @default(false)
+  mfaEnforced                   Boolean                       @default(false)
+  mfaTotpSecretEnc              String?
+  mfaVerifiedAt                 DateTime?
+  mfaRecoveryCodesHashJson      String?
+  createdAt                     DateTime                      @default(now())
+  updatedAt                     DateTime                      @updatedAt
+  sessions                      Session[]
+  resetTokens                   PasswordResetToken[]
+  receivedNotifications         NotificationOutbox[]          @relation("NotificationRecipient")
   triggeredNotificationAttempts NotificationDeliveryAttempt[] @relation("NotificationAttemptTriggerUser")
-  mfaPendings              MfaPending[]
-  mfaChallenges            MfaChallenge[]
-  auditLogsAsActor         AuditLog[]            @relation("AuditActor")
-  auditLogsAsTarget        AuditLog[]            @relation("AuditTarget")
-  documentsCreated         Document[]
-  externalOrg              ExternalOrganization? @relation(fields: [externalOrgId], references: [id], onDelete: SetNull)
-  ownedProjects            Project[]             @relation("ProjectOwner")
-  deputyProjects           Project[]             @relation("ProjectDeputy")
-  ownedObligations         Obligation[]          @relation("ObligationOwner")
-  deputyObligations        Obligation[]          @relation("ObligationDeputy")
-  ownedDeadlines           Deadline[]            @relation("DeadlineOwner")
-  deputyDeadlines          Deadline[]            @relation("DeadlineDeputy")
-  completedDeadlines       Deadline[]            @relation("DeadlineCompletedBy")
-  completedTaskStateEntries TaskStateEntry[]       @relation("TaskStateCompletedBy")
+  mfaPendings                   MfaPending[]
+  mfaChallenges                 MfaChallenge[]
+  auditLogsAsActor              AuditLog[]                    @relation("AuditActor")
+  auditLogsAsTarget             AuditLog[]                    @relation("AuditTarget")
+  documentsCreated              Document[]
+  externalOrg                   ExternalOrganization?         @relation(fields: [externalOrgId], references: [id], onDelete: SetNull)
+  ownedProjects                 Project[]                     @relation("ProjectOwner")
+  deputyProjects                Project[]                     @relation("ProjectDeputy")
+  ownedObligations              Obligation[]                  @relation("ObligationOwner")
+  deputyObligations             Obligation[]                  @relation("ObligationDeputy")
+  externalObligations           Obligation[]                  @relation("ObligationExternalUser")
+  ownedDeadlines                Deadline[]                    @relation("DeadlineOwner")
+  deputyDeadlines               Deadline[]                    @relation("DeadlineDeputy")
+  completedDeadlines            Deadline[]                    @relation("DeadlineCompletedBy")
+  completedTaskStateEntries     TaskStateEntry[]              @relation("TaskStateCompletedBy")
 
   @@index([isArchived])
   @@index([role])
@@ -139,15 +140,15 @@ model CommentRevision {
 }
 
 model Role {
-  id            String   @id @default(cuid())
-  key           String   @unique
-  labelDe       String
-  descriptionDe String?
+  id              String   @id @default(cuid())
+  key             String   @unique
+  labelDe         String
+  descriptionDe   String?
   permissionsJson Json?
-  isSystem      Boolean  @default(false)
-  isArchived    Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  isSystem        Boolean  @default(false)
+  isArchived      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   @@index([isArchived])
   @@index([labelDe])
@@ -166,16 +167,17 @@ model SecuritySettings {
 }
 
 model ExternalOrganization {
-  id         String   @id @default(cuid())
-  name       String   @unique
-  type       String
-  phone      String?
-  email      String?
-  address    String?
-  isArchived Boolean  @default(false)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  users      User[]
+  id          String       @id @default(cuid())
+  name        String       @unique
+  type        String
+  phone       String?
+  email       String?
+  address     String?
+  isArchived  Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  users       User[]
+  obligations Obligation[] @relation("ObligationExternalOrg")
 
   @@index([isArchived])
   @@index([type])
@@ -268,7 +270,7 @@ model AuthorityContact {
 }
 
 model Project {
-  id                   String            @id
+  id                   String                 @id
   title                String
   status               ProjectStatus?
   submissionType       ProjectSubmissionType?
@@ -288,19 +290,19 @@ model Project {
   dependsOnProjectIds  Json
   referenceLegalDocIds Json
   archivedAt           DateTime?
-  isArchived           Boolean           @default(false)
-  createdAt            DateTime          @default(now())
-  updatedAt            DateTime          @updatedAt
-  company              Company           @relation(fields: [companyId], references: [id])
+  isArchived           Boolean                @default(false)
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  company              Company                @relation(fields: [companyId], references: [id])
   checklist            ProjectChecklist?
   legalDocuments       LegalDocument[]
   deadlines            Deadline[]
-  site                 Site?             @relation(fields: [siteId], references: [id])
-  facility             Facility?         @relation(fields: [facilityId], references: [id])
-  authority            Authority?        @relation(fields: [authorityId], references: [id])
-  authorityContact     AuthorityContact? @relation(fields: [authorityContactId], references: [id])
-  ownerUser            User?             @relation("ProjectOwner", fields: [ownerUserId], references: [id])
-  deputyUser           User?             @relation("ProjectDeputy", fields: [deputyUserId], references: [id])
+  site                 Site?                  @relation(fields: [siteId], references: [id])
+  facility             Facility?              @relation(fields: [facilityId], references: [id])
+  authority            Authority?             @relation(fields: [authorityId], references: [id])
+  authorityContact     AuthorityContact?      @relation(fields: [authorityContactId], references: [id])
+  ownerUser            User?                  @relation("ProjectOwner", fields: [ownerUserId], references: [id])
+  deputyUser           User?                  @relation("ProjectDeputy", fields: [deputyUserId], references: [id])
 
   @@index([companyId])
   @@index([siteId])
@@ -314,12 +316,12 @@ model Project {
 }
 
 model ProjectChecklist {
-  id         String                    @id
-  projectId  String                    @unique
-  createdAt  DateTime                  @default(now())
-  updatedAt  DateTime                  @updatedAt
-  project    Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  sections   ProjectChecklistSection[]
+  id        String                    @id
+  projectId String                    @unique
+  createdAt DateTime                  @default(now())
+  updatedAt DateTime                  @updatedAt
+  project   Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sections  ProjectChecklistSection[]
 }
 
 model ProjectChecklistSection {
@@ -380,7 +382,7 @@ model LegalDocument {
 }
 
 model Obligation {
-  id                      String        @id
+  id                      String                @id
   legalDocId              String
   title                   String
   infoTextLong            String?
@@ -388,32 +390,39 @@ model Obligation {
   criticality             String?
   scheduleType            String
   firstDueDate            String?
+  recurrenceEndDate       String?
   intervalUnit            String?
   intervalValue           Int?
   ownerUserId             String?
   deputyUserId            String?
+  externalOrgId           String?
+  externalUserId          String?
   origin                  String?
   sourceSuggestionId      String?
   sourceRunId             String?
-  emailReminderEnabled    Boolean       @default(false)
+  emailReminderEnabled    Boolean               @default(false)
   emailReminderDaysBefore Int?
   evidenceRequirements    Json
   archivedAt              DateTime?
-  isArchived              Boolean       @default(false)
-  createdAt               DateTime      @default(now())
-  updatedAt               DateTime      @updatedAt
-  legalDocument           LegalDocument @relation(fields: [legalDocId], references: [id], onDelete: Cascade)
-  ownerUser               User?         @relation("ObligationOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  deputyUser              User?         @relation("ObligationDeputy", fields: [deputyUserId], references: [id], onDelete: SetNull)
+  isArchived              Boolean               @default(false)
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+  legalDocument           LegalDocument         @relation(fields: [legalDocId], references: [id], onDelete: Cascade)
+  ownerUser               User?                 @relation("ObligationOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  deputyUser              User?                 @relation("ObligationDeputy", fields: [deputyUserId], references: [id], onDelete: SetNull)
+  externalOrg             ExternalOrganization? @relation("ObligationExternalOrg", fields: [externalOrgId], references: [id], onDelete: SetNull)
+  externalUser            User?                 @relation("ObligationExternalUser", fields: [externalUserId], references: [id], onDelete: SetNull)
 
   @@index([legalDocId])
   @@index([ownerUserId])
   @@index([deputyUserId])
+  @@index([externalOrgId])
+  @@index([externalUserId])
   @@index([isArchived])
 }
 
 model Deadline {
-  id                      String        @id
+  id                      String         @id
   title                   String
   description             String?
   dueDate                 String
@@ -423,21 +432,21 @@ model Deadline {
   authorityId             String?
   ownerUserId             String?
   deputyUserId            String?
-  emailReminderEnabled    Boolean       @default(false)
+  emailReminderEnabled    Boolean        @default(false)
   emailReminderDaysBefore Int?
   completedAt             DateTime?
   completedByUserId       String?
   evidence                Json
   archivedAt              DateTime?
-  isArchived              Boolean       @default(false)
-  createdAt               DateTime      @default(now())
-  updatedAt               DateTime      @updatedAt
-  project                 Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  isArchived              Boolean        @default(false)
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+  project                 Project?       @relation(fields: [projectId], references: [id], onDelete: SetNull)
   legalDocument           LegalDocument? @relation(fields: [legalDocId], references: [id], onDelete: SetNull)
-  authority               Authority?    @relation(fields: [authorityId], references: [id], onDelete: SetNull)
-  ownerUser               User?         @relation("DeadlineOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  deputyUser              User?         @relation("DeadlineDeputy", fields: [deputyUserId], references: [id], onDelete: SetNull)
-  completedByUser         User?         @relation("DeadlineCompletedBy", fields: [completedByUserId], references: [id], onDelete: SetNull)
+  authority               Authority?     @relation(fields: [authorityId], references: [id], onDelete: SetNull)
+  ownerUser               User?          @relation("DeadlineOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  deputyUser              User?          @relation("DeadlineDeputy", fields: [deputyUserId], references: [id], onDelete: SetNull)
+  completedByUser         User?          @relation("DeadlineCompletedBy", fields: [completedByUserId], references: [id], onDelete: SetNull)
 
   @@index([projectId])
   @@index([legalDocId])
@@ -451,15 +460,15 @@ model Deadline {
 }
 
 model TaskStateEntry {
-  taskInstanceId    String   @id
+  taskInstanceId    String    @id
   status            String
   completedAt       DateTime?
   completedByUserId String?
   completedByLabel  String?
   evidence          Json
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  completedByUser   User?    @relation("TaskStateCompletedBy", fields: [completedByUserId], references: [id], onDelete: SetNull)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  completedByUser   User?     @relation("TaskStateCompletedBy", fields: [completedByUserId], references: [id], onDelete: SetNull)
 
   @@index([completedByUserId])
   @@index([status])
@@ -521,7 +530,7 @@ model PasswordResetToken {
 }
 
 model NotificationOutbox {
-  id                String   @id @default(cuid())
+  id                String                        @id @default(cuid())
   eventType         String
   entityType        String?
   entityId          String?
@@ -530,19 +539,19 @@ model NotificationOutbox {
   recipientName     String?
   subject           String
   payloadJson       Json
-  status            String   @default("PENDING")
-  scheduledFor      DateTime @default(now())
+  status            String                        @default("PENDING")
+  scheduledFor      DateTime                      @default(now())
   claimedAt         DateTime?
   claimToken        String?
   sentAt            DateTime?
-  attemptCount      Int      @default(0)
+  attemptCount      Int                           @default(0)
   lastAttemptAt     DateTime?
   lastError         String?
   providerReference String?
-  idempotencyKey    String   @unique
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  recipientUser     User?    @relation("NotificationRecipient", fields: [recipientUserId], references: [id], onDelete: SetNull)
+  idempotencyKey    String                        @unique
+  createdAt         DateTime                      @default(now())
+  updatedAt         DateTime                      @updatedAt
+  recipientUser     User?                         @relation("NotificationRecipient", fields: [recipientUserId], references: [id], onDelete: SetNull)
   deliveryAttempts  NotificationDeliveryAttempt[]
 
   @@index([status, scheduledFor])
@@ -552,7 +561,7 @@ model NotificationOutbox {
 }
 
 model NotificationDeliveryAttempt {
-  id                String               @id @default(cuid())
+  id                String             @id @default(cuid())
   notificationId    String
   attemptNumber     Int
   outcome           String
@@ -562,9 +571,9 @@ model NotificationDeliveryAttempt {
   errorSummary      String?
   providerReference String?
   triggeredByUserId String?
-  createdAt         DateTime             @default(now())
-  notification      NotificationOutbox   @relation(fields: [notificationId], references: [id], onDelete: Cascade)
-  triggeredByUser   User?                @relation("NotificationAttemptTriggerUser", fields: [triggeredByUserId], references: [id], onDelete: SetNull)
+  createdAt         DateTime           @default(now())
+  notification      NotificationOutbox @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  triggeredByUser   User?              @relation("NotificationAttemptTriggerUser", fields: [triggeredByUserId], references: [id], onDelete: SetNull)
 
   @@index([notificationId, createdAt])
   @@index([outcome, createdAt])
@@ -572,29 +581,29 @@ model NotificationDeliveryAttempt {
 }
 
 model NotificationSettings {
-  id                       String   @id
-  defaultDueSoonDays       Int      @default(7)
-  deadlineDueSoonEnabled   Boolean  @default(true)
-  assignmentAssignedEnabled Boolean @default(true)
-  dailyDigestEnabled       Boolean  @default(false)
-  weeklyDigestEnabled      Boolean  @default(false)
-  dailyDigestHourLocal     Int      @default(7)
-  weeklyDigestWeekday      Int      @default(1)
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
+  id                        String   @id
+  defaultDueSoonDays        Int      @default(7)
+  deadlineDueSoonEnabled    Boolean  @default(true)
+  assignmentAssignedEnabled Boolean  @default(true)
+  dailyDigestEnabled        Boolean  @default(false)
+  weeklyDigestEnabled       Boolean  @default(false)
+  dailyDigestHourLocal      Int      @default(7)
+  weeklyDigestWeekday       Int      @default(1)
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
 }
 
 model NotificationWorkerStatus {
-  workerKey         String   @id
-  lastStartedAt     DateTime?
-  lastFinishedAt    DateTime?
-  lastSuccessfulAt  DateTime?
-  lastOutcome       String?
-  lastError         String?
-  lastClaimedCount  Int      @default(0)
-  lastProcessedCount Int     @default(0)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  workerKey          String    @id
+  lastStartedAt      DateTime?
+  lastFinishedAt     DateTime?
+  lastSuccessfulAt   DateTime?
+  lastOutcome        String?
+  lastError          String?
+  lastClaimedCount   Int       @default(0)
+  lastProcessedCount Int       @default(0)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 }
 
 model AuditLog {

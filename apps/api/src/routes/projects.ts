@@ -49,6 +49,9 @@ type ProjectInternalParticipantDto = {
 type ExternalParticipantDto = {
   id: string;
   type: string;
+  externalOrgId?: string;
+  externalUserId?: string;
+  accessStatus?: string;
   organization?: string;
   name: string;
   email?: string;
@@ -123,6 +126,25 @@ type ProjectRelationValidationResult =
       authorityContactId?: string;
       ownerUserId?: string;
       deputyUserId?: string;
+    }
+  | {
+      ok: false;
+      status: number;
+      message: string;
+    };
+
+type InternalParticipantValidationResult =
+  | { ok: true }
+  | {
+      ok: false;
+      status: number;
+      message: string;
+    };
+
+type ExternalParticipantValidationResult =
+  | {
+      ok: true;
+      participants: ExternalParticipantDto[];
     }
   | {
       ok: false;
@@ -267,6 +289,9 @@ function normalizeExternalParticipant(
   return {
     id: typeof participant.id === "string" && participant.id.trim() ? participant.id : fallbackId,
     type: typeof participant.type === "string" && participant.type.trim() ? participant.type : "OTHER",
+    externalOrgId: toOptionalTrimmedString(participant.externalOrgId),
+    externalUserId: toOptionalTrimmedString(participant.externalUserId),
+    accessStatus: toOptionalTrimmedString(participant.accessStatus),
     organization: participant.organization ?? "",
     name: participant.name,
     email: participant.email ?? "",
@@ -321,6 +346,77 @@ function normalizeParticipantUserIds(input: {
   }
 
   return normalizeRelationIds(input.participantUserIds);
+}
+
+async function validateActiveInternalUser(
+  prisma: PrismaClient,
+  userId: string,
+  messages: {
+    notFound: string;
+    invalid: string;
+  }
+): Promise<InternalParticipantValidationResult> {
+  const user = await prisma.user.findUnique({
+    where: {
+      id: userId
+    },
+    select: {
+      id: true,
+      type: true,
+      isArchived: true
+    }
+  });
+
+  if (!user) {
+    return { ok: false, status: 404, message: messages.notFound };
+  }
+
+  if (user.isArchived || String(user.type).toUpperCase() !== "INTERNAL") {
+    return { ok: false, status: 400, message: messages.invalid };
+  }
+
+  return { ok: true };
+}
+
+async function validateInternalParticipantUsers(
+  prisma: PrismaClient,
+  userIds: string[]
+): Promise<InternalParticipantValidationResult> {
+  const normalizedUserIds = normalizeRelationIds(userIds);
+  if (normalizedUserIds.length === 0) {
+    return { ok: true };
+  }
+
+  const users = await prisma.user.findMany({
+    where: {
+      id: {
+        in: normalizedUserIds
+      }
+    },
+    select: {
+      id: true,
+      type: true,
+      isArchived: true
+    }
+  });
+  const usersById = new Map(users.map((user) => [user.id, user] as const));
+
+  if (normalizedUserIds.some((userId) => !usersById.has(userId))) {
+    return { ok: false, status: 404, message: "Internal participant user not found." };
+  }
+
+  const hasExternalOrArchivedUser = users.some(
+    (user) => user.isArchived || String(user.type).toUpperCase() !== "INTERNAL"
+  );
+  if (hasExternalOrArchivedUser) {
+    return {
+      ok: false,
+      status: 400,
+      message: "Internal project participants must be active internal users."
+    };
+  }
+
+  return { ok: true };
 }
 
 function buildDependencyAdjacency(
@@ -1006,32 +1102,22 @@ async function validateProjectRelations(
   }
 
   if (ownerUserId) {
-    const owner = await prisma.user.findUnique({
-      where: {
-        id: ownerUserId
-      },
-      select: {
-        id: true
-      }
+    const ownerValidation = await validateActiveInternalUser(prisma, ownerUserId, {
+      notFound: "Owner user not found.",
+      invalid: "Owner user must be an active internal user."
     });
-
-    if (!owner) {
-      return { ok: false, status: 404, message: "Owner user not found." };
+    if (!ownerValidation.ok) {
+      return ownerValidation;
     }
   }
 
   if (deputyUserId) {
-    const deputy = await prisma.user.findUnique({
-      where: {
-        id: deputyUserId
-      },
-      select: {
-        id: true
-      }
+    const deputyValidation = await validateActiveInternalUser(prisma, deputyUserId, {
+      notFound: "Deputy user not found.",
+      invalid: "Deputy user must be an active internal user."
     });
-
-    if (!deputy) {
-      return { ok: false, status: 404, message: "Deputy user not found." };
+    if (!deputyValidation.ok) {
+      return deputyValidation;
     }
   }
 
@@ -1044,6 +1130,85 @@ async function validateProjectRelations(
     authorityContactId,
     ownerUserId,
     deputyUserId
+  };
+}
+
+async function validateExternalParticipants(
+  prisma: PrismaClient,
+  participants: ExternalParticipantDto[]
+): Promise<ExternalParticipantValidationResult> {
+  const normalizedParticipants: ExternalParticipantDto[] = [];
+
+  for (const participant of participants) {
+    let externalOrgId = toOptionalTrimmedString(participant.externalOrgId);
+    const externalUserId = toOptionalTrimmedString(participant.externalUserId);
+
+    let externalUser:
+      | {
+          id: string;
+          type: string;
+          isArchived: boolean;
+          externalOrgId: string | null;
+        }
+      | null = null;
+
+    if (externalUserId) {
+      externalUser = await prisma.user.findUnique({
+        where: {
+          id: externalUserId
+        },
+        select: {
+          id: true,
+          type: true,
+          isArchived: true,
+          externalOrgId: true
+        }
+      });
+
+      if (!externalUser || externalUser.isArchived) {
+        return { ok: false, status: 400, message: "External participant user must be active." };
+      }
+      if (String(externalUser.type).toUpperCase() !== "EXTERNAL") {
+        return { ok: false, status: 400, message: "External participant user must have type EXTERNAL." };
+      }
+      if (!externalOrgId) {
+        if (!externalUser.externalOrgId) {
+          return { ok: false, status: 400, message: "externalOrgId is required for linked external participants." };
+        }
+        externalOrgId = externalUser.externalOrgId;
+      }
+    }
+
+    if (externalOrgId) {
+      const externalOrg = await prisma.externalOrganization.findUnique({
+        where: {
+          id: externalOrgId
+        },
+        select: {
+          id: true,
+          isArchived: true
+        }
+      });
+
+      if (!externalOrg || externalOrg.isArchived) {
+        return { ok: false, status: 400, message: "External participant organization must be active." };
+      }
+    }
+
+    if (externalUser && externalOrgId && externalUser.externalOrgId !== externalOrgId) {
+      return { ok: false, status: 400, message: "External participant user does not belong to externalOrgId." };
+    }
+
+    normalizedParticipants.push({
+      ...participant,
+      externalOrgId,
+      externalUserId
+    });
+  }
+
+  return {
+    ok: true,
+    participants: normalizedParticipants
   };
 }
 
@@ -1074,6 +1239,21 @@ async function normalizeProjectForWrite(
     input.internalParticipants,
     participantUserIds
   );
+  const internalParticipantValidation = await validateInternalParticipantUsers(
+    prisma,
+    participantUserIds
+  );
+  if (!internalParticipantValidation.ok) {
+    return internalParticipantValidation;
+  }
+
+  const externalParticipantValidation = await validateExternalParticipants(
+    prisma,
+    input.externalParticipants
+  );
+  if (!externalParticipantValidation.ok) {
+    return externalParticipantValidation;
+  }
   const dependencyValidationProjects = currentProjects.some((project) => project.id === input.id)
     ? currentProjects
     : [...currentProjects, { id: input.id, dependsOnProjectIds: [] }];
@@ -1106,7 +1286,7 @@ async function normalizeProjectForWrite(
           : internalParticipants.map((participant) => participant.userId),
       dependsOnProjectIds: dependencyIds,
       referenceLegalDocIds: normalizeRelationIds(input.referenceLegalDocIds),
-      externalParticipants: input.externalParticipants,
+      externalParticipants: externalParticipantValidation.participants,
       attachments: input.attachments,
       archivedAt: input.archivedAt ?? undefined,
       isArchived: Boolean(input.isArchived || input.archivedAt)

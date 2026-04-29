@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+node scripts/assert-prisma-client.mjs
+
 interval_seconds="${NOTIFICATION_DISPATCH_INTERVAL_SECONDS:-300}"
 
 while true; do

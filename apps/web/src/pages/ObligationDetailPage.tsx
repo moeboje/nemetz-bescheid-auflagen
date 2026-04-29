@@ -9,6 +9,7 @@ import { useObligations } from "../state/ObligationsStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useProjects } from "../state/ProjectsStore";
 import { useUsers } from "../state/UsersStore";
+import { useExternalOrgs } from "../state/ExternalOrgsStore";
 import { generateTasksFromObligations } from "../state/TasksStore";
 import { useTaskState } from "../state/TaskStateStore";
 import ObligationModal from "../components/ObligationModal";
@@ -58,6 +59,7 @@ export default function ObligationDetailPage() {
   const { legalDocs, getEffectiveScopeLabel } = useLegalDocs();
   const { projects } = useProjects();
   const { getUser, getDisplayName } = useUsers();
+  const { getExternalOrgById } = useExternalOrgs();
   const { getEntriesForEntity } = useAuditLog();
   const { taskState } = useTaskState();
   const { permissions } = useAuthorization();
@@ -220,6 +222,24 @@ export default function ObligationDetailPage() {
                 ? `${obligation.intervalValue} ${getIntervalUnitLabel(obligation.intervalUnit)}`
                 : t("common.notAvailable")}
             </div>
+          </div>
+          <div>
+            <div className="metaLabel">{t("obligations.detail.recurrenceEndDate")}</div>
+            <div className="metaValue">
+              {obligation.scheduleType === "ONCE"
+                ? t("common.notAvailable")
+                : obligation.recurrenceEndDate ?? t("obligations.recurrence.unlimited")}
+            </div>
+          </div>
+          <div>
+            <div className="metaLabel">{t("obligations.detail.externalOrg")}</div>
+            <div className="metaValue">
+              {getExternalOrgById(obligation.externalOrgId)?.name ?? t("common.notAssigned")}
+            </div>
+          </div>
+          <div>
+            <div className="metaLabel">{t("obligations.detail.externalUser")}</div>
+            <div className="metaValue">{renderUserValue(obligation.externalUserId)}</div>
           </div>
           <div>
             <div className="metaLabel">{t("obligations.detail.emailReminder")}</div>

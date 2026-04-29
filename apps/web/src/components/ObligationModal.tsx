@@ -4,6 +4,8 @@ import { t } from "../i18n";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useObligations } from "../state/ObligationsStore";
 import type { Obligation } from "../state/ObligationsStore";
+import { useExternalOrgs } from "../state/ExternalOrgsStore";
+import { useUsers } from "../state/UsersStore";
 import UserSelect from "./UserSelect";
 
 const emptyForm = {
@@ -13,10 +15,14 @@ const emptyForm = {
   criticality: "" as "" | Obligation["criticality"],
   scheduleType: "ONCE" as Obligation["scheduleType"],
   firstDueDate: "",
+  recurrenceEndMode: "NONE" as "NONE" | "DATE",
+  recurrenceEndDate: "",
   intervalUnit: "" as "" | Obligation["intervalUnit"],
   intervalValue: "",
   ownerUserId: "",
   deputyUserId: "",
+  externalOrgId: "",
+  externalUserId: "",
   infoTextLong: "",
   emailReminderEnabled: false,
   emailReminderDaysBefore: "7",
@@ -31,6 +37,8 @@ type ObligationModalProps = {
   obligation?: Obligation;
   legalDocId?: string;
   lockLegalDoc?: boolean;
+  projectId?: string;
+  availableLegalDocs?: Array<{ id: string; title: string }>;
 };
 
 export default function ObligationModal({
@@ -38,16 +46,23 @@ export default function ObligationModal({
   onClose,
   obligation,
   legalDocId,
-  lockLegalDoc
+  lockLegalDoc,
+  projectId,
+  availableLegalDocs
 }: ObligationModalProps) {
   const { legalDocs } = useLegalDocs();
-  const { addObligation, updateObligation } = useObligations();
+  const { externalOrgs } = useExternalOrgs();
+  const { listActiveUsers, getUserLabel } = useUsers();
+  const { addObligation, updateObligation, mutationError, clearMutationError } = useObligations();
   const [form, setForm] = useState(emptyForm);
+  const [saveError, setSaveError] = useState("");
 
   useEffect(() => {
     if (!open) {
       return;
     }
+    setSaveError("");
+    clearMutationError();
     if (obligation) {
       setForm({
         legalDocId: obligation.legalDocId,
@@ -56,10 +71,14 @@ export default function ObligationModal({
         criticality: obligation.criticality ?? "",
         scheduleType: obligation.scheduleType,
         firstDueDate: obligation.firstDueDate ?? "",
+        recurrenceEndMode: obligation.recurrenceEndDate ? "DATE" : "NONE",
+        recurrenceEndDate: obligation.recurrenceEndDate ?? "",
         intervalUnit: obligation.intervalUnit ?? "",
         intervalValue: obligation.intervalValue ? String(obligation.intervalValue) : "",
         ownerUserId: obligation.ownerUserId ?? "",
         deputyUserId: obligation.deputyUserId ?? "",
+        externalOrgId: obligation.externalOrgId ?? "",
+        externalUserId: obligation.externalUserId ?? "",
         infoTextLong: obligation.infoTextLong ?? "",
         emailReminderEnabled: obligation.emailReminderEnabled,
         emailReminderDaysBefore: String(obligation.emailReminderDaysBefore ?? 7),
@@ -69,19 +88,52 @@ export default function ObligationModal({
       });
       return;
     }
+    const initialLegalDocId =
+      legalDocId ?? (availableLegalDocs?.length === 1 ? availableLegalDocs[0]?.id ?? "" : "");
     setForm({
       ...emptyForm,
-      legalDocId: legalDocId ?? ""
+      legalDocId: initialLegalDocId
     });
-  }, [legalDocId, obligation, open]);
+  }, [availableLegalDocs, clearMutationError, legalDocId, obligation, open]);
 
   const legalDocOptions = useMemo(
-    () => legalDocs.map((doc) => ({ value: doc.id, label: doc.title })),
-    [legalDocs]
+    () =>
+      (availableLegalDocs ?? legalDocs).map((doc) => ({
+        value: doc.id,
+        label: doc.title
+      })),
+    [availableLegalDocs, legalDocs]
+  );
+
+  const externalOrgOptions = useMemo(
+    () =>
+      externalOrgs
+        .filter((org) => !org.isArchived || org.id === form.externalOrgId)
+        .map((org) => ({ value: org.id, label: org.name })),
+    [externalOrgs, form.externalOrgId]
+  );
+
+  const externalUserOptions = useMemo(
+    () =>
+      listActiveUsers({ includeExternal: true, includeInternal: false })
+        .filter(
+          (user) =>
+            !form.externalOrgId ||
+            user.externalOrgId === form.externalOrgId ||
+            user.id === form.externalUserId
+        )
+        .map((user) => ({ value: user.id, label: getUserLabel(user.id) })),
+    [form.externalOrgId, form.externalUserId, getUserLabel, listActiveUsers]
   );
 
   const requiresFirstDue = form.scheduleType === "ONCE" || form.scheduleType === "ONCE_THEN_RECURRING";
   const requiresInterval = form.scheduleType === "RECURRING" || form.scheduleType === "ONCE_THEN_RECURRING";
+  const hasRecurrenceEndDateError =
+    requiresInterval &&
+    form.recurrenceEndMode === "DATE" &&
+    form.firstDueDate &&
+    form.recurrenceEndDate &&
+    form.recurrenceEndDate < form.firstDueDate;
 
   const isSaveDisabled =
     !form.legalDocId ||
@@ -89,7 +141,9 @@ export default function ObligationModal({
     !form.level ||
     !form.scheduleType ||
     (requiresFirstDue && !form.firstDueDate) ||
-    (requiresInterval && (!form.intervalUnit || !form.intervalValue));
+    (requiresInterval && (!form.intervalUnit || !form.intervalValue)) ||
+    (requiresInterval && form.recurrenceEndMode === "DATE" && !form.recurrenceEndDate) ||
+    hasRecurrenceEndDateError;
 
   const handleSave = async () => {
     const intervalValue = form.intervalValue ? Number(form.intervalValue) : undefined;
@@ -103,10 +157,14 @@ export default function ObligationModal({
       criticality: form.criticality || undefined,
       scheduleType: form.scheduleType,
       firstDueDate: form.firstDueDate || undefined,
+      recurrenceEndDate:
+        requiresInterval && form.recurrenceEndMode === "DATE" ? form.recurrenceEndDate : "",
       intervalUnit: form.intervalUnit || undefined,
       intervalValue: intervalValue && intervalValue > 0 ? intervalValue : undefined,
-      ownerUserId: form.ownerUserId || undefined,
-      deputyUserId: form.deputyUserId || undefined,
+      ownerUserId: form.ownerUserId,
+      deputyUserId: form.deputyUserId,
+      externalOrgId: form.externalOrgId,
+      externalUserId: form.externalUserId,
       infoTextLong: form.infoTextLong,
       emailReminderEnabled: form.emailReminderEnabled,
       emailReminderDaysBefore:
@@ -119,12 +177,15 @@ export default function ObligationModal({
     };
 
     const saved = obligation
-      ? await updateObligation(obligation.id, payload)
-      : await addObligation(payload);
+      ? await updateObligation(obligation.id, { ...payload, projectId })
+      : await addObligation({ ...payload, projectId });
 
     if (saved) {
       onClose();
+      return;
     }
+
+    setSaveError(t("obligations.error.save"));
   };
 
   return (
@@ -146,6 +207,9 @@ export default function ObligationModal({
       }
     >
       <div className="modalForm">
+        {mutationError || saveError ? (
+          <p className="validationText">{mutationError || saveError}</p>
+        ) : null}
         <div className="formField">
           <span className="fieldLabel">{t("obligations.form.legalDoc")}</span>
           <Select
@@ -211,7 +275,9 @@ export default function ObligationModal({
             onChange={(event) =>
               setForm((prev) => ({
                 ...prev,
-                scheduleType: event.target.value as Obligation["scheduleType"]
+                scheduleType: event.target.value as Obligation["scheduleType"],
+                recurrenceEndMode:
+                  event.target.value === "ONCE" ? "NONE" : prev.recurrenceEndMode
               }))
             }
           />
@@ -257,11 +323,44 @@ export default function ObligationModal({
             />
           </div>
         </div>
+        {requiresInterval ? (
+          <div className="formField">
+            <span className="fieldLabel">{t("obligations.form.recurrenceEnd")}</span>
+            <Select
+              options={[
+                { value: "NONE", label: t("obligations.recurrence.noEndDate") },
+                { value: "DATE", label: t("obligations.recurrence.untilDate") }
+              ]}
+              value={form.recurrenceEndMode}
+              onChange={(event) =>
+                setForm((prev) => ({
+                  ...prev,
+                  recurrenceEndMode: event.target.value as "NONE" | "DATE",
+                  recurrenceEndDate: event.target.value === "NONE" ? "" : prev.recurrenceEndDate
+                }))
+              }
+            />
+            {form.recurrenceEndMode === "DATE" ? (
+              <>
+                <Input
+                  type="date"
+                  value={form.recurrenceEndDate}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, recurrenceEndDate: event.target.value }))
+                  }
+                />
+                {hasRecurrenceEndDateError ? (
+                  <span className="validationText">{t("obligations.validation.recurrenceEndDate")}</span>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+        ) : null}
         <div className="formField">
           <span className="fieldLabel">{t("obligations.form.owner")}</span>
           <UserSelect
             value={form.ownerUserId || null}
-            includeExternal
+            includeExternal={false}
             allowArchivedCurrentValue
             placeholderKey="obligations.owner"
             onChange={(userId) =>
@@ -273,13 +372,47 @@ export default function ObligationModal({
           <span className="fieldLabel">{t("obligations.form.deputy")}</span>
           <UserSelect
             value={form.deputyUserId || null}
-            includeExternal
+            includeExternal={false}
             allowArchivedCurrentValue
             placeholderKey="obligations.deputy"
             onChange={(userId) =>
               setForm((prev) => ({ ...prev, deputyUserId: userId ?? "" }))
             }
           />
+        </div>
+        <div className="formField">
+          <span className="fieldLabel">{t("obligations.form.externalOrg")}</span>
+          <Select
+            options={[{ value: "", label: t("obligations.form.externalOrg") }, ...externalOrgOptions]}
+            value={form.externalOrgId}
+            onChange={(event) =>
+              setForm((prev) => ({
+                ...prev,
+                externalOrgId: event.target.value,
+                externalUserId: ""
+              }))
+            }
+          />
+        </div>
+        <div className="formField">
+          <span className="fieldLabel">{t("obligations.form.externalUser")}</span>
+          <Select
+            options={[{ value: "", label: t("obligations.form.externalUser") }, ...externalUserOptions]}
+            value={form.externalUserId}
+            onChange={(event) => {
+              const externalUserId = event.target.value;
+              const selectedUser = listActiveUsers({
+                includeExternal: true,
+                includeInternal: false
+              }).find((user) => user.id === externalUserId);
+              setForm((prev) => ({
+                ...prev,
+                externalUserId,
+                externalOrgId: selectedUser?.externalOrgId ?? prev.externalOrgId
+              }));
+            }}
+          />
+          <span className="helperText">{t("obligations.form.externalUserHint")}</span>
         </div>
         <div className="formField">
           <span className="fieldLabel">{t("obligations.form.infoTextLong")}</span>

@@ -7,7 +7,7 @@ WORKDIR /app/apps/api
 RUN npm ci
 
 COPY apps/api /app/apps/api
-RUN npx prisma generate
+RUN npm run prisma:generate
 RUN npm run build
 
 FROM node:20-alpine AS runtime
@@ -17,6 +17,7 @@ RUN apk add --no-cache openssl
 COPY --from=build /app/apps/api/package*.json ./
 COPY --from=build /app/apps/api/node_modules ./node_modules
 COPY --from=build /app/apps/api/prisma ./prisma
+COPY --from=build /app/apps/api/scripts ./scripts
 COPY --from=build /app/apps/api/dist ./dist
 COPY apps/api/start-container.sh ./start-container.sh
 COPY apps/api/start-notification-worker.sh ./start-notification-worker.sh

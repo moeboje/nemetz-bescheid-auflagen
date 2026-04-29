@@ -31,6 +31,20 @@ function buildUserOptionLabel(input: {
   return base;
 }
 
+function matchesTypeFilter(input: {
+  isExternal: boolean;
+  includeExternal: boolean;
+  includeInternal: boolean;
+}) {
+  if (input.isExternal && !input.includeExternal) {
+    return false;
+  }
+  if (!input.isExternal && !input.includeInternal) {
+    return false;
+  }
+  return true;
+}
+
 export default function UserSelect({
   value,
   onChange,
@@ -50,6 +64,11 @@ export default function UserSelect({
     if (
       allowArchivedCurrentValue &&
       selectedUser &&
+      matchesTypeFilter({
+        isExternal: selectedUser.isExternal || selectedUser.type === "EXTERNAL",
+        includeExternal,
+        includeInternal
+      }) &&
       !rows.some((user) => user.id === selectedUser.id)
     ) {
       rows.push(selectedUser);

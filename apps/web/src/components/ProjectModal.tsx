@@ -704,7 +704,8 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
           <span className="fieldLabel">{t("projects.form.owner")}</span>
           <UserSelect
             value={form.ownerUserId || null}
-            includeExternal
+            includeExternal={false}
+            includeInternal
             allowArchivedCurrentValue
             placeholderKey="projects.owner"
             onChange={(userId) =>
@@ -716,7 +717,8 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
           <span className="fieldLabel">{t("projects.form.deputy")}</span>
           <UserSelect
             value={form.deputyUserId || null}
-            includeExternal
+            includeExternal={false}
+            includeInternal
             allowArchivedCurrentValue
             placeholderKey="projects.deputy"
             onChange={(userId) =>
@@ -728,7 +730,8 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
           <span className="fieldLabel">{t("projects.form.participants")}</span>
           <UserMultiSelect
             value={form.participantUserIds}
-            includeExternal
+            includeExternal={false}
+            includeInternal
             allowArchivedCurrentValue
             showSearch
             onChange={(next) => setForm((prev) => ({ ...prev, participantUserIds: next }))}

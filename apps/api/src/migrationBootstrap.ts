@@ -682,10 +682,13 @@ const schemaCompletionRequirements = {
     "Obligation.criticality",
     "Obligation.scheduleType",
     "Obligation.firstDueDate",
+    "Obligation.recurrenceEndDate",
     "Obligation.intervalUnit",
     "Obligation.intervalValue",
     "Obligation.ownerUserId",
     "Obligation.deputyUserId",
+    "Obligation.externalOrgId",
+    "Obligation.externalUserId",
     "Obligation.origin",
     "Obligation.sourceSuggestionId",
     "Obligation.sourceRunId",
@@ -730,6 +733,8 @@ const schemaCompletionRequirements = {
     index("Obligation_legalDocId_idx", "Obligation", ["legalDocId"]),
     index("Obligation_ownerUserId_idx", "Obligation", ["ownerUserId"]),
     index("Obligation_deputyUserId_idx", "Obligation", ["deputyUserId"]),
+    index("Obligation_externalOrgId_idx", "Obligation", ["externalOrgId"]),
+    index("Obligation_externalUserId_idx", "Obligation", ["externalUserId"]),
     index("Obligation_isArchived_idx", "Obligation", ["isArchived"]),
     index("Deadline_projectId_idx", "Deadline", ["projectId"]),
     index("Deadline_legalDocId_idx", "Deadline", ["legalDocId"]),
@@ -782,6 +787,18 @@ const schemaCompletionRequirements = {
       onUpdate: "CASCADE"
     }),
     foreignKey("Obligation_deputyUserId_fkey", "Obligation", ["deputyUserId"], "User", ["id"], {
+      onDelete: "SET NULL",
+      onUpdate: "CASCADE"
+    }),
+    foreignKey(
+      "Obligation_externalOrgId_fkey",
+      "Obligation",
+      ["externalOrgId"],
+      "ExternalOrganization",
+      ["id"],
+      { onDelete: "SET NULL", onUpdate: "CASCADE" }
+    ),
+    foreignKey("Obligation_externalUserId_fkey", "Obligation", ["externalUserId"], "User", ["id"], {
       onDelete: "SET NULL",
       onUpdate: "CASCADE"
     }),

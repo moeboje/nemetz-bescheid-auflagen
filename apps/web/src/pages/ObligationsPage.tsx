@@ -19,6 +19,7 @@ import { useLegalDocs } from "../state/LegalDocsStore";
 import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
 import { useUsers } from "../state/UsersStore";
+import { useExternalOrgs } from "../state/ExternalOrgsStore";
 import { generateTasksFromObligations } from "../state/TasksStore";
 import { EyeIcon, EditIcon } from "../components/Icons";
 import EmailReminderCompact from "../components/EmailReminderCompact";
@@ -40,6 +41,7 @@ export default function ObligationsPage() {
   const { projects } = useProjects();
   const { companies, sites, facilities, getScopeLabel } = useScopes();
   const { listActiveUsers, getUserLabel } = useUsers();
+  const { getExternalOrgById } = useExternalOrgs();
   const { permissions } = useAuthorization();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingObligationId, setEditingObligationId] = useState<string | null>(null);
@@ -65,7 +67,7 @@ export default function ObligationsPage() {
 
   const ownerOptions = useMemo(
     () =>
-      listActiveUsers({ includeExternal: true, includeInternal: true }).map((user) => ({
+      listActiveUsers({ includeExternal: false, includeInternal: true }).map((user) => ({
         value: user.id,
         label: getUserDisplayName(user)
       })),
@@ -109,6 +111,11 @@ export default function ObligationsPage() {
       .sort();
     return upcoming[0] ?? obligation.firstDueDate ?? t("common.notAvailable");
   };
+
+  const getRecurrenceEndLabel = (row: (typeof obligations)[number]) =>
+    row.scheduleType === "ONCE"
+      ? t("common.notAvailable")
+      : row.recurrenceEndDate ?? t("obligations.recurrence.unlimited");
 
   const filteredObligations = useMemo(() => {
     return obligations.filter((obligation) => {
@@ -168,6 +175,17 @@ export default function ObligationsPage() {
       render: (row: (typeof obligations)[number]) => getNextDue(row.id)
     },
     {
+      key: "recurrenceEndDate",
+      header: t("obligations.table.recurrenceEndDate"),
+      render: (row: (typeof obligations)[number]) => getRecurrenceEndLabel(row)
+    },
+    {
+      key: "externalOrg",
+      header: t("obligations.table.externalOrg"),
+      render: (row: (typeof obligations)[number]) =>
+        getExternalOrgById(row.externalOrgId)?.name ?? t("common.notAssigned")
+    },
+    {
       key: "emailReminder",
       header: t("obligations.table.emailReminder"),
       render: (row: (typeof obligations)[number]) => (
@@ -206,7 +224,7 @@ export default function ObligationsPage() {
           <h1 className="pageTitle">{t("obligations.title")}</h1>
         </div>
         <Button
-          disabled={!permissions.canEditObligations}
+          disabled={!permissions.canCreateObligations}
           onClick={() => setModalOpen(true)}
         >
           {t("obligations.action.new")}

@@ -45,6 +45,7 @@ type TaskStateContextValue = {
 };
 
 const TaskStateContext = createContext<TaskStateContextValue | undefined>(undefined);
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 export function buildObligationTaskInstanceId(obligationId: string, dueDateISO: string) {
   return `obligation:${obligationId}:${dueDateISO}`;
@@ -68,9 +69,18 @@ function normalizeStatus(value: unknown): TaskInstanceStatus {
   return "OPEN";
 }
 
-function parseISODate(value: string) {
-  const parsed = new Date(`${value}T00:00:00`);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+function isISODateOnly(value: string) {
+  if (!DATE_ONLY_PATTERN.test(value)) {
+    return false;
+  }
+
+  const [year, month, day] = value.split("-").map((part) => Number(part));
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  const normalized = `${parsed.getUTCFullYear()}-${String(parsed.getUTCMonth() + 1).padStart(
+    2,
+    "0"
+  )}-${String(parsed.getUTCDate()).padStart(2, "0")}`;
+  return normalized === value;
 }
 
 function parseInstanceId(rawKey: string): string | null {
@@ -89,7 +99,7 @@ function parseInstanceId(rawKey: string): string | null {
   if (rawKey.startsWith("ob-") && rawKey.length > 14) {
     const dueDateISO = rawKey.slice(-10);
     const between = rawKey.slice(3, -11);
-    if (parseISODate(dueDateISO) && between) {
+    if (isISODateOnly(dueDateISO) && between) {
       return buildObligationTaskInstanceId(between, dueDateISO);
     }
   }

@@ -172,9 +172,7 @@ function AppLayout() {
     hasPermission("deadlines.archive") &&
     hasPermission("tasks.edit") &&
     hasPermission("tasks.complete");
-  const restrictedFallback = currentAccountUser?.isExternal && permissions.canViewTasks
-    ? `${MODULE_BASE_PATH}/tasks`
-    : `${MODULE_BASE_PATH}/dashboard`;
+  const restrictedFallback = `${MODULE_BASE_PATH}/dashboard`;
   const accountPath = `${MODULE_BASE_PATH}/account`;
   const personalSecurityPath = `${MODULE_BASE_PATH}/account/security`;
   const defaultAdminPath = permissions.canViewUsersAdmin

@@ -65,6 +65,17 @@ async function createUser(email: string, password: string, options?: { role?: st
   });
 }
 
+async function createRole(key: string, permissionKeys: string[]) {
+  return prisma.role.create({
+    data: {
+      key,
+      labelDe: key,
+      isSystem: false,
+      permissionsJson: permissionKeys
+    }
+  });
+}
+
 async function login(email: string, password: string) {
   const response = await request("/auth/login", {
     method: "POST",
@@ -151,6 +162,7 @@ describe("Documents API", () => {
     await prisma.auditLog.deleteMany();
     await prisma.document.deleteMany();
     await prisma.user.deleteMany();
+    await prisma.role.deleteMany();
     await cleanUploadDir();
   });
 
@@ -231,6 +243,152 @@ describe("Documents API", () => {
     assert.equal(payload.items.length, 1);
     assert.equal(payload.items[0]?.id, firstPayload.document.id);
     assert.equal(payload.items[0]?.ownerId, "project-list-a");
+  });
+
+  it("scopes document reads and downloads by stored owner type", async () => {
+    await createRole("TASK_DOC_READER", ["tasks.view"]);
+    await createRole("PROJECT_DOC_READER", ["projects.view"]);
+    await createRole("LEGAL_DOC_READER", ["legalDocs.view"]);
+
+    const uploader = await createUser("docs-owner-upload@example.com", "ValidPassword1!", {
+      role: "ADMIN"
+    });
+    const taskReader = await createUser("docs-task-reader@example.com", "ValidPassword1!", {
+      role: "TASK_DOC_READER"
+    });
+    const projectReader = await createUser("docs-project-reader@example.com", "ValidPassword1!", {
+      role: "PROJECT_DOC_READER"
+    });
+    const legalDocReader = await createUser("docs-legal-reader@example.com", "ValidPassword1!", {
+      role: "LEGAL_DOC_READER"
+    });
+
+    const uploaderCookie = await login(uploader.email, "ValidPassword1!");
+    const taskReaderCookie = await login(taskReader.email, "ValidPassword1!");
+    const projectReaderCookie = await login(projectReader.email, "ValidPassword1!");
+    const legalDocReaderCookie = await login(legalDocReader.email, "ValidPassword1!");
+
+    const taskUpload = await uploadDocument(uploaderCookie, "TASK_EVIDENCE", "task-doc-1", "task.pdf");
+    const projectUpload = await uploadDocument(uploaderCookie, "PROJECT", "project-doc-1", "project.pdf");
+    const legalDocUpload = await uploadDocument(uploaderCookie, "LEGAL_DOC", "legal-doc-1", "legal.pdf");
+    const deadlineUpload = await uploadDocument(uploaderCookie, "DEADLINE", "deadline-doc-1", "deadline.pdf");
+
+    const taskDocument = (await taskUpload.json()) as { document: { id: string } };
+    const projectDocument = (await projectUpload.json()) as { document: { id: string } };
+    const legalDocDocument = (await legalDocUpload.json()) as { document: { id: string } };
+    const deadlineDocument = (await deadlineUpload.json()) as { document: { id: string } };
+
+    assert.equal(taskUpload.status, 201);
+    assert.equal(projectUpload.status, 201);
+    assert.equal(legalDocUpload.status, 201);
+    assert.equal(deadlineUpload.status, 201);
+
+    const taskList = await request("/documents?ownerType=TASK_EVIDENCE&ownerId=task-doc-1", {
+      cookie: taskReaderCookie
+    });
+    assert.equal(taskList.status, 200);
+    const taskMetadata = await request(`/documents/${taskDocument.document.id}`, {
+      cookie: taskReaderCookie
+    });
+    assert.equal(taskMetadata.status, 200);
+    const taskDownload = await request(`/documents/${taskDocument.document.id}/file`, {
+      cookie: taskReaderCookie
+    });
+    assert.equal(taskDownload.status, 200);
+
+    const taskReaderProjectMetadata = await request(`/documents/${projectDocument.document.id}`, {
+      cookie: taskReaderCookie
+    });
+    assert.equal(taskReaderProjectMetadata.status, 403);
+    const taskReaderProjectDownload = await request(`/documents/${projectDocument.document.id}/file`, {
+      cookie: taskReaderCookie
+    });
+    assert.equal(taskReaderProjectDownload.status, 403);
+    const taskReaderLegalMetadata = await request(`/documents/${legalDocDocument.document.id}`, {
+      cookie: taskReaderCookie
+    });
+    assert.equal(taskReaderLegalMetadata.status, 403);
+    const taskReaderLegalDownload = await request(`/documents/${legalDocDocument.document.id}/file`, {
+      cookie: taskReaderCookie
+    });
+    assert.equal(taskReaderLegalDownload.status, 403);
+    const taskReaderDeadlineMetadata = await request(`/documents/${deadlineDocument.document.id}`, {
+      cookie: taskReaderCookie
+    });
+    assert.equal(taskReaderDeadlineMetadata.status, 403);
+
+    const projectMetadata = await request(`/documents/${projectDocument.document.id}`, {
+      cookie: projectReaderCookie
+    });
+    assert.equal(projectMetadata.status, 200);
+    const projectDownload = await request(`/documents/${projectDocument.document.id}/file`, {
+      cookie: projectReaderCookie
+    });
+    assert.equal(projectDownload.status, 200);
+    const projectReaderLegalMetadata = await request(`/documents/${legalDocDocument.document.id}`, {
+      cookie: projectReaderCookie
+    });
+    assert.equal(projectReaderLegalMetadata.status, 403);
+
+    const legalDocMetadata = await request(`/documents/${legalDocDocument.document.id}`, {
+      cookie: legalDocReaderCookie
+    });
+    assert.equal(legalDocMetadata.status, 200);
+    const legalDocDownload = await request(`/documents/${legalDocDocument.document.id}/file`, {
+      cookie: legalDocReaderCookie
+    });
+    assert.equal(legalDocDownload.status, 200);
+    const legalDocReaderProjectMetadata = await request(`/documents/${projectDocument.document.id}`, {
+      cookie: legalDocReaderCookie
+    });
+    assert.equal(legalDocReaderProjectMetadata.status, 403);
+  });
+
+  it("requires owner write permission for upload and rejects unsupported owner types", async () => {
+    await createRole("PROJECT_DOC_VIEWER", ["projects.view"]);
+    await createRole("PROJECT_DOC_EDITOR", ["projects.view", "projects.edit"]);
+
+    const viewer = await createUser("docs-project-viewer@example.com", "ValidPassword1!", {
+      role: "PROJECT_DOC_VIEWER"
+    });
+    const editor = await createUser("docs-project-editor@example.com", "ValidPassword1!", {
+      role: "PROJECT_DOC_EDITOR"
+    });
+
+    const viewerCookie = await login(viewer.email, "ValidPassword1!");
+    const editorCookie = await login(editor.email, "ValidPassword1!");
+
+    const viewerUpload = await uploadDocument(viewerCookie, "PROJECT", "project-write-1", "blocked.pdf");
+    assert.equal(viewerUpload.status, 403);
+
+    const editorUpload = await uploadDocument(editorCookie, "PROJECT", "project-write-1", "allowed.pdf");
+    assert.equal(editorUpload.status, 201);
+
+    const unsupportedUpload = await uploadDocument(editorCookie, "UNKNOWN", "project-write-1", "unknown.pdf");
+    assert.equal(unsupportedUpload.status, 400);
+  });
+
+  it("admin can access all supported document owner domains", async () => {
+    const admin = await createUser("docs-admin-all@example.com", "ValidPassword1!", {
+      role: "ADMIN"
+    });
+    const adminCookie = await login(admin.email, "ValidPassword1!");
+
+    for (const ownerType of ["PROJECT", "LEGAL_DOC", "OBLIGATION", "DEADLINE", "TASK_EVIDENCE"]) {
+      const uploadResponse = await uploadDocument(adminCookie, ownerType, `owner-${ownerType}`, `${ownerType}.pdf`);
+      assert.equal(uploadResponse.status, 201);
+      const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+
+      const metadataResponse = await request(`/documents/${uploadPayload.document.id}`, {
+        cookie: adminCookie
+      });
+      assert.equal(metadataResponse.status, 200);
+
+      const downloadResponse = await request(`/documents/${uploadPayload.document.id}/file`, {
+        cookie: adminCookie
+      });
+      assert.equal(downloadResponse.status, 200);
+    }
   });
 
   it("external users are forbidden from document endpoints", async () => {

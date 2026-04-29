@@ -126,7 +126,30 @@ const legacyInternalPermissions: PermissionKey[] = [
 
 const adminPermissions: PermissionKey[] = [...PERMISSION_KEYS];
 
-const externalPermissions: PermissionKey[] = ["dashboard.view", "tasks.view"];
+const externalPermissions: PermissionKey[] = ["dashboard.view"];
+
+const documentOwnerPermissions = {
+  PROJECT: {
+    read: "projects.view",
+    write: "projects.edit"
+  },
+  LEGAL_DOC: {
+    read: "legalDocs.view",
+    write: "legalDocs.edit"
+  },
+  OBLIGATION: {
+    read: "obligations.view",
+    write: "obligations.edit"
+  },
+  DEADLINE: {
+    read: "deadlines.view",
+    write: "deadlines.edit"
+  },
+  TASK_EVIDENCE: {
+    read: "tasks.view",
+    write: "tasks.edit"
+  }
+} as const satisfies Record<string, { read: PermissionKey; write: PermissionKey }>;
 
 export const ROLE_CATALOG: RoleCatalogEntry[] = [
   {
@@ -250,6 +273,10 @@ export function resolvePermissionKeys(args: {
   hasStoredPermissionKeys?: boolean;
   useLegacyInternalFallback?: boolean;
 }) {
+  if (String(args.userType ?? "").trim().toUpperCase() === "EXTERNAL") {
+    return getDefaultPermissionKeys(args.roleKey, args.userType);
+  }
+
   const hasStoredPermissionKeys = args.hasStoredPermissionKeys ?? args.storedPermissionKeys !== undefined;
   if (hasStoredPermissionKeys) {
     return normalizeRolePermissionKeys(parsePermissionKeys(args.storedPermissionKeys));
@@ -257,6 +284,20 @@ export function resolvePermissionKeys(args: {
   return getDefaultPermissionKeys(args.roleKey, args.userType, {
     useLegacyInternalFallback: args.useLegacyInternalFallback
   });
+}
+
+function normalizeDocumentOwnerType(ownerType: string | null | undefined) {
+  return String(ownerType ?? "").trim().toUpperCase();
+}
+
+export function getDocumentOwnerReadPermission(ownerType: string | null | undefined): PermissionKey | null {
+  const entry = documentOwnerPermissions[normalizeDocumentOwnerType(ownerType) as keyof typeof documentOwnerPermissions];
+  return entry?.read ?? null;
+}
+
+export function getDocumentOwnerWritePermission(ownerType: string | null | undefined): PermissionKey | null {
+  const entry = documentOwnerPermissions[normalizeDocumentOwnerType(ownerType) as keyof typeof documentOwnerPermissions];
+  return entry?.write ?? null;
 }
 
 export function hasPermission(permissionKeys: Iterable<string>, key: PermissionKey) {

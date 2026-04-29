@@ -40,6 +40,8 @@ import { createEntraStateStore, extractEmailFromClaims, isAllowedEmailDomain } f
 import {
   canUseUserLookup,
   describePermission,
+  getDocumentOwnerReadPermission,
+  getDocumentOwnerWritePermission,
   getEditablePermissionCatalog,
   getEditableRolePermissionKeys,
   getDefaultPermissionKeys,
@@ -1377,27 +1379,7 @@ function getRolePermissionValidationMessage(permissionKeys: PermissionKey[]) {
   return null;
 }
 
-function canAccessDocuments(permissionKeys: Iterable<string>) {
-  return (
-    hasPermission(permissionKeys, "projects.view") ||
-    hasPermission(permissionKeys, "legalDocs.view") ||
-    hasPermission(permissionKeys, "obligations.view") ||
-    hasPermission(permissionKeys, "deadlines.view") ||
-    hasPermission(permissionKeys, "tasks.view")
-  );
-}
-
-function canManageDocuments(permissionKeys: Iterable<string>) {
-  return (
-    hasPermission(permissionKeys, "projects.edit") ||
-    hasPermission(permissionKeys, "legalDocs.edit") ||
-    hasPermission(permissionKeys, "obligations.edit") ||
-    hasPermission(permissionKeys, "deadlines.edit") ||
-    hasPermission(permissionKeys, "tasks.edit")
-  );
-}
-
-function assertCanAccessDocuments(req: AuthenticatedRequest, res: Response): req is AuthenticatedRequest & {
+function assertCanUseDocumentEndpoints(req: AuthenticatedRequest, res: Response): req is AuthenticatedRequest & {
   authUser: PrismaUser;
   authSession: Session;
 } {
@@ -1413,9 +1395,12 @@ function assertCanAccessDocuments(req: AuthenticatedRequest, res: Response): req
     return false;
   }
 
-  const permissionKeys = req.authPermissionKeys ?? [];
+  return true;
+}
 
-  if (!canAccessDocuments(permissionKeys)) {
+function assertCanReadDocumentOwner(req: AuthenticatedRequest, res: Response, ownerType: string) {
+  const permission = getDocumentOwnerReadPermission(ownerType);
+  if (!permission || !hasPermission(req.authPermissionKeys ?? [], permission)) {
     res.status(403).json({
       ok: false,
       message: "Forbidden."
@@ -1423,7 +1408,12 @@ function assertCanAccessDocuments(req: AuthenticatedRequest, res: Response): req
     return false;
   }
 
-  if (!SAFE_HTTP_METHODS.includes(req.method as (typeof SAFE_HTTP_METHODS)[number]) && !canManageDocuments(permissionKeys)) {
+  return true;
+}
+
+function assertCanWriteDocumentOwner(req: AuthenticatedRequest, res: Response, ownerType: string) {
+  const permission = getDocumentOwnerWritePermission(ownerType);
+  if (!permission || !hasPermission(req.authPermissionKeys ?? [], permission)) {
     res.status(403).json({
       ok: false,
       message: "Forbidden."
@@ -2039,7 +2029,7 @@ export function createApp(config: AppConfig = loadConfig()) {
     express.raw({ type: "multipart/form-data", limit: config.documentsMaxUploadBytes }),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
-        if (!assertCanAccessDocuments(req, res)) {
+        if (!assertCanUseDocumentEndpoints(req, res)) {
           return;
         }
 
@@ -2058,6 +2048,10 @@ export function createApp(config: AppConfig = loadConfig()) {
         const ownerId = parsed.fields.ownerId?.trim() ?? "";
         if (!isDocumentOwnerType(ownerTypeRaw) || !ownerId) {
           res.status(400).json({ ok: false, message: "ownerType and ownerId are required." });
+          return;
+        }
+
+        if (!assertCanWriteDocumentOwner(req, res, ownerTypeRaw)) {
           return;
         }
 
@@ -2149,7 +2143,7 @@ export function createApp(config: AppConfig = loadConfig()) {
 
   router.get("/documents", authMiddleware, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
-      if (!assertCanAccessDocuments(req, res)) {
+      if (!assertCanUseDocumentEndpoints(req, res)) {
         return;
       }
 
@@ -2157,6 +2151,10 @@ export function createApp(config: AppConfig = loadConfig()) {
       const ownerId = toOptionalTrimmedString(req.query.ownerId) ?? "";
       if (!isDocumentOwnerType(ownerTypeRaw) || !ownerId) {
         res.status(400).json({ ok: false, message: "ownerType and ownerId are required." });
+        return;
+      }
+
+      if (!assertCanReadDocumentOwner(req, res, ownerTypeRaw)) {
         return;
       }
 
@@ -2181,7 +2179,7 @@ export function createApp(config: AppConfig = loadConfig()) {
 
   router.get("/documents/:id", authMiddleware, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
-      if (!assertCanAccessDocuments(req, res)) {
+      if (!assertCanUseDocumentEndpoints(req, res)) {
         return;
       }
 
@@ -2195,6 +2193,10 @@ export function createApp(config: AppConfig = loadConfig()) {
 
       if (!document) {
         res.status(404).json({ ok: false, message: "Document not found." });
+        return;
+      }
+
+      if (!assertCanReadDocumentOwner(req, res, document.ownerType)) {
         return;
       }
 
@@ -2208,7 +2210,7 @@ export function createApp(config: AppConfig = loadConfig()) {
 
   router.get("/documents/:id/file", authMiddleware, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
-      if (!assertCanAccessDocuments(req, res)) {
+      if (!assertCanUseDocumentEndpoints(req, res)) {
         return;
       }
 
@@ -2222,6 +2224,10 @@ export function createApp(config: AppConfig = loadConfig()) {
 
       if (!document) {
         res.status(404).json({ ok: false, message: "Document not found." });
+        return;
+      }
+
+      if (!assertCanReadDocumentOwner(req, res, document.ownerType)) {
         return;
       }
 
@@ -4774,6 +4780,10 @@ export function createApp(config: AppConfig = loadConfig()) {
         const passwordMode = requestedPasswordMode ?? (initialPassword ? "manual" : "link");
         if ((passwordMode === "manual" && !initialPassword) || (passwordMode === "link" && initialPassword)) {
           res.status(400).json({ ok: false, message: "Invalid passwordMode for the provided input." });
+          return;
+        }
+        if (roleAndType.type === "EXTERNAL" && passwordMode === "link" && !securitySettings.allowExternalUsers) {
+          res.status(400).json({ ok: false, message: "External reset links are disabled while external access is disabled." });
           return;
         }
 

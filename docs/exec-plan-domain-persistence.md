@@ -15,6 +15,16 @@
 - Kein sofortiges Entfernen aller `localStorage`-Nutzung; nur die Domänen-Keys und Snapshot-Mechanik werden phasenweise zurückgebaut.
 - Keine produktive Azure-Umstellung vor erfolgreichem lokalen Abschluss jeder einzelnen Phase.
 
+## 2aa. Erweiterungslauf 2026-04-29: Projekt-Auflagen und externe Durchführung
+- Ziel dieses Laufs ist keine neue Persistenzphase, sondern die Erweiterung der bereits serverseitig migrierten Auflagen-Domäne.
+- Projektzugehörige Auflagen werden weiterhin über `Project -> LegalDocument -> Obligation` abgeleitet; es wird keine konkurrierende `projectId` an `Obligation` eingeführt.
+- Wiederkehrende Auflagen erhalten ein optionales date-only Feld `recurrenceEndDate`; `null`/leer bedeutet unbefristet.
+- Auflagen können optional eine aktive externe Firma und einen aktiven externen Portalbenutzer als Durchführung referenzieren; interne Owner/Deputy bleiben interne Compliance-Verantwortliche.
+- Externe Projektbeteiligte dürfen bestehende Freitextdaten behalten, neue Einträge können aber echte externe Portalbenutzer referenzieren oder mit `users.manage` sicher per Reset-Link erzeugen.
+- Externe Domain-Zugriffe bleiben in diesem Lauf fail-closed. Es werden keine allgemeinen Projekt-, Aufgaben-, Dokument-, User- oder Stammdatenlisten für externe Nutzer geöffnet.
+- Legacy Bulk-/Snapshot-/Recovery-Pfade bleiben über den bestehenden Guard gesperrt; Import/Reset wird nicht reaktiviert.
+- Keine Azure-Arbeit in diesem Lauf.
+
 ## 2a. Verifizierter Stand 2026-04-15
 - Phase 1 ist im aktuellen Code bereits serverseitig umgesetzt:
 - `apps/api/src/routes/scopes.ts`

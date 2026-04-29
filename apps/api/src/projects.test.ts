@@ -40,14 +40,23 @@ function extractSessionCookie(setCookieHeader: string | null) {
   return match ? match[0] : "";
 }
 
-async function createUser(args: { email: string; password: string; role?: string }) {
+async function createUser(args: {
+  email: string;
+  password: string;
+  role?: string;
+  type?: "INTERNAL" | "EXTERNAL";
+  externalOrgId?: string;
+  isArchived?: boolean;
+}) {
   return prisma.user.create({
     data: {
       firstName: "Project",
       lastName: "Tester",
       email: args.email,
       role: args.role ?? "USER",
-      type: "INTERNAL",
+      type: args.type ?? "INTERNAL",
+      externalOrgId: args.externalOrgId,
+      isArchived: args.isArchived ?? false,
       passwordHash: await hashPassword(args.password)
     }
   });
@@ -139,6 +148,7 @@ describe("Projects submission type", () => {
     await prisma.site.deleteMany();
     await prisma.company.deleteMany();
     await prisma.user.deleteMany();
+    await prisma.externalOrganization.deleteMany();
   });
 
   it("keeps submissionType unset when not provided", async () => {
@@ -227,6 +237,240 @@ describe("Projects submission type", () => {
       }
     });
     assert.equal(storedUpdated.submissionType, "UVP_UVE");
+  });
+
+  it("accepts active internal users for project owner and internal participants", async () => {
+    const admin = await createUser({
+      email: "project-internal-owner-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const owner = await createUser({
+      email: "project-internal-owner@example.com",
+      password: "ValidPassword1!"
+    });
+    const participant = await createUser({
+      email: "project-internal-participant@example.com",
+      password: "ValidPassword1!"
+    });
+    const company = await createCompany("Internal Project Roles Company");
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const response = await request("/projects", {
+      method: "POST",
+      cookie,
+      body: {
+        title: "Projekt mit internen Rollen",
+        companyId: company.id,
+        ownerUserId: owner.id,
+        internalParticipants: [{ userId: participant.id }],
+        participantUserIds: [participant.id]
+      }
+    });
+
+    assert.equal(response.status, 201);
+    const payload = (await response.json()) as {
+      project: {
+        ownerUserId?: string;
+        participantUserIds: string[];
+      };
+    };
+    assert.equal(payload.project.ownerUserId, owner.id);
+    assert.deepEqual(payload.project.participantUserIds, [participant.id]);
+  });
+
+  it("rejects an external user as project owner", async () => {
+    const admin = await createUser({
+      email: "project-external-owner-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const externalOrg = await prisma.externalOrganization.create({
+      data: {
+        name: "External Owner Org",
+        type: "SERVICE_PROVIDER"
+      }
+    });
+    const externalUser = await createUser({
+      email: "project-external-owner@example.com",
+      password: "ValidPassword1!",
+      role: "EXTERNAL",
+      type: "EXTERNAL",
+      externalOrgId: externalOrg.id
+    });
+    const company = await createCompany("External Owner Company");
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const response = await request("/projects", {
+      method: "POST",
+      cookie,
+      body: {
+        title: "Projekt mit externem Owner",
+        companyId: company.id,
+        ownerUserId: externalUser.id
+      }
+    });
+
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { message: string };
+    assert.equal(payload.message, "Owner user must be an active internal user.");
+  });
+
+  it("rejects an external user as project deputy", async () => {
+    const admin = await createUser({
+      email: "project-external-deputy-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const externalOrg = await prisma.externalOrganization.create({
+      data: {
+        name: "External Deputy Org",
+        type: "SERVICE_PROVIDER"
+      }
+    });
+    const externalUser = await createUser({
+      email: "project-external-deputy@example.com",
+      password: "ValidPassword1!",
+      role: "EXTERNAL",
+      type: "EXTERNAL",
+      externalOrgId: externalOrg.id
+    });
+    const company = await createCompany("External Deputy Company");
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const response = await request("/projects", {
+      method: "POST",
+      cookie,
+      body: {
+        title: "Projekt mit externer Stellvertretung",
+        companyId: company.id,
+        deputyUserId: externalUser.id
+      }
+    });
+
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { message: string };
+    assert.equal(payload.message, "Deputy user must be an active internal user.");
+  });
+
+  it("rejects archived users as project owner", async () => {
+    const admin = await createUser({
+      email: "project-archived-owner-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const archivedOwner = await createUser({
+      email: "project-archived-owner@example.com",
+      password: "ValidPassword1!",
+      isArchived: true
+    });
+    const company = await createCompany("Archived Owner Company");
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const response = await request("/projects", {
+      method: "POST",
+      cookie,
+      body: {
+        title: "Projekt mit archiviertem Owner",
+        companyId: company.id,
+        ownerUserId: archivedOwner.id
+      }
+    });
+
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { message: string };
+    assert.equal(payload.message, "Owner user must be an active internal user.");
+  });
+
+  it("rejects external users in internal project participants", async () => {
+    const admin = await createUser({
+      email: "project-external-participant-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const externalOrg = await prisma.externalOrganization.create({
+      data: {
+        name: "External Internal Participant Org",
+        type: "SERVICE_PROVIDER"
+      }
+    });
+    const externalUser = await createUser({
+      email: "project-external-internal-participant@example.com",
+      password: "ValidPassword1!",
+      role: "EXTERNAL",
+      type: "EXTERNAL",
+      externalOrgId: externalOrg.id
+    });
+    const company = await createCompany("External Internal Participant Company");
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const response = await request("/projects", {
+      method: "POST",
+      cookie,
+      body: {
+        title: "Projekt mit externem internem Teilnehmer",
+        companyId: company.id,
+        internalParticipants: [{ userId: externalUser.id }],
+        participantUserIds: [externalUser.id]
+      }
+    });
+
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { message: string };
+    assert.equal(payload.message, "Internal project participants must be active internal users.");
+  });
+
+  it("accepts external users through externalParticipants", async () => {
+    const admin = await createUser({
+      email: "project-external-participants-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const externalOrg = await prisma.externalOrganization.create({
+      data: {
+        name: "External Participants Org",
+        type: "SERVICE_PROVIDER"
+      }
+    });
+    const externalUser = await createUser({
+      email: "project-external-participant@example.com",
+      password: "ValidPassword1!",
+      role: "EXTERNAL",
+      type: "EXTERNAL",
+      externalOrgId: externalOrg.id
+    });
+    const company = await createCompany("External Participants Company");
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const response = await request("/projects", {
+      method: "POST",
+      cookie,
+      body: {
+        title: "Projekt mit externen Teilnehmern",
+        companyId: company.id,
+        externalParticipants: [
+          {
+            id: "ep-test-1",
+            type: "SERVICE_PROVIDER",
+            externalUserId: externalUser.id,
+            name: "Externer Teilnehmer",
+            isArchived: false
+          }
+        ]
+      }
+    });
+
+    assert.equal(response.status, 201);
+    const payload = (await response.json()) as {
+      project: {
+        externalParticipants: Array<{
+          externalOrgId?: string;
+          externalUserId?: string;
+        }>;
+      };
+    };
+    assert.equal(payload.project.externalParticipants[0]?.externalUserId, externalUser.id);
+    assert.equal(payload.project.externalParticipants[0]?.externalOrgId, externalOrg.id);
   });
 
   it("rejects invalid submissionType values", async () => {

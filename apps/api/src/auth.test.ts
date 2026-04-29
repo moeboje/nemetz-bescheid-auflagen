@@ -248,6 +248,40 @@ describe("Auth API", () => {
     assert.equal(mePayload.user.email, "login-success@example.com");
   });
 
+  it("external default permissions do not include task access", async () => {
+    await prisma.role.create({
+      data: {
+        key: "EXTERNAL",
+        labelDe: "Extern",
+        isSystem: true,
+        permissionsJson: ["dashboard.view", "tasks.view"]
+      }
+    });
+    const user = await createUser("external-permissions@example.com", "ValidPassword1!");
+    await makeUserExternal(user.id);
+
+    const loginResponse = await request("/auth/login", {
+      method: "POST",
+      body: {
+        email: "external-permissions@example.com",
+        password: "ValidPassword1!"
+      }
+    });
+
+    assert.equal(loginResponse.status, 200);
+    const sessionCookie = extractSessionCookie(loginResponse.headers.get("set-cookie"));
+    assert.ok(sessionCookie, "Expected session cookie");
+
+    const meResponse = await request("/auth/me", {
+      cookie: sessionCookie
+    });
+
+    assert.equal(meResponse.status, 200);
+    const mePayload = (await meResponse.json()) as { user: { effectivePermissions: string[] } };
+    assert.equal(mePayload.user.effectivePermissions.includes("dashboard.view"), true);
+    assert.equal(mePayload.user.effectivePermissions.includes("tasks.view"), false);
+  });
+
   it("preserves legacy internal permissions for custom roles without permissionsJson", async () => {
     await prisma.role.create({
       data: {
@@ -467,10 +501,12 @@ describe("Auth API", () => {
 
   it("locks account after repeated failed logins", async () => {
     await createUser("lockout@example.com", "ValidPassword1!");
+    const lockoutIp = "127.0.0.240";
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const response = await request("/auth/login", {
         method: "POST",
+        ip: lockoutIp,
         body: {
           email: "lockout@example.com",
           password: "wrong-password"
@@ -481,6 +517,7 @@ describe("Auth API", () => {
 
     const lockedResponse = await request("/auth/login", {
       method: "POST",
+      ip: lockoutIp,
       body: {
         email: "lockout@example.com",
         password: "ValidPassword1!"
