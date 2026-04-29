@@ -402,7 +402,7 @@ export default function TasksPage() {
           if (!completionTaskId) {
             return;
           }
-          markTaskDoneWithEvidence(completionTaskId, input);
+          return markTaskDoneWithEvidence(completionTaskId, input);
         }}
       />
 

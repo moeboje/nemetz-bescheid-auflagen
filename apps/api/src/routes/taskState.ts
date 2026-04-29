@@ -16,6 +16,12 @@ type AttachmentStorageDto = "indexeddb" | "none";
 type EvidenceOutcomeDto = "OK" | "NOK" | "FOLLOW_UP";
 type TaskStateStatusDto = "OPEN" | "IN_PROGRESS" | "DONE";
 
+type AttachmentRequirementsDto = {
+  requirePhoto: boolean;
+  requireDocument: boolean;
+  requireReport: boolean;
+};
+
 type AttachmentMetaDto = {
   id: string;
   kind: AttachmentKindDto;
@@ -46,6 +52,8 @@ type TaskStateEntryDto = {
 };
 
 type TaskStateMapDto = Record<string, TaskStateEntryDto>;
+
+type AttachmentKindCountsDto = Record<AttachmentKindDto, number>;
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -89,6 +97,22 @@ function toJsonInput(value: unknown): Prisma.InputJsonValue {
 
 function buildObligationTaskInstanceId(obligationId: string, dueDateISO: string) {
   return `obligation:${obligationId}:${dueDateISO}`;
+}
+
+function parseObligationTaskInstanceId(taskInstanceId: string) {
+  if (!taskInstanceId.startsWith("obligation:")) {
+    return null;
+  }
+
+  const parts = taskInstanceId.split(":");
+  if (parts.length !== 3 || !parts[1] || !parts[2]) {
+    return null;
+  }
+
+  return {
+    obligationId: parts[1],
+    dueDateISO: parts[2]
+  };
 }
 
 function parseISODate(value: string) {
@@ -184,6 +208,139 @@ function normalizeAttachmentMeta(value: unknown): AttachmentMetaDto | null {
     addedAt: toOptionalTrimmedString(row.addedAt) ?? nowStamp().slice(0, 10),
     storage: row.storage === "indexeddb" ? "indexeddb" : "none"
   };
+}
+
+function normalizeAttachmentRequirements(value: unknown): AttachmentRequirementsDto {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      requirePhoto: false,
+      requireDocument: false,
+      requireReport: false
+    };
+  }
+
+  const row = value as Partial<AttachmentRequirementsDto>;
+  return {
+    requirePhoto: Boolean(row.requirePhoto),
+    requireDocument: Boolean(row.requireDocument),
+    requireReport: Boolean(row.requireReport)
+  };
+}
+
+function createEmptyKindCounts(): AttachmentKindCountsDto {
+  return {
+    PHOTO: 0,
+    DOCUMENT: 0,
+    REPORT: 0
+  };
+}
+
+function consumeMatchingAttachment(
+  remaining: AttachmentMetaDto[],
+  predicate: (attachment: AttachmentMetaDto) => boolean
+) {
+  const index = remaining.findIndex(predicate);
+  if (index < 0) {
+    return false;
+  }
+  remaining.splice(index, 1);
+  return true;
+}
+
+function countAttachmentsForRequirements(
+  requirements: AttachmentRequirementsDto | undefined,
+  attachments: AttachmentMetaDto[]
+): AttachmentKindCountsDto {
+  const counts = createEmptyKindCounts();
+  if (!requirements) {
+    return counts;
+  }
+
+  const remaining = [...attachments];
+
+  if (requirements.requirePhoto && consumeMatchingAttachment(remaining, (item) => item.kind === "PHOTO")) {
+    counts.PHOTO = 1;
+  }
+
+  if (requirements.requireReport && consumeMatchingAttachment(remaining, (item) => item.kind === "REPORT")) {
+    counts.REPORT = 1;
+  }
+
+  if (
+    requirements.requireDocument &&
+    (consumeMatchingAttachment(remaining, (item) => item.kind === "DOCUMENT") ||
+      consumeMatchingAttachment(remaining, (item) => item.kind === "REPORT"))
+  ) {
+    counts.DOCUMENT = 1;
+  }
+
+  return counts;
+}
+
+function getMissingRequiredAttachmentKinds(
+  requirements: AttachmentRequirementsDto | undefined,
+  attachments: AttachmentMetaDto[]
+): AttachmentKindDto[] {
+  if (!requirements) {
+    return [];
+  }
+
+  const counts = countAttachmentsForRequirements(requirements, attachments);
+  const missing: AttachmentKindDto[] = [];
+
+  if (requirements.requirePhoto && counts.PHOTO < 1) {
+    missing.push("PHOTO");
+  }
+  if (requirements.requireDocument && counts.DOCUMENT < 1) {
+    missing.push("DOCUMENT");
+  }
+  if (requirements.requireReport && counts.REPORT < 1) {
+    missing.push("REPORT");
+  }
+
+  return missing;
+}
+
+function flattenEvidenceAttachments(evidence: EvidenceDto[] | undefined) {
+  return (evidence ?? []).flatMap((entry) => entry.attachments ?? []);
+}
+
+async function getObligationRequirementsForTaskInstance(
+  prisma: DbClient,
+  taskInstanceId: string
+): Promise<AttachmentRequirementsDto | undefined> {
+  const parsed = parseObligationTaskInstanceId(taskInstanceId);
+  if (!parsed) {
+    return undefined;
+  }
+
+  const obligation = await prisma.obligation.findUnique({
+    where: {
+      id: parsed.obligationId
+    },
+    select: {
+      evidenceRequirements: true
+    }
+  });
+
+  return obligation ? normalizeAttachmentRequirements(obligation.evidenceRequirements) : undefined;
+}
+
+async function getMissingTaskCompletionRequirements(
+  prisma: DbClient,
+  taskInstanceId: string,
+  attachments: AttachmentMetaDto[]
+) {
+  const requirements = await getObligationRequirementsForTaskInstance(prisma, taskInstanceId);
+  return getMissingRequiredAttachmentKinds(requirements, attachments);
+}
+
+function sendMissingEvidenceRequirementsResponse(res: Response, missingAttachmentKinds: AttachmentKindDto[]) {
+  res.status(400).json({
+    ok: false,
+    message: "Missing required evidence attachments.",
+    missingAttachmentKinds
+  });
 }
 
 function normalizeEvidenceOutcome(value: unknown): EvidenceOutcomeDto | undefined {
@@ -523,6 +680,18 @@ export function createTaskStateRouter(prisma: PrismaClient) {
 
       const existing = await findTaskStateEntry(prisma, taskInstanceId);
       const previous = existing ? toTaskStateEntryDto(existing) : undefined;
+      if (req.body.status === "DONE") {
+        const missingAttachmentKinds = await getMissingTaskCompletionRequirements(
+          prisma,
+          taskInstanceId,
+          flattenEvidenceAttachments(previous?.evidence)
+        );
+        if (missingAttachmentKinds.length) {
+          sendMissingEvidenceRequirementsResponse(res, missingAttachmentKinds);
+          return;
+        }
+      }
+
       const timestamp = nowStamp();
       const completedByLabel = req.body.status === "DONE" ? await getUserDisplayLabel(prisma, user.id) : undefined;
       const nextEntry: TaskStateEntryDto = {
@@ -584,6 +753,16 @@ export function createTaskStateRouter(prisma: PrismaClient) {
         createdByUserId: user.id,
         createdByLabel
       };
+      const missingAttachmentKinds = await getMissingTaskCompletionRequirements(
+        prisma,
+        taskInstanceId,
+        [...evidenceEntry.attachments, ...flattenEvidenceAttachments(previous?.evidence)]
+      );
+      if (missingAttachmentKinds.length) {
+        sendMissingEvidenceRequirementsResponse(res, missingAttachmentKinds);
+        return;
+      }
+
       const nextEntry: TaskStateEntryDto = {
         status: "DONE",
         completedAt: previous?.completedAt ?? timestamp,
@@ -643,6 +822,16 @@ export function createTaskStateRouter(prisma: PrismaClient) {
         createdByUserId: user.id,
         createdByLabel
       };
+      const missingAttachmentKinds = await getMissingTaskCompletionRequirements(
+        prisma,
+        taskInstanceId,
+        [...evidenceEntry.attachments, ...flattenEvidenceAttachments(previous?.evidence)]
+      );
+      if (missingAttachmentKinds.length) {
+        sendMissingEvidenceRequirementsResponse(res, missingAttachmentKinds);
+        return;
+      }
+
       const nextEntry: TaskStateEntryDto = {
         status: "DONE",
         completedAt: previous?.completedAt ?? timestamp,

@@ -25,6 +25,14 @@
 - Legacy Bulk-/Snapshot-/Recovery-Pfade bleiben über den bestehenden Guard gesperrt; Import/Reset wird nicht reaktiviert.
 - Keine Azure-Arbeit in diesem Lauf.
 
+## 2ab. Hotfix 2026-04-29: Pflichtnachweis Dokument bei Task-Abschluss
+- Ziel ist die Korrektur der Evidence-Requirement-Logik im bestehenden Aufgabenabschluss ohne UI-Redesign oder Schemaänderung.
+- Root Cause: PDFs werden fachlich als `REPORT`/`Pruefdokument` klassifiziert, `requireDocument` zählte bisher aber nur `DOCUMENT`.
+- Neue Regel: `REPORT` ist ein gültiger Nachweis für `requireDocument`; `requireReport` bleibt spezifisch. Ein einzelnes Attachment erfüllt nicht gleichzeitig zwei aktive Anforderungen.
+- Der Bereich `DocumentsPanel` bleibt eine separate serverseitige Dokumentablage und zählt im Abschlussdialog nicht als Pflichtnachweis.
+- Frontend und API verwenden dieselbe Requirement-Semantik; obligation-basierte Task-Abschlüsse werden serverseitig gegen `Obligation.evidenceRequirements` validiert.
+- Lokale Tests: reine Unit-Tests für Attachment-Requirement-Matching, API-Integrationstests für Task-State-Completion, plus API-/Web-Build.
+
 ## 2a. Verifizierter Stand 2026-04-15
 - Phase 1 ist im aktuellen Code bereits serverseitig umgesetzt:
 - `apps/api/src/routes/scopes.ts`

@@ -882,6 +882,7 @@
   "tasks.complete.outcome": "Ergebnis",
   "tasks.complete.note": "Kommentar",
   "tasks.complete.modal.title": "Erledigung dokumentieren",
+  "tasks.complete.saveError": "Aufgabe konnte nicht abgeschlossen werden. Bitte pruefen und erneut versuchen.",
   "tasks.evidence.modal.title": "Nachweise ansehen",
   "tasks.actions.viewEvidence": "Nachweise",
   "tasks.action.viewEvidence": "Nachweise",

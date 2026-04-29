@@ -19,7 +19,7 @@ type TaskCompleteModalProps = {
   open: boolean;
   task?: Task;
   onClose: () => void;
-  onSaved: (input: TaskCompleteInput) => void;
+  onSaved: (input: TaskCompleteInput) => void | Promise<void>;
 };
 
 function normalizeOutcome(value: string): EvidenceOutcome | undefined {
@@ -39,6 +39,8 @@ export default function TaskCompleteModal({
   const [outcome, setOutcome] = useState<string>("OK");
   const [note, setNote] = useState("");
   const [attachments, setAttachments] = useState<AttachmentMeta[]>([]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   useEffect(() => {
     if (!open) {
@@ -47,6 +49,8 @@ export default function TaskCompleteModal({
     setOutcome("OK");
     setNote("");
     setAttachments([]);
+    setIsSaving(false);
+    setSaveError("");
   }, [open, task?.id]);
 
   const obligationRequirements = useMemo(() => {
@@ -67,18 +71,26 @@ export default function TaskCompleteModal({
     [validation.errors]
   );
 
-  const saveDisabled = !task || (task.type === "OBLIGATION" && !validation.ok);
+  const saveDisabled = isSaving || !task || (task.type === "OBLIGATION" && !validation.ok);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!task || (task.type === "OBLIGATION" && !validation.ok)) {
       return;
     }
-    onSaved({
-      outcome: normalizeOutcome(outcome),
-      note: note.trim() || undefined,
-      attachments
-    });
-    onClose();
+    setIsSaving(true);
+    setSaveError("");
+    try {
+      await onSaved({
+        outcome: normalizeOutcome(outcome),
+        note: note.trim() || undefined,
+        attachments
+      });
+      onClose();
+    } catch {
+      setSaveError(t("tasks.complete.saveError"));
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -134,6 +146,7 @@ export default function TaskCompleteModal({
             mode="edit"
           />
         </div>
+        {saveError ? <p className="validationText">{saveError}</p> : null}
         {task ? (
           <DocumentsPanel ownerType="TASK_EVIDENCE" ownerId={task.id} titleKey="documents.title" />
         ) : null}

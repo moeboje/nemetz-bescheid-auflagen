@@ -72,6 +72,77 @@ export function countAttachmentsByKind(attachments: AttachmentMeta[]): Attachmen
   );
 }
 
+function createEmptyKindCounts(): AttachmentKindCounts {
+  return {
+    PHOTO: 0,
+    DOCUMENT: 0,
+    REPORT: 0
+  };
+}
+
+function getRequiredAttachmentKindOrder(
+  requirements: AttachmentRequirements | undefined
+): AttachmentKind[] {
+  if (!requirements) {
+    return [];
+  }
+
+  const requiredKinds: AttachmentKind[] = [];
+  if (requirements.requirePhoto) {
+    requiredKinds.push("PHOTO");
+  }
+  if (requirements.requireDocument) {
+    requiredKinds.push("DOCUMENT");
+  }
+  if (requirements.requireReport) {
+    requiredKinds.push("REPORT");
+  }
+  return requiredKinds;
+}
+
+function consumeMatchingAttachment(
+  remaining: AttachmentMeta[],
+  predicate: (attachment: AttachmentMeta) => boolean
+) {
+  const index = remaining.findIndex(predicate);
+  if (index < 0) {
+    return false;
+  }
+  remaining.splice(index, 1);
+  return true;
+}
+
+export function countAttachmentsForRequirements(
+  requirements: AttachmentRequirements | undefined,
+  attachments: AttachmentMeta[]
+): AttachmentKindCounts {
+  const counts = createEmptyKindCounts();
+  const requiredKinds = getRequiredAttachmentKindOrder(requirements);
+  if (!requiredKinds.length) {
+    return counts;
+  }
+
+  const remaining = [...attachments];
+
+  if (requiredKinds.includes("PHOTO") && consumeMatchingAttachment(remaining, (item) => item.kind === "PHOTO")) {
+    counts.PHOTO = 1;
+  }
+
+  if (requiredKinds.includes("REPORT") && consumeMatchingAttachment(remaining, (item) => item.kind === "REPORT")) {
+    counts.REPORT = 1;
+  }
+
+  if (
+    requiredKinds.includes("DOCUMENT") &&
+    (consumeMatchingAttachment(remaining, (item) => item.kind === "DOCUMENT") ||
+      consumeMatchingAttachment(remaining, (item) => item.kind === "REPORT"))
+  ) {
+    counts.DOCUMENT = 1;
+  }
+
+  return counts;
+}
+
 export function getMissingRequiredAttachmentKinds(
   requirements: AttachmentRequirements | undefined,
   attachments: AttachmentMeta[]
@@ -80,7 +151,7 @@ export function getMissingRequiredAttachmentKinds(
     return [];
   }
 
-  const counts = countAttachmentsByKind(attachments);
+  const counts = countAttachmentsForRequirements(requirements, attachments);
   const missing: AttachmentKind[] = [];
 
   if (requirements.requirePhoto && counts.PHOTO < 1) {

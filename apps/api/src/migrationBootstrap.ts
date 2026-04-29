@@ -12,6 +12,7 @@ export type BootstrapMode =
   | "baseline-20260419153000_email_notifications_powerautomate_e1"
   | "baseline-20260420113000_email_notifications_powerautomate_e2_mvp"
   | "baseline-20260422120000_project_status_submission_type"
+  | "baseline-20260429103000_obligation_recurrence_external_execution"
   | "partial";
 
 type TableRow = {
@@ -682,13 +683,10 @@ const schemaCompletionRequirements = {
     "Obligation.criticality",
     "Obligation.scheduleType",
     "Obligation.firstDueDate",
-    "Obligation.recurrenceEndDate",
     "Obligation.intervalUnit",
     "Obligation.intervalValue",
     "Obligation.ownerUserId",
     "Obligation.deputyUserId",
-    "Obligation.externalOrgId",
-    "Obligation.externalUserId",
     "Obligation.origin",
     "Obligation.sourceSuggestionId",
     "Obligation.sourceRunId",
@@ -733,8 +731,6 @@ const schemaCompletionRequirements = {
     index("Obligation_legalDocId_idx", "Obligation", ["legalDocId"]),
     index("Obligation_ownerUserId_idx", "Obligation", ["ownerUserId"]),
     index("Obligation_deputyUserId_idx", "Obligation", ["deputyUserId"]),
-    index("Obligation_externalOrgId_idx", "Obligation", ["externalOrgId"]),
-    index("Obligation_externalUserId_idx", "Obligation", ["externalUserId"]),
     index("Obligation_isArchived_idx", "Obligation", ["isArchived"]),
     index("Deadline_projectId_idx", "Deadline", ["projectId"]),
     index("Deadline_legalDocId_idx", "Deadline", ["legalDocId"]),
@@ -787,18 +783,6 @@ const schemaCompletionRequirements = {
       onUpdate: "CASCADE"
     }),
     foreignKey("Obligation_deputyUserId_fkey", "Obligation", ["deputyUserId"], "User", ["id"], {
-      onDelete: "SET NULL",
-      onUpdate: "CASCADE"
-    }),
-    foreignKey(
-      "Obligation_externalOrgId_fkey",
-      "Obligation",
-      ["externalOrgId"],
-      "ExternalOrganization",
-      ["id"],
-      { onDelete: "SET NULL", onUpdate: "CASCADE" }
-    ),
-    foreignKey("Obligation_externalUserId_fkey", "Obligation", ["externalUserId"], "User", ["id"], {
       onDelete: "SET NULL",
       onUpdate: "CASCADE"
     }),
@@ -1131,6 +1115,33 @@ const projectStatusSubmissionTypeRequirements = {
   indexes: [index("Project_submissionType_idx", "Project", ["submissionType"])]
 } satisfies SchemaRequirements;
 
+const obligationExternalRecurrenceRequirements = {
+  tables: [],
+  columns: [
+    "Obligation.recurrenceEndDate",
+    "Obligation.externalOrgId",
+    "Obligation.externalUserId"
+  ],
+  indexes: [
+    index("Obligation_externalOrgId_idx", "Obligation", ["externalOrgId"]),
+    index("Obligation_externalUserId_idx", "Obligation", ["externalUserId"])
+  ],
+  foreignKeys: [
+    foreignKey(
+      "Obligation_externalOrgId_fkey",
+      "Obligation",
+      ["externalOrgId"],
+      "ExternalOrganization",
+      ["id"],
+      { onDelete: "SET NULL", onUpdate: "CASCADE" }
+    ),
+    foreignKey("Obligation_externalUserId_fkey", "Obligation", ["externalUserId"], "User", ["id"], {
+      onDelete: "SET NULL",
+      onUpdate: "CASCADE"
+    })
+  ]
+} satisfies SchemaRequirements;
+
 function mergeRequirements(...requirements: SchemaRequirements[]): SchemaRequirements {
   return {
     tables: requirements.flatMap((requirement) => requirement.tables),
@@ -1155,18 +1166,28 @@ const schemaCompletionBaselineRequirements = mergeRequirements(
   schemaCompletionRequirements
 );
 
+const projectStatusSubmissionTypeBaselineRequirements = mergeRequirements(
+  schemaCompletionBaselineRequirements,
+  projectChecklistRequirements,
+  adminSecurityRequirements,
+  notificationE1Requirements,
+  notificationE2Requirements,
+  projectStatusSubmissionTypeRequirements
+);
+
 export const baselineStages = [
+  {
+    mode: "baseline-20260429103000_obligation_recurrence_external_execution",
+    introduced: obligationExternalRecurrenceRequirements,
+    requirements: mergeRequirements(
+      projectStatusSubmissionTypeBaselineRequirements,
+      obligationExternalRecurrenceRequirements
+    )
+  },
   {
     mode: "baseline-20260422120000_project_status_submission_type",
     introduced: projectStatusSubmissionTypeRequirements,
-    requirements: mergeRequirements(
-      schemaCompletionBaselineRequirements,
-      projectChecklistRequirements,
-      adminSecurityRequirements,
-      notificationE1Requirements,
-      notificationE2Requirements,
-      projectStatusSubmissionTypeRequirements
-    )
+    requirements: projectStatusSubmissionTypeBaselineRequirements
   },
   {
     mode: "baseline-20260420113000_email_notifications_powerautomate_e2_mvp",

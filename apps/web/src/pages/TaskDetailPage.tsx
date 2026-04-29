@@ -152,7 +152,7 @@ export default function TaskDetailPage() {
         task={task}
         onClose={() => setCompletionModalOpen(false)}
         onSaved={(input) => {
-          markTaskDoneWithEvidence(task.id, input);
+          return markTaskDoneWithEvidence(task.id, input);
         }}
       />
 

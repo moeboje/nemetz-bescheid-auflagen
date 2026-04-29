@@ -187,7 +187,7 @@ export type TasksContextValue = {
   markTaskDoneWithEvidence: (
     taskId: string,
     input: { note?: string; outcome?: EvidenceOutcome; attachments: AttachmentMeta[] }
-  ) => void;
+  ) => Promise<void>;
   reopenTask: (taskId: string) => void;
 };
 
@@ -238,7 +238,7 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
   );
 
   const markTaskDoneWithEvidence = useCallback(
-    (
+    async (
       taskId: string,
       input: { note?: string; outcome?: EvidenceOutcome; attachments: AttachmentMeta[] }
     ) => {
@@ -247,10 +247,10 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
       }
       const deadlineId = parseDeadlineTaskId(taskId);
       if (deadlineId) {
-        markDeadlineDoneWithEvidence(deadlineId, input);
+        await markDeadlineDoneWithEvidence(deadlineId, input);
         return;
       }
-      markObligationDoneWithEvidence(taskId, input);
+      await markObligationDoneWithEvidence(taskId, input);
     },
     [markDeadlineDoneWithEvidence, markObligationDoneWithEvidence, permissions.canViewTasks]
   );

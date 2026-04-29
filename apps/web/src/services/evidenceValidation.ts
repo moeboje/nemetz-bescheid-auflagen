@@ -1,5 +1,5 @@
 import {
-  countAttachmentsByKind,
+  countAttachmentsForRequirements,
   type AttachmentMeta,
   type AttachmentRequirements
 } from "../types/attachments";
@@ -23,7 +23,7 @@ export function validateEvidenceRequirements(
   requirements: AttachmentRequirements | undefined,
   attachments: AttachmentMeta[]
 ): EvidenceValidationResult {
-  const counts = countAttachmentsByKind(attachments ?? []);
+  const counts = countAttachmentsForRequirements(requirements, attachments ?? []);
   const errors: EvidenceValidationErrorKey[] = [];
 
   if (requirements?.requirePhoto && counts.PHOTO === 0) {

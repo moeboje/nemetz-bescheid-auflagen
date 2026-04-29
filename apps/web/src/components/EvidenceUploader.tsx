@@ -3,7 +3,7 @@ import { Badge, Button, Modal, Select } from "@nemetz/ui";
 import { t } from "../i18n";
 import {
   ATTACHMENT_KIND_ORDER,
-  countAttachmentsByKind,
+  countAttachmentsForRequirements,
   createStableId,
   inferAttachmentKind,
   type AttachmentKind,
@@ -83,7 +83,7 @@ export default function EvidenceUploader({
     return ATTACHMENT_KIND_ORDER.filter((kind) => source.includes(kind));
   }, [allowKinds, allowedKinds]);
 
-  const counts = useMemo(() => countAttachmentsByKind(value), [value]);
+  const counts = useMemo(() => countAttachmentsForRequirements(required, value), [required, value]);
   const requiredRows = useMemo(
     () =>
       [
