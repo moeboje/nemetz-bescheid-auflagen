@@ -1,5 +1,15 @@
-import { Prisma, PrismaClient } from "@prisma/client";
 import { loadProjectEnvFile, resolveDatabaseUrl } from "./config.js";
+
+type PrismaDmmf = {
+  dmmf: {
+    datamodel: {
+      models: ReadonlyArray<{
+        name: string;
+        fields: ReadonlyArray<{ name: string }>;
+      }>;
+    };
+  };
+};
 
 const REQUIRED_OBLIGATION_FIELDS = [
   "recurrenceEndDate",
@@ -7,8 +17,8 @@ const REQUIRED_OBLIGATION_FIELDS = [
   "externalUserId"
 ];
 
-function assertPrismaClientFields() {
-  const obligationModel = Prisma.dmmf.datamodel.models.find(
+function assertPrismaClientFields(prismaDmmf: PrismaDmmf) {
+  const obligationModel = prismaDmmf.dmmf.datamodel.models.find(
     (model) => model.name === "Obligation"
   );
   const fieldNames = new Set(obligationModel?.fields.map((field) => field.name) ?? []);
@@ -25,7 +35,9 @@ function assertPrismaClientFields() {
 
 loadProjectEnvFile();
 process.env.DATABASE_URL = resolveDatabaseUrl(process.env);
-assertPrismaClientFields();
+
+const { Prisma, PrismaClient } = await import("@prisma/client");
+assertPrismaClientFields(Prisma);
 
 export const prisma = new PrismaClient();
 

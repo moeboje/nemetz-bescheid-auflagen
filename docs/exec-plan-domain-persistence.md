@@ -33,6 +33,16 @@
 - Frontend und API verwenden dieselbe Requirement-Semantik; obligation-basierte Task-Abschlüsse werden serverseitig gegen `Obligation.evidenceRequirements` validiert.
 - Lokale Tests: reine Unit-Tests für Attachment-Requirement-Matching, API-Integrationstests für Task-State-Completion, plus API-/Web-Build.
 
+## 2ac. Remediation-Fixlauf 2026-04-29 fuer Projekt-Auflagen-Review-Findings
+- Dies ist keine neue Persistenzphase, keine Feature-Phase und keine Azure-Arbeit.
+- Ziel dieses Laufs ist ausschliesslich die minimal-invasive Behebung von drei Review-Findings aus der Projekt-Auflagen-/External-Executor-Erweiterung.
+- Zulaessiger Umfang:
+- `POST /task-state/:taskInstanceId/evidence` bleibt fachlich eine Completion-Aktion und muss deshalb serverseitig `tasks.complete` verlangen; `tasks.edit` allein darf keine Aufgabe auf `DONE` setzen oder per Legacy-Reconcile einschleusen.
+- Der Projekt-Auflagen-Tab darf eine gesetzte `externalOrgId` nicht als `Nicht zugewiesen` anzeigen, wenn nur der ExternalOrg-Lookup nicht geladen ist; ohne Lookup wird ein neutraler Zugewiesen-Hinweis angezeigt.
+- Der Projekt-Auflagen-Tab stuetzt seinen Empty State auf aktive/verfuegbare Rechtsdokumente, damit Projekte mit nur archivierten Rechtsdokumenten eine handlungsleitende Erklaerung erhalten.
+- Nicht-Ziele:
+- keine neue RBAC-Architektur, keine breitere ExternalOrg-Verzeichnisfreigabe, keine Import-/Export-/Migration-/PowerAutomate-Aenderungen, keine UI-Neugestaltung.
+
 ## 2a. Verifizierter Stand 2026-04-15
 - Phase 1 ist im aktuellen Code bereits serverseitig umgesetzt:
 - `apps/api/src/routes/scopes.ts`

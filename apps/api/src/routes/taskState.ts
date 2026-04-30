@@ -10,6 +10,7 @@ import {
   requireAdminRoutePermissions,
   requireInternalRouteUser
 } from "./routeAuth.js";
+import { hasPermission } from "../accessControl.js";
 
 type AttachmentKindDto = "PHOTO" | "DOCUMENT" | "REPORT";
 type AttachmentStorageDto = "indexeddb" | "none";
@@ -423,6 +424,10 @@ function normalizeTaskStateMap(value: unknown): TaskStateMapDto {
   );
 }
 
+function containsCompletedTaskState(taskState: TaskStateMapDto) {
+  return Object.values(taskState).some((entry) => entry.status === "DONE");
+}
+
 function toUpdatedAtMillis(value: string | undefined) {
   if (!value) {
     return null;
@@ -642,9 +647,14 @@ export function createTaskStateRouter(prisma: PrismaClient) {
         hasOwn(req.body, "taskState") && typeof req.body === "object" && req.body !== null
           ? req.body.taskState
           : req.body;
+      const normalizedTaskState = normalizeTaskStateMap(input);
+      if (containsCompletedTaskState(normalizedTaskState) && !hasPermission(user.permissionKeys, "tasks.complete")) {
+        res.status(403).json({ ok: false, message: "Forbidden." });
+        return;
+      }
       const merged = await reconcileLegacyTaskStateInDb(
         prisma,
-        normalizeTaskStateMap(input),
+        normalizedTaskState,
         user.id
       );
 

@@ -580,6 +580,15 @@ export function mapRequestToPermission(input: { method: string; path: string }) 
     if (isRead) {
       return "deadlines.view" as PermissionKey;
     }
+    if (/^\/deadlines\/[^/]+\/complete$/.test(path)) {
+      return "tasks.complete" as PermissionKey;
+    }
+    if (/^\/deadlines\/[^/]+\/reopen$/.test(path)) {
+      return "tasks.edit" as PermissionKey;
+    }
+    if (/^\/deadlines\/[^/]+\/status$/.test(path)) {
+      return null;
+    }
     if (isArchiveAction) {
       return "deadlines.archive" as PermissionKey;
     }
@@ -590,7 +599,7 @@ export function mapRequestToPermission(input: { method: string; path: string }) 
     if (isRead) {
       return "tasks.view" as PermissionKey;
     }
-    if (path.includes("/complete") || path.includes("/status")) {
+    if (path.includes("/complete") || path.includes("/status") || path.includes("/evidence")) {
       return "tasks.complete" as PermissionKey;
     }
     return "tasks.edit" as PermissionKey;

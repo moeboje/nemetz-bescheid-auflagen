@@ -37,6 +37,7 @@ export type AppConfig = {
 export const DEFAULT_DATABASE_URL = "postgresql://portal:portalpw@localhost:5433/portaldev?schema=public";
 export const DEFAULT_TEST_DATABASE_URL = "postgresql://portal:portalpw@localhost:5433/portaldev?schema=test";
 const DEFAULT_TEST_SCHEMA = "test";
+const DEFAULT_ENTRA_REDIRECT_URI = "http://localhost:4000/api/auth/entra/callback";
 const DEV_SESSION_SECRET = "dev-only-change-me";
 const MIN_PRODUCTION_SESSION_SECRET_LENGTH = 32;
 const MIN_PRODUCTION_SESSION_SECRET_DISTINCT_CHARACTERS = 5;
@@ -568,10 +569,40 @@ export function resolveDatabaseUrl(
 
   const explicitDatabaseUrl = env.DATABASE_URL?.trim();
   if (explicitDatabaseUrl) {
+    parsePostgresUrl(explicitDatabaseUrl, "DATABASE_URL");
     return explicitDatabaseUrl;
   }
 
+  if (nodeEnv === "production") {
+    throw new Error("DATABASE_URL must be explicitly set to a valid PostgreSQL URL when NODE_ENV=production.");
+  }
+
   return DEFAULT_DATABASE_URL;
+}
+
+function resolveEntraRedirectUri(
+  env: NodeJS.ProcessEnv,
+  nodeEnv: AppConfig["nodeEnv"],
+  authEnableEntra: boolean
+) {
+  const rawEntraRedirectUri = env.ENTRA_REDIRECT_URI?.trim() ?? "";
+
+  if (!rawEntraRedirectUri) {
+    if (authEnableEntra && nodeEnv === "production") {
+      throw new Error(
+        "ENTRA_REDIRECT_URI must be explicitly set to a valid absolute HTTPS URL when AUTH_ENABLE_ENTRA=true and NODE_ENV=production."
+      );
+    }
+
+    return nodeEnv === "production" ? "" : DEFAULT_ENTRA_REDIRECT_URI;
+  }
+
+  const parsed = parseAbsoluteUrl(rawEntraRedirectUri, "ENTRA_REDIRECT_URI");
+  if (nodeEnv === "production") {
+    validateProductionPublicUrl(parsed, "ENTRA_REDIRECT_URI");
+  }
+
+  return rawEntraRedirectUri;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -579,6 +610,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 
   const nodeEnv = env.NODE_ENV === "production" ? "production" : env.NODE_ENV === "test" ? "test" : "development";
   const appOrigin = resolveAppOrigin(env, nodeEnv);
+  const authEnableEntra = toBoolean(env.AUTH_ENABLE_ENTRA, false);
 
   const config: AppConfig = {
     port: toInteger(env.PORT, 4000),
@@ -605,11 +637,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sessionTtlDays: toInteger(env.SESSION_TTL_DAYS, 7),
     cookieSecure: toBoolean(env.COOKIE_SECURE, nodeEnv === "production"),
     basePath: normalizeBasePath(env.BASE_PATH),
-    authEnableEntra: toBoolean(env.AUTH_ENABLE_ENTRA, false),
+    authEnableEntra,
     entraTenantId: env.ENTRA_TENANT_ID?.trim() || "",
     entraClientId: env.ENTRA_CLIENT_ID?.trim() || "",
     entraClientSecret: env.ENTRA_CLIENT_SECRET?.trim() || "",
-    entraRedirectUri: env.ENTRA_REDIRECT_URI?.trim() || "http://localhost:4000/api/auth/entra/callback",
+    entraRedirectUri: resolveEntraRedirectUri(env, nodeEnv, authEnableEntra),
     entraAllowedDomains: toList(env.ENTRA_ALLOWED_DOMAINS, ["nemetz-ag.at"]),
     entraAutoProvision: toBoolean(env.ENTRA_AUTO_PROVISION, false),
     entraScopes: toList(env.ENTRA_SCOPES, ["openid", "profile", "email"]),

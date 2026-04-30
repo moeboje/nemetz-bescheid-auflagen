@@ -8,8 +8,10 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import {
   applyNoStoreHeaders,
   requireAdminRoutePermissions,
-  requireInternalRouteUser
+  requireInternalRouteUser,
+  type RouteUser
 } from "./routeAuth.js";
+import { hasPermission, type PermissionKey } from "../accessControl.js";
 import { enqueueDeadlineAssignmentNotificationsForChange } from "../notifications.js";
 
 type AttachmentKindDto = "PHOTO" | "DOCUMENT" | "REPORT";
@@ -103,6 +105,42 @@ function toPositiveInteger(value: unknown) {
   return normalized > 0 ? normalized : undefined;
 }
 
+function toNonNegativeInteger(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+
+  const normalized = Math.trunc(value);
+  return normalized >= 0 ? normalized : undefined;
+}
+
+function parseReminderDaysBefore(value: unknown):
+  | { ok: true; value?: number }
+  | { ok: false; status: number; message: string } {
+  if (value === undefined || value === null) {
+    return { ok: true };
+  }
+
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return {
+      ok: false,
+      status: 400,
+      message: "emailReminderDaysBefore must be a non-negative integer."
+    };
+  }
+
+  const normalized = Math.trunc(value);
+  if (normalized < 0) {
+    return {
+      ok: false,
+      status: 400,
+      message: "emailReminderDaysBefore must be a non-negative integer."
+    };
+  }
+
+  return { ok: true, value: normalized };
+}
+
 function nowStamp() {
   return new Date().toISOString();
 }
@@ -172,7 +210,7 @@ function normalizeReminder(value: {
   return {
     emailReminderEnabled: true,
     emailReminderDaysBefore:
-      typeof value.emailReminderDaysBefore === "number" && value.emailReminderDaysBefore > 0
+      typeof value.emailReminderDaysBefore === "number" && value.emailReminderDaysBefore >= 0
         ? Math.trunc(value.emailReminderDaysBefore)
         : 7
   };
@@ -263,7 +301,7 @@ function normalizeDeadlineDto(value: unknown, index: number): DeadlineDto | null
   const updatedAt = toOptionalTrimmedString(row.updatedAt) ?? createdAt;
   const normalizedReminder = normalizeReminder({
     emailReminderEnabled: Boolean(row.emailReminderEnabled),
-    emailReminderDaysBefore: toPositiveInteger(row.emailReminderDaysBefore)
+    emailReminderDaysBefore: toNonNegativeInteger(row.emailReminderDaysBefore)
   });
 
   return {
@@ -612,6 +650,40 @@ async function getUserDisplayLabel(prisma: PrismaClient, userId: string) {
   return label || undefined;
 }
 
+function requireDeadlineActionPermission(
+  user: RouteUser,
+  res: Response,
+  permissionKey: PermissionKey
+) {
+  if (hasPermission(user.permissionKeys, permissionKey)) {
+    return true;
+  }
+
+  res.status(403).json({ ok: false, message: "Forbidden." });
+  return false;
+}
+
+function getDeadlineStatusTransitionPermission(
+  currentStatus: DeadlineStoredStatusDto,
+  nextStatus: DeadlineStoredStatusDto
+): PermissionKey | null {
+  if (currentStatus === nextStatus) {
+    return null;
+  }
+
+  return nextStatus === "DONE" ? "tasks.complete" : "tasks.edit";
+}
+
+function requireDeadlineStatusTransitionPermission(
+  user: RouteUser,
+  res: Response,
+  currentStatus: DeadlineStoredStatusDto,
+  nextStatus: DeadlineStoredStatusDto
+) {
+  const permissionKey = getDeadlineStatusTransitionPermission(currentStatus, nextStatus);
+  return permissionKey ? requireDeadlineActionPermission(user, res, permissionKey) : true;
+}
+
 export function createDeadlinesRouter(prisma: PrismaClient) {
   const router = Router();
 
@@ -679,6 +751,12 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
         return;
       }
 
+      const reminderDays = parseReminderDaysBefore(req.body?.emailReminderDaysBefore);
+      if (!reminderDays.ok) {
+        res.status(reminderDays.status).json({ ok: false, message: reminderDays.message });
+        return;
+      }
+
       const normalized = await normalizeDeadlineForWrite(prisma, {
         id: deadlineId,
         title,
@@ -691,7 +769,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
         ownerUserId: toOptionalTrimmedString(req.body?.ownerUserId),
         deputyUserId: toOptionalTrimmedString(req.body?.deputyUserId),
         emailReminderEnabled: Boolean(req.body?.emailReminderEnabled),
-        emailReminderDaysBefore: toPositiveInteger(req.body?.emailReminderDaysBefore),
+        emailReminderDaysBefore: reminderDays.value,
         completedAt: undefined,
         completedByUserId: undefined,
         evidence: [],
@@ -744,6 +822,24 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
       }
 
       const existing = toDeadlineDto(existingRecord);
+      const requestedStatus = hasOwn(req.body, "status")
+        ? normalizeStoredStatus(req.body?.status)
+        : undefined;
+      if (
+        requestedStatus &&
+        !requireDeadlineStatusTransitionPermission(user, res, existing.status, requestedStatus)
+      ) {
+        return;
+      }
+
+      const reminderDays = hasOwn(req.body, "emailReminderDaysBefore")
+        ? parseReminderDaysBefore(req.body?.emailReminderDaysBefore)
+        : ({ ok: true, value: existing.emailReminderDaysBefore } as const);
+      if (!reminderDays.ok) {
+        res.status(reminderDays.status).json({ ok: false, message: reminderDays.message });
+        return;
+      }
+
       const merged: DeadlineDto = {
         ...existing,
         title: hasOwn(req.body, "title") ? ensureStringField(req.body?.title) : existing.title,
@@ -751,7 +847,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
           ? (typeof req.body?.description === "string" ? req.body.description : "")
           : existing.description ?? "",
         dueDate: hasOwn(req.body, "dueDate") ? ensureStringField(req.body?.dueDate) : existing.dueDate,
-        status: hasOwn(req.body, "status") ? normalizeStoredStatus(req.body?.status) : existing.status,
+        status: requestedStatus ?? existing.status,
         projectId: hasOwn(req.body, "projectId")
           ? toOptionalTrimmedString(req.body?.projectId)
           : existing.projectId,
@@ -770,9 +866,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
         emailReminderEnabled: hasOwn(req.body, "emailReminderEnabled")
           ? Boolean(req.body?.emailReminderEnabled)
           : existing.emailReminderEnabled,
-        emailReminderDaysBefore: hasOwn(req.body, "emailReminderDaysBefore")
-          ? toPositiveInteger(req.body?.emailReminderDaysBefore)
-          : existing.emailReminderDaysBefore,
+        emailReminderDaysBefore: reminderDays.value,
         completedAt: hasOwn(req.body, "completedAt")
           ? toOptionalTrimmedString(req.body?.completedAt)
           : existing.completedAt,
@@ -844,6 +938,11 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
       }
 
       const status = normalizeStoredStatus(req.body?.status);
+      const requiredPermission = status === "DONE" ? "tasks.complete" : "tasks.edit";
+      if (!requireDeadlineActionPermission(user, res, requiredPermission)) {
+        return;
+      }
+
       const updated = await prisma.deadline.update({
         where: { id: existing.id },
         data: {
@@ -868,6 +967,10 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
 
       const user = await requireInternalRouteUser(req, res, prisma);
       if (!user) {
+        return;
+      }
+
+      if (!requireDeadlineActionPermission(user, res, "tasks.complete")) {
         return;
       }
 
@@ -919,6 +1022,10 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
 
       const user = await requireInternalRouteUser(req, res, prisma);
       if (!user) {
+        return;
+      }
+
+      if (!requireDeadlineActionPermission(user, res, "tasks.edit")) {
         return;
       }
 

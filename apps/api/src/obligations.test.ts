@@ -235,6 +235,114 @@ describe("Obligations API", () => {
     assert.equal(invalidResponse.status, 400);
   });
 
+  it("persists obligation reminder day 0 and keeps the existing default for missing values", async () => {
+    const admin = await createUser({
+      email: "obligation-reminder@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const { legalDoc } = await seedLegalDoc();
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const createResponse = await request("/obligations", {
+      method: "POST",
+      cookie,
+      body: {
+        ...baseObligationPayload(legalDoc.id),
+        emailReminderEnabled: true,
+        emailReminderDaysBefore: 0
+      }
+    });
+    assert.equal(createResponse.status, 201);
+    const createPayload = (await createResponse.json()) as {
+      obligation: { id: string; emailReminderDaysBefore?: number };
+    };
+    assert.equal(createPayload.obligation.emailReminderDaysBefore, 0);
+
+    const detailResponse = await request(`/obligations/${createPayload.obligation.id}`, {
+      cookie
+    });
+    assert.equal(detailResponse.status, 200);
+    const detailPayload = (await detailResponse.json()) as {
+      obligation: { emailReminderDaysBefore?: number };
+    };
+    assert.equal(detailPayload.obligation.emailReminderDaysBefore, 0);
+
+    const listResponse = await request("/obligations", {
+      cookie
+    });
+    assert.equal(listResponse.status, 200);
+    const listPayload = (await listResponse.json()) as Array<{ id: string; emailReminderDaysBefore?: number }>;
+    assert.equal(
+      listPayload.find((obligation) => obligation.id === createPayload.obligation.id)?.emailReminderDaysBefore,
+      0
+    );
+
+    const updateSeedResponse = await request("/obligations", {
+      method: "POST",
+      cookie,
+      body: {
+        ...baseObligationPayload(legalDoc.id),
+        title: "Reminder update seed",
+        emailReminderEnabled: true,
+        emailReminderDaysBefore: 7
+      }
+    });
+    assert.equal(updateSeedResponse.status, 201);
+    const updateSeedPayload = (await updateSeedResponse.json()) as {
+      obligation: { id: string };
+    };
+
+    const updateResponse = await request(`/obligations/${updateSeedPayload.obligation.id}`, {
+      method: "PATCH",
+      cookie,
+      body: {
+        emailReminderDaysBefore: 0
+      }
+    });
+    assert.equal(updateResponse.status, 200);
+    const updatePayload = (await updateResponse.json()) as {
+      obligation: { emailReminderDaysBefore?: number };
+    };
+    assert.equal(updatePayload.obligation.emailReminderDaysBefore, 0);
+
+    const negativeUpdateResponse = await request(`/obligations/${updateSeedPayload.obligation.id}`, {
+      method: "PATCH",
+      cookie,
+      body: {
+        emailReminderDaysBefore: -1
+      }
+    });
+    assert.equal(negativeUpdateResponse.status, 400);
+
+    const defaultResponse = await request("/obligations", {
+      method: "POST",
+      cookie,
+      body: {
+        ...baseObligationPayload(legalDoc.id),
+        title: "Default reminder",
+        emailReminderEnabled: true
+      }
+    });
+    assert.equal(defaultResponse.status, 201);
+    const defaultPayload = (await defaultResponse.json()) as {
+      obligation: { emailReminderDaysBefore?: number };
+    };
+    assert.equal(defaultPayload.obligation.emailReminderDaysBefore, 7);
+
+    const negativeResponse = await request("/obligations", {
+      method: "POST",
+      cookie,
+      body: {
+        ...baseObligationPayload(legalDoc.id),
+        title: "Negative reminder",
+        emailReminderEnabled: true,
+        emailReminderDaysBefore: -1
+      }
+    });
+    assert.equal(negativeResponse.status, 400);
+  });
+
   it("rejects project context mismatches between projectId and legalDocId", async () => {
     const admin = await createUser({
       email: "obligation-project-mismatch@example.com",

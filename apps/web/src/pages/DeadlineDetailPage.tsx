@@ -148,7 +148,11 @@ export default function DeadlineDetailPage() {
             </Button>
           ) : (
             <>
-              <Button variant="secondary" onClick={() => reopenDeadline(deadline.id)}>
+              <Button
+                variant="secondary"
+                disabled={!permissions.canEditTasks}
+                onClick={() => reopenDeadline(deadline.id)}
+              >
                 {t("deadlines.action.reopen")}
               </Button>
               <Button variant="secondary" onClick={() => setEvidenceModalOpen(true)}>

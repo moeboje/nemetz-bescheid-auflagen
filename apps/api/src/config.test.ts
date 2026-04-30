@@ -1,11 +1,23 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
-import { loadConfig } from "./config.js";
+import { fileURLToPath } from "node:url";
+import { DEFAULT_DATABASE_URL, loadConfig, resolveDatabaseUrl } from "./config.js";
 
 const STRONG_PRODUCTION_SESSION_SECRET = "F4X1w5vM7qR9tY2nB8kP3sD6hJ0cL!z_";
 const STRONG_HEX_SESSION_SECRET = "4f8c2a91b7d34e56aa18cf029db73c4e";
 const STRONG_BASE64URL_SESSION_SECRET = "X3mQ9vL2sP0aK8nT1cR7yU5eB6dF4hJ_2qW9zM1";
 const STRONG_ALPHANUMERIC_SESSION_SECRET = "m7K2v9P4s8N3x6C1q5R0t2W4y7B9d1F3";
+const VALID_PRODUCTION_DATABASE_URL = "postgresql://portal:portalpw@db.example.test:5432/portalprod?schema=public";
+const VALID_TEST_DATABASE_URL = "postgresql://portal:portalpw@localhost:5433/portaldev?schema=config_test";
+const LOCAL_ENTRA_REDIRECT_URI = "http://localhost:4000/api/auth/entra/callback";
+const VALID_PRODUCTION_ENTRA_REDIRECT_URI = "https://portal.example.test/api/auth/entra/callback";
+const API_ROOT = fileURLToPath(new URL("..", import.meta.url));
+const TSX_LOADER_PATH = path.join(API_ROOT, "node_modules", "tsx", "dist", "loader.mjs");
+const PRISMA_MODULE_URL = new URL("./prisma.ts", import.meta.url).href;
 
 const PLACEHOLDER_PRODUCTION_SESSION_SECRETS = [
   "Replace-With-A-Long-Random-Secret",
@@ -121,6 +133,217 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
     ...overrides
   } as NodeJS.ProcessEnv;
 }
+
+describe("database URL resolution", () => {
+  it("rejects a missing DATABASE_URL in production", () => {
+    assert.throws(
+      () =>
+        loadConfig(
+          makeEnv({
+            NODE_ENV: "production",
+            DATABASE_URL: undefined,
+            SESSION_SECRET: STRONG_PRODUCTION_SESSION_SECRET,
+            COOKIE_SECURE: "true"
+          })
+        ),
+      /DATABASE_URL must be explicitly set/
+    );
+  });
+
+  it("rejects an empty DATABASE_URL in production", () => {
+    assert.throws(
+      () =>
+        loadConfig(
+          makeEnv({
+            NODE_ENV: "production",
+            DATABASE_URL: "   ",
+            SESSION_SECRET: STRONG_PRODUCTION_SESSION_SECRET,
+            COOKIE_SECURE: "true"
+          })
+        ),
+      /DATABASE_URL must be explicitly set/
+    );
+  });
+
+  it("accepts an explicit PostgreSQL DATABASE_URL in production", () => {
+    const config = loadConfig(
+      makeEnv({
+        NODE_ENV: "production",
+        DATABASE_URL: VALID_PRODUCTION_DATABASE_URL,
+        SESSION_SECRET: STRONG_PRODUCTION_SESSION_SECRET,
+        COOKIE_SECURE: "true"
+      })
+    );
+
+    assert.equal(config.databaseUrl, VALID_PRODUCTION_DATABASE_URL);
+  });
+
+  it("keeps the local development DATABASE_URL fallback outside production", () => {
+    const config = loadConfig(
+      makeEnv({
+        NODE_ENV: "development",
+        DATABASE_URL: undefined,
+        COOKIE_SECURE: "false"
+      })
+    );
+
+    assert.equal(config.databaseUrl, DEFAULT_DATABASE_URL);
+  });
+
+  it("uses TEST_DATABASE_URL for NODE_ENV=test and keeps tests out of the public schema", () => {
+    const config = loadConfig(
+      makeEnv({
+        NODE_ENV: "test",
+        DATABASE_URL: "postgresql://portal:portalpw@localhost:5433/portaldev?schema=public",
+        TEST_DATABASE_URL: VALID_TEST_DATABASE_URL
+      })
+    );
+
+    assert.equal(config.databaseUrl, VALID_TEST_DATABASE_URL);
+    assert.throws(
+      () =>
+        resolveDatabaseUrl(
+          {
+            NODE_ENV: "test",
+            TEST_DATABASE_URL: "postgresql://portal:portalpw@localhost:5433/portaldev?schema=public"
+          } as NodeJS.ProcessEnv,
+          "test"
+        ),
+      /dedicated non-public PostgreSQL schema/
+    );
+  });
+
+  it("does not let prisma.ts write the local fallback before production DATABASE_URL validation", () => {
+    const tempCwd = mkdtempSync(path.join(tmpdir(), "nemetz-prisma-config-"));
+    const childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      NODE_ENV: "production"
+    };
+    delete childEnv.DATABASE_URL;
+    delete childEnv.TEST_DATABASE_URL;
+
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          TSX_LOADER_PATH,
+          "--eval",
+          `try {
+            await import(${JSON.stringify(PRISMA_MODULE_URL)});
+            process.stdout.write("imported databaseUrl=" + (process.env.DATABASE_URL ?? ""));
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            process.stdout.write("failed " + message + " databaseUrl=" + (process.env.DATABASE_URL ?? ""));
+            process.exit(13);
+          }`
+        ],
+        {
+          cwd: tempCwd,
+          env: childEnv,
+          encoding: "utf8"
+        }
+      );
+
+      assert.equal(result.status, 13, `${result.stdout}\n${result.stderr}`);
+      assert.match(result.stdout, /DATABASE_URL must be explicitly set/);
+      assert.match(result.stdout, /databaseUrl=$/);
+      assert.doesNotMatch(result.stdout, /localhost:5433/);
+    } finally {
+      rmSync(tempCwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Entra redirect URI resolution", () => {
+  const enabledEntraEnv = {
+    AUTH_ENABLE_ENTRA: "true",
+    ENTRA_TENANT_ID: "tenant-id",
+    ENTRA_CLIENT_ID: "client-id",
+    ENTRA_CLIENT_SECRET: "client-secret"
+  };
+
+  it("rejects missing ENTRA_REDIRECT_URI in production when Entra is enabled", () => {
+    assert.throws(
+      () =>
+        loadConfig(
+          makeEnv({
+            NODE_ENV: "production",
+            DATABASE_URL: VALID_PRODUCTION_DATABASE_URL,
+            SESSION_SECRET: STRONG_PRODUCTION_SESSION_SECRET,
+            COOKIE_SECURE: "true",
+            ...enabledEntraEnv,
+            ENTRA_REDIRECT_URI: undefined
+          })
+        ),
+      /ENTRA_REDIRECT_URI must be explicitly set/
+    );
+  });
+
+  it("rejects localhost ENTRA_REDIRECT_URI values in production", () => {
+    assert.throws(
+      () =>
+        loadConfig(
+          makeEnv({
+            NODE_ENV: "production",
+            DATABASE_URL: VALID_PRODUCTION_DATABASE_URL,
+            SESSION_SECRET: STRONG_PRODUCTION_SESSION_SECRET,
+            COOKIE_SECURE: "true",
+            ...enabledEntraEnv,
+            ENTRA_REDIRECT_URI: LOCAL_ENTRA_REDIRECT_URI
+          })
+        ),
+      /ENTRA_REDIRECT_URI must not point to localhost or any loopback address/
+    );
+  });
+
+  it("accepts a valid HTTPS ENTRA_REDIRECT_URI in production", () => {
+    const config = loadConfig(
+      makeEnv({
+        NODE_ENV: "production",
+        DATABASE_URL: VALID_PRODUCTION_DATABASE_URL,
+        SESSION_SECRET: STRONG_PRODUCTION_SESSION_SECRET,
+        COOKIE_SECURE: "true",
+        ...enabledEntraEnv,
+        ENTRA_REDIRECT_URI: VALID_PRODUCTION_ENTRA_REDIRECT_URI
+      })
+    );
+
+    assert.equal(config.authEnableEntra, true);
+    assert.equal(config.entraRedirectUri, VALID_PRODUCTION_ENTRA_REDIRECT_URI);
+  });
+
+  it("allows missing ENTRA_REDIRECT_URI in production when Entra is disabled", () => {
+    const config = loadConfig(
+      makeEnv({
+        NODE_ENV: "production",
+        DATABASE_URL: VALID_PRODUCTION_DATABASE_URL,
+        SESSION_SECRET: STRONG_PRODUCTION_SESSION_SECRET,
+        COOKIE_SECURE: "true",
+        AUTH_ENABLE_ENTRA: "false",
+        ENTRA_REDIRECT_URI: undefined
+      })
+    );
+
+    assert.equal(config.authEnableEntra, false);
+    assert.equal(config.entraRedirectUri, "");
+  });
+
+  it("keeps localhost ENTRA_REDIRECT_URI values valid in development", () => {
+    const config = loadConfig(
+      makeEnv({
+        NODE_ENV: "development",
+        APP_ORIGIN: "http://localhost:5173",
+        COOKIE_SECURE: "false",
+        ...enabledEntraEnv,
+        ENTRA_REDIRECT_URI: LOCAL_ENTRA_REDIRECT_URI
+      })
+    );
+
+    assert.equal(config.authEnableEntra, true);
+    assert.equal(config.entraRedirectUri, LOCAL_ENTRA_REDIRECT_URI);
+  });
+});
 
 describe("runtime config security validation", () => {
   it("rejects missing SESSION_SECRET in production", () => {

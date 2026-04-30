@@ -27,6 +27,7 @@ export type AuthorizationPermissions = {
   canCreateDeadlines: boolean;
   canEditDeadlines: boolean;
   canCompleteTasks: boolean;
+  canEditTasks: boolean;
   canViewProjects: boolean;
   canViewLegalDocs: boolean;
   canViewObligations: boolean;
@@ -79,7 +80,8 @@ export function AuthorizationProvider({ children }: { children: React.ReactNode 
       hasAdminAccess && (hasPermission("externalOrgs.view") || hasPermission("externalOrgs.manage"));
     const canManageExternalOrgsAdmin = hasAdminAccess && hasPermission("externalOrgs.manage");
     const canViewTasks = !isExternal && hasPermission("tasks.view");
-    const canCompleteTasks = !isExternal && (hasPermission("tasks.complete") || hasPermission("tasks.edit"));
+    const canCompleteTasks = !isExternal && hasPermission("tasks.complete");
+    const canEditTasks = !isExternal && hasPermission("tasks.edit");
 
     return {
       actor: {
@@ -118,6 +120,7 @@ export function AuthorizationProvider({ children }: { children: React.ReactNode 
         canCreateDeadlines: hasPermission("deadlines.create"),
         canEditDeadlines: hasPermission("deadlines.edit"),
         canCompleteTasks,
+        canEditTasks,
         canViewProjects: hasPermission("projects.view"),
         canViewLegalDocs: hasPermission("legalDocs.view"),
         canViewObligations: hasPermission("obligations.view"),

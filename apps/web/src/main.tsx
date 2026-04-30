@@ -2,6 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
+import DocumentTitleManager from "./components/DocumentTitleManager";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { RuntimeConfigProvider } from "./config/runtimeConfig";
 import { initFileDb } from "./services/fileStorage";
@@ -15,6 +16,7 @@ if (root) {
   createRoot(root).render(
     <React.StrictMode>
       <BrowserRouter>
+        <DocumentTitleManager />
         <ErrorBoundary>
           <RuntimeConfigProvider>
             <App />

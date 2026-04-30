@@ -40,15 +40,26 @@ function extractSessionCookie(setCookieHeader: string | null) {
   return match ? match[0] : "";
 }
 
-async function createUser(email: string, password: string) {
+async function createUser(email: string, password: string, role = "COMPLIANCE_EDITOR") {
   return prisma.user.create({
     data: {
       firstName: "Task",
       lastName: "Tester",
       email,
-      role: "COMPLIANCE_EDITOR",
+      role,
       type: "INTERNAL",
       passwordHash: await hashPassword(password)
+    }
+  });
+}
+
+async function createRole(key: string, permissionKeys: string[]) {
+  return prisma.role.create({
+    data: {
+      key,
+      labelDe: key,
+      isSystem: false,
+      permissionsJson: permissionKeys
     }
   });
 }
@@ -264,5 +275,124 @@ describe("Task state evidence requirements", () => {
     assert.equal(response.status, 400);
     const payload = (await response.json()) as { missingAttachmentKinds: string[] };
     assert.deepEqual(payload.missingAttachmentKinds, ["DOCUMENT"]);
+  });
+
+  it("allows evidence completion for users with tasks.complete", async () => {
+    await createRole("TASK_COMPLETE_ONLY", ["tasks.view", "tasks.complete"]);
+    const user = await createUser("task-state-evidence-complete@example.com", "ValidPassword1!", "TASK_COMPLETE_ONLY");
+    const obligation = await seedObligation({});
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const response = await request(`/task-state/${encodeURIComponent(id)}/evidence`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        note: "Nachweis eingereicht"
+      }
+    });
+
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as { taskStateEntry: { status: string; completedByUserId?: string } };
+    assert.equal(payload.taskStateEntry.status, "DONE");
+    assert.equal(payload.taskStateEntry.completedByUserId, user.id);
+  });
+
+  it("rejects evidence completion for users with tasks.edit but without tasks.complete", async () => {
+    await createRole("TASK_EDIT_ONLY", ["tasks.view", "tasks.edit"]);
+    const user = await createUser("task-state-evidence-edit-only@example.com", "ValidPassword1!", "TASK_EDIT_ONLY");
+    const obligation = await seedObligation({});
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const response = await request(`/task-state/${encodeURIComponent(id)}/evidence`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        note: "Should be blocked"
+      }
+    });
+
+    assert.equal(response.status, 403);
+    assert.equal(await prisma.taskStateEntry.findUnique({ where: { taskInstanceId: id } }), null);
+  });
+
+  it("keeps complete and DONE status protected while allowing edit-only reopen", async () => {
+    await createRole("TASK_EDIT_REOPEN_ONLY", ["tasks.view", "tasks.edit"]);
+    const user = await createUser("task-state-edit-only-reopen@example.com", "ValidPassword1!", "TASK_EDIT_REOPEN_ONLY");
+    const obligation = await seedObligation({});
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const completeResponse = await request(`/task-state/${encodeURIComponent(id)}/complete`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        note: "Should be blocked"
+      }
+    });
+    assert.equal(completeResponse.status, 403);
+
+    const statusResponse = await request(`/task-state/${encodeURIComponent(id)}/status`, {
+      method: "POST",
+      cookie,
+      body: {
+        status: "DONE"
+      }
+    });
+    assert.equal(statusResponse.status, 403);
+
+    await prisma.taskStateEntry.create({
+      data: {
+        taskInstanceId: id,
+        status: "DONE",
+        completedAt: new Date(),
+        completedByUserId: user.id,
+        completedByLabel: "Task Tester",
+        evidence: []
+      }
+    });
+
+    const reopenResponse = await request(`/task-state/${encodeURIComponent(id)}/reopen`, {
+      method: "POST",
+      cookie
+    });
+    assert.equal(reopenResponse.status, 200);
+    const payload = (await reopenResponse.json()) as { taskStateEntry: { status: string } };
+    assert.equal(payload.taskStateEntry.status, "OPEN");
+  });
+
+  it("rejects legacy reconcile attempts that would complete tasks without tasks.complete", async () => {
+    await createRole("TASK_EDIT_RECONCILE_ONLY", ["tasks.view", "tasks.edit"]);
+    const user = await createUser(
+      "task-state-reconcile-edit-only@example.com",
+      "ValidPassword1!",
+      "TASK_EDIT_RECONCILE_ONLY"
+    );
+    const obligation = await seedObligation({});
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const response = await request("/task-state/reconcile-legacy", {
+      method: "POST",
+      cookie,
+      body: {
+        taskState: {
+          [id]: {
+            status: "DONE",
+            completedAt: "2026-04-29T08:00:00.000Z",
+            completedByUserId: user.id,
+            completedByLabel: "Task Tester",
+            evidence: []
+          }
+        }
+      }
+    });
+
+    assert.equal(response.status, 403);
+    assert.equal(await prisma.taskStateEntry.findUnique({ where: { taskInstanceId: id } }), null);
   });
 });

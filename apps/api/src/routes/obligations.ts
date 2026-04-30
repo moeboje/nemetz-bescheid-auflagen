@@ -139,6 +139,42 @@ function toPositiveInteger(value: unknown) {
   return normalized > 0 ? normalized : undefined;
 }
 
+function toNonNegativeInteger(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+
+  const normalized = Math.trunc(value);
+  return normalized >= 0 ? normalized : undefined;
+}
+
+function parseReminderDaysBefore(value: unknown):
+  | { ok: true; value?: number }
+  | { ok: false; status: number; message: string } {
+  if (value === undefined || value === null) {
+    return { ok: true };
+  }
+
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return {
+      ok: false,
+      status: 400,
+      message: "emailReminderDaysBefore must be a non-negative integer."
+    };
+  }
+
+  const normalized = Math.trunc(value);
+  if (normalized < 0) {
+    return {
+      ok: false,
+      status: 400,
+      message: "emailReminderDaysBefore must be a non-negative integer."
+    };
+  }
+
+  return { ok: true, value: normalized };
+}
+
 function nowStamp() {
   return new Date().toISOString();
 }
@@ -229,7 +265,7 @@ function normalizeReminder(value: {
   return {
     emailReminderEnabled: true,
     emailReminderDaysBefore:
-      typeof value.emailReminderDaysBefore === "number" && value.emailReminderDaysBefore > 0
+      typeof value.emailReminderDaysBefore === "number" && value.emailReminderDaysBefore >= 0
         ? Math.trunc(value.emailReminderDaysBefore)
         : 7
   };
@@ -258,7 +294,7 @@ function normalizeObligationDto(value: unknown, index: number): ObligationDto | 
     typeof row.updatedAt === "string" && row.updatedAt.trim() ? row.updatedAt : createdAt;
   const normalizedReminder = normalizeReminder({
     emailReminderEnabled: Boolean(row.emailReminderEnabled),
-    emailReminderDaysBefore: toPositiveInteger(row.emailReminderDaysBefore)
+    emailReminderDaysBefore: toNonNegativeInteger(row.emailReminderDaysBefore)
   });
 
   return {
@@ -761,6 +797,12 @@ export function createObligationsRouter(prisma: PrismaClient) {
         return;
       }
 
+      const reminderDays = parseReminderDaysBefore(req.body?.emailReminderDaysBefore);
+      if (!reminderDays.ok) {
+        res.status(reminderDays.status).json({ ok: false, message: reminderDays.message });
+        return;
+      }
+
       const normalized = await normalizeObligationForWrite(prisma, {
         id: obligationId,
         legalDocId,
@@ -782,7 +824,7 @@ export function createObligationsRouter(prisma: PrismaClient) {
         sourceSuggestionId: toOptionalTrimmedString(req.body?.sourceSuggestionId),
         sourceRunId: toOptionalTrimmedString(req.body?.sourceRunId),
         emailReminderEnabled: Boolean(req.body?.emailReminderEnabled),
-        emailReminderDaysBefore: toPositiveInteger(req.body?.emailReminderDaysBefore),
+        emailReminderDaysBefore: reminderDays.value,
         evidenceRequirements: normalizeEvidenceRequirements(req.body?.evidenceRequirements),
         archivedAt: undefined,
         isArchived: false,
@@ -824,6 +866,14 @@ export function createObligationsRouter(prisma: PrismaClient) {
       }
 
       const existing = toObligationDto(existingRecord);
+      const reminderDays = hasOwn(req.body, "emailReminderDaysBefore")
+        ? parseReminderDaysBefore(req.body?.emailReminderDaysBefore)
+        : ({ ok: true, value: existing.emailReminderDaysBefore } as const);
+      if (!reminderDays.ok) {
+        res.status(reminderDays.status).json({ ok: false, message: reminderDays.message });
+        return;
+      }
+
       const merged: ObligationWriteDto = {
         ...existing,
         projectId: hasOwn(req.body, "projectId")
@@ -879,9 +929,7 @@ export function createObligationsRouter(prisma: PrismaClient) {
         emailReminderEnabled: hasOwn(req.body, "emailReminderEnabled")
           ? Boolean(req.body?.emailReminderEnabled)
           : existing.emailReminderEnabled,
-        emailReminderDaysBefore: hasOwn(req.body, "emailReminderDaysBefore")
-          ? toPositiveInteger(req.body?.emailReminderDaysBefore)
-          : existing.emailReminderDaysBefore,
+        emailReminderDaysBefore: reminderDays.value,
         evidenceRequirements: hasOwn(req.body, "evidenceRequirements")
           ? normalizeEvidenceRequirements(req.body?.evidenceRequirements)
           : existing.evidenceRequirements,

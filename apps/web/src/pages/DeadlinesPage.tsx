@@ -388,7 +388,12 @@ export default function DeadlinesPage() {
           <div className="tableActions">
             {row.status === "DONE" ? (
               <>
-                <Button size="sm" variant="ghost" onClick={() => reopenDeadline(row.id)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={!permissions.canEditTasks}
+                  onClick={() => reopenDeadline(row.id)}
+                >
                   {t("deadlines.action.reopen")}
                 </Button>
                 {runtimeConfig.features.enableEvidence ? (

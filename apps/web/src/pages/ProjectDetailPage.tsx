@@ -451,8 +451,15 @@ export default function ProjectDetailPage() {
     {
       key: "externalOrg",
       header: t("obligations.table.externalOrg"),
-      render: (obligation: (typeof obligations)[number]) =>
-        getExternalOrgById(obligation.externalOrgId)?.name ?? t("common.notAssigned")
+      render: (obligation: (typeof obligations)[number]) => {
+        if (!obligation.externalOrgId) {
+          return t("common.notAssigned");
+        }
+        return (
+          getExternalOrgById(obligation.externalOrgId)?.name ??
+          t("obligations.externalOrgAssignedNameUnavailable")
+        );
+      }
     },
     {
       key: "externalUser",
@@ -893,16 +900,24 @@ export default function ProjectDetailPage() {
               {t("projects.obligations.actionNew")}
             </Button>
           </div>
-          {projectAllDocs.length === 0 ? (
+          {projectObligationRows.length === 0 ? (
             <Card>
-              <p className="placeholderText">{t("projects.obligations.emptyNoLegalDocs")}</p>
-              <Button
-                variant="secondary"
-                disabled={!canCreateLegalDocFromProject}
-                onClick={() => setLegalDocModalOpen(true)}
-              >
-                {t("projects.obligations.createLegalDoc")}
-              </Button>
+              <p className="placeholderText">
+                {projectAllDocs.length === 0
+                  ? t("projects.obligations.emptyNoLegalDocs")
+                  : projectDocs.length === 0
+                  ? t("projects.obligations.emptyNoActiveLegalDocs")
+                  : t("projects.obligations.emptyNoObligations")}
+              </p>
+              {projectDocs.length === 0 ? (
+                <Button
+                  variant="secondary"
+                  disabled={!canCreateLegalDocFromProject}
+                  onClick={() => setLegalDocModalOpen(true)}
+                >
+                  {t("projects.obligations.createLegalDoc")}
+                </Button>
+              ) : null}
             </Card>
           ) : (
             <DataTable
