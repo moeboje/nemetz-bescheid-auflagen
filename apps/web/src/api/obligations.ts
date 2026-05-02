@@ -28,12 +28,16 @@ type ObligationInput = {
   isArchived?: boolean;
 };
 
+function obligationPath(id: string) {
+  return `/obligations/${encodeURIComponent(id)}`;
+}
+
 export async function listObligations() {
   return apiRequest<Obligation[]>("/obligations");
 }
 
 export async function getObligation(id: string) {
-  const payload = await apiRequest<{ ok: boolean; obligation: Obligation }>(`/obligations/${id}`);
+  const payload = await apiRequest<{ ok: boolean; obligation: Obligation }>(obligationPath(id));
   return payload.obligation;
 }
 
@@ -46,7 +50,7 @@ export async function createObligation(input: ObligationInput) {
 }
 
 export async function updateObligation(id: string, input: Partial<ObligationInput>) {
-  const payload = await apiRequest<{ ok: boolean; obligation: Obligation }>(`/obligations/${id}`, {
+  const payload = await apiRequest<{ ok: boolean; obligation: Obligation }>(obligationPath(id), {
     method: "PATCH",
     body: input
   });
@@ -54,17 +58,23 @@ export async function updateObligation(id: string, input: Partial<ObligationInpu
 }
 
 export async function archiveObligation(id: string) {
-  const payload = await apiRequest<{ ok: boolean; obligation: Obligation }>(`/obligations/${id}/archive`, {
+  const payload = await apiRequest<{ ok: boolean; obligation: Obligation }>(`${obligationPath(id)}/archive`, {
     method: "POST"
   });
   return payload.obligation;
 }
 
 export async function restoreObligation(id: string) {
-  const payload = await apiRequest<{ ok: boolean; obligation: Obligation }>(`/obligations/${id}/restore`, {
+  const payload = await apiRequest<{ ok: boolean; obligation: Obligation }>(`${obligationPath(id)}/restore`, {
     method: "POST"
   });
   return payload.obligation;
+}
+
+export async function deleteObligation(id: string) {
+  return apiRequest<{ ok: boolean }>(obligationPath(id), {
+    method: "DELETE"
+  });
 }
 
 export async function bulkReplaceObligations(obligations: Obligation[]) {

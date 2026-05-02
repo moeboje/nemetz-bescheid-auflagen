@@ -98,6 +98,13 @@ function isArchivedEntity(value: { isArchived?: boolean; archivedAt?: string }) 
   return Boolean(value.isArchived || value.archivedAt);
 }
 
+function formatObligationDeleteError(error?: string) {
+  if (error === "obligation_delete_blocked" || /dependent data/i.test(error ?? "")) {
+    return t("obligations.delete.blocked");
+  }
+  return t("obligations.delete.error");
+}
+
 function getIntervalUnitLabel(unit: "DAY" | "WEEK" | "MONTH" | "QUARTER" | "YEAR") {
   switch (unit) {
     case "DAY":
@@ -130,7 +137,12 @@ export default function ProjectDetailPage() {
     archiveExternalParticipant,
     restoreExternalParticipant
   } = useProjects();
-  const { obligations, archiveObligation } = useObligations();
+  const {
+    obligations,
+    archiveObligation,
+    deleteObligation: removeObligation,
+    clearMutationError
+  } = useObligations();
   const { getScopeLabel } = useScopes();
   const { contacts, getAuthorityName, getContactsForAuthority } = useAuthorities();
   const { getUser, getDisplayName } = useUsers();
@@ -148,6 +160,9 @@ export default function ProjectDetailPage() {
   const [editingDeadlineId, setEditingDeadlineId] = useState<string | null>(null);
   const [obligationModalOpen, setObligationModalOpen] = useState(false);
   const [editingObligationId, setEditingObligationId] = useState<string | null>(null);
+  const [deleteObligationTarget, setDeleteObligationTarget] = useState<(typeof obligations)[number] | null>(null);
+  const [deleteObligationError, setDeleteObligationError] = useState("");
+  const [isDeleteObligationSubmitting, setIsDeleteObligationSubmitting] = useState(false);
   const [externalModalOpen, setExternalModalOpen] = useState(false);
   const [editingExternalParticipantId, setEditingExternalParticipantId] = useState<string | null>(
     null
@@ -522,6 +537,41 @@ export default function ProjectDetailPage() {
     if (archived) {
       navigate("..", { relative: "path" });
     }
+  };
+
+  const openDeleteObligationModal = (target: (typeof obligations)[number]) => {
+    if (!permissions.canDeleteObligations) {
+      return;
+    }
+    clearMutationError();
+    setDeleteObligationError("");
+    setDeleteObligationTarget(target);
+  };
+
+  const closeDeleteObligationModal = () => {
+    if (isDeleteObligationSubmitting) {
+      return;
+    }
+    setDeleteObligationTarget(null);
+    setDeleteObligationError("");
+  };
+
+  const handleDeleteObligation = async () => {
+    if (!deleteObligationTarget || !permissions.canDeleteObligations) {
+      return;
+    }
+
+    setIsDeleteObligationSubmitting(true);
+    setDeleteObligationError("");
+    const result = await removeObligation(deleteObligationTarget.id);
+    setIsDeleteObligationSubmitting(false);
+
+    if (result.ok) {
+      setDeleteObligationTarget(null);
+      return;
+    }
+
+    setDeleteObligationError(formatObligationDeleteError(result.error));
   };
 
   const renderUserValue = (userId?: string) => {
@@ -942,6 +992,15 @@ export default function ProjectDetailPage() {
                   >
                     <EditIcon />
                   </IconButton>
+                  {permissions.canDeleteObligations ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => openDeleteObligationModal(obligation)}
+                    >
+                      {t("obligations.action.delete")}
+                    </Button>
+                  ) : null}
                 </div>
               )}
             />
@@ -1121,6 +1180,35 @@ export default function ProjectDetailPage() {
         projectId={project.id}
         availableLegalDocs={projectDocs}
       />
+
+      <Modal
+        open={Boolean(deleteObligationTarget)}
+        onClose={closeDeleteObligationModal}
+        closeAriaLabel={t("modal.close")}
+        header={t("obligations.delete.title")}
+        footer={
+          <div className="modalFooter">
+            <Button
+              variant="secondary"
+              onClick={closeDeleteObligationModal}
+              disabled={isDeleteObligationSubmitting}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button onClick={() => void handleDeleteObligation()} disabled={isDeleteObligationSubmitting}>
+              {isDeleteObligationSubmitting
+                ? t("obligations.delete.pending")
+                : t("obligations.action.delete")}
+            </Button>
+          </div>
+        }
+      >
+        <div className="modalForm">
+          <p className="placeholderText">{t("obligations.delete.text")}</p>
+          <p className="metaValue">{deleteObligationTarget?.title ?? ""}</p>
+          {deleteObligationError ? <p className="validationText">{deleteObligationError}</p> : null}
+        </div>
+      </Modal>
 
       <ProjectModal open={editProjectOpen} onClose={() => setEditProjectOpen(false)} project={project} />
 

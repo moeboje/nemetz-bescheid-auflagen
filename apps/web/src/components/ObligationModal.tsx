@@ -393,6 +393,7 @@ export default function ObligationModal({
               }))
             }
           />
+          <span className="helperText">{t("obligations.form.externalOrgHint")}</span>
         </div>
         <div className="formField">
           <span className="fieldLabel">{t("obligations.form.externalUser")}</span>

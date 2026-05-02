@@ -96,6 +96,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ROLE_KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const DOCUMENT_OWNER_TYPES = ["PROJECT", "LEGAL_DOC", "OBLIGATION", "DEADLINE", "TASK_EVIDENCE"] as const;
 const COMMENT_ENTITY_TYPES = ["PROJECT", "LEGAL_DOC", "DOCUMENT"] as const;
+const DEFAULT_EXTERNAL_ORG_TYPE = "Firma";
 const MAX_COMMENT_ENTITY_ID_LENGTH = 200;
 const MAX_COMMENT_BODY_LENGTH = 10_000;
 
@@ -1559,7 +1560,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.use(createAuthoritiesRouter(prisma));
   router.use(createDeadlinesRouter(prisma));
   router.use(createLegalDocsRouter(prisma));
-  router.use(createObligationsRouter(prisma));
+  router.use(createObligationsRouter(prisma, config));
   router.use(createProjectChecklistsRouter(prisma));
   router.use(createProjectsRouter(prisma));
   router.use(createScopesRouter(prisma));
@@ -4351,13 +4352,13 @@ export function createApp(config: AppConfig = loadConfig()) {
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const name = ensureStringBody(req.body?.name).trim();
-        const type = ensureStringBody(req.body?.type).trim();
+        const type = ensureStringBody(req.body?.type).trim() || DEFAULT_EXTERNAL_ORG_TYPE;
         const phone = toOptionalTrimmedString(req.body?.phone);
         const email = toOptionalTrimmedString(req.body?.email);
         const address = toOptionalTrimmedString(req.body?.address);
 
-        if (!name || !type) {
-          res.status(400).json({ ok: false, message: "name and type are required." });
+        if (!name) {
+          res.status(400).json({ ok: false, message: "name is required." });
           return;
         }
 
@@ -4373,7 +4374,11 @@ export function createApp(config: AppConfig = loadConfig()) {
         });
 
         if (existing) {
-          res.status(409).json({ ok: false, message: "External organization already exists." });
+          res.status(409).json({
+            ok: false,
+            errorCode: "EXTERNAL_ORG_CONFLICT",
+            message: "External organization already exists."
+          });
           return;
         }
 
@@ -4432,18 +4437,15 @@ export function createApp(config: AppConfig = loadConfig()) {
         const hasAddress = hasOwn(req.body, "address");
 
         const name = hasName ? ensureStringBody(req.body?.name).trim() : existing.name;
-        const type = hasType ? ensureStringBody(req.body?.type).trim() : existing.type;
+        const type = hasType
+          ? ensureStringBody(req.body?.type).trim() || DEFAULT_EXTERNAL_ORG_TYPE
+          : existing.type;
         const phone = hasPhone ? toOptionalTrimmedString(req.body?.phone) : existing.phone;
         const email = hasEmail ? toOptionalTrimmedString(req.body?.email) : existing.email;
         const address = hasAddress ? toOptionalTrimmedString(req.body?.address) : existing.address;
 
         if (hasName && !name) {
           res.status(400).json({ ok: false, message: "name is required." });
-          return;
-        }
-
-        if (hasType && !type) {
-          res.status(400).json({ ok: false, message: "type is required." });
           return;
         }
 
@@ -4459,7 +4461,11 @@ export function createApp(config: AppConfig = loadConfig()) {
             }
           });
           if (duplicate && duplicate.id !== existing.id) {
-            res.status(409).json({ ok: false, message: "External organization already exists." });
+            res.status(409).json({
+              ok: false,
+              errorCode: "EXTERNAL_ORG_CONFLICT",
+              message: "External organization already exists."
+            });
             return;
           }
         }

@@ -24,9 +24,11 @@ type ConfirmationState = {
   mode: "archive" | "restore";
 };
 
+const DEFAULT_EXTERNAL_ORG_TYPE = "Firma";
+
 const emptyForm: FormState = {
   name: "",
-  type: "",
+  type: DEFAULT_EXTERNAL_ORG_TYPE,
   phone: "",
   email: "",
   address: ""
@@ -145,7 +147,7 @@ export default function AdminExternalOrgsPage() {
   };
 
   const validateForm = () => {
-    if (!form.name.trim() || !form.type.trim()) {
+    if (!form.name.trim()) {
       return t("admin.externalOrgs.validation.required");
     }
     if (!isValidEmail(form.email)) {
@@ -172,7 +174,7 @@ export default function AdminExternalOrgsPage() {
       if (editingId) {
         await updateExternalOrg(editingId, {
           name: form.name.trim(),
-          type: form.type.trim(),
+          type: form.type.trim() || DEFAULT_EXTERNAL_ORG_TYPE,
           phone: form.phone.trim() || undefined,
           email: form.email.trim() || undefined,
           address: form.address.trim() || undefined
@@ -181,7 +183,7 @@ export default function AdminExternalOrgsPage() {
       } else {
         await createExternalOrg({
           name: form.name.trim(),
-          type: form.type.trim(),
+          type: form.type.trim() || DEFAULT_EXTERNAL_ORG_TYPE,
           phone: form.phone.trim() || undefined,
           email: form.email.trim() || undefined,
           address: form.address.trim() || undefined
@@ -192,7 +194,12 @@ export default function AdminExternalOrgsPage() {
       await fetchExternalOrgs();
       closeModal();
     } catch (error) {
-      setFormError(extractApiErrorMessage(error, "admin.externalOrgs.error.save"));
+      setFormError(
+        extractApiErrorMessage(
+          error,
+          editingId ? "admin.externalOrgs.error.update" : "admin.externalOrgs.error.create"
+        )
+      );
     } finally {
       setIsSubmitting(false);
     }

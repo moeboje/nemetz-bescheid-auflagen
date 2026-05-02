@@ -573,6 +573,9 @@ export function mapRequestToPermission(input: { method: string; path: string }) 
     if (isArchiveAction) {
       return "obligations.archive" as PermissionKey;
     }
+    if (method === "DELETE" && /^\/obligations\/[^/]+\/?$/.test(path)) {
+      return "obligations.archive" as PermissionKey;
+    }
     return method === "POST" ? ("obligations.create" as PermissionKey) : ("obligations.edit" as PermissionKey);
   }
 

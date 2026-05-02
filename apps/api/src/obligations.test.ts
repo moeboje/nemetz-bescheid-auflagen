@@ -175,6 +175,9 @@ describe("Obligations API", () => {
   beforeEach(async () => {
     await prisma.session.deleteMany();
     await prisma.auditLog.deleteMany();
+    await prisma.commentRevision.deleteMany();
+    await prisma.comment.deleteMany();
+    await prisma.document.deleteMany();
     await prisma.taskStateEntry.deleteMany();
     await prisma.obligation.deleteMany();
     await prisma.legalDocument.deleteMany();
@@ -365,6 +368,366 @@ describe("Obligations API", () => {
     assert.equal(response.status, 400);
     const payload = (await response.json()) as { message: string };
     assert.match(payload.message, /projectId/i);
+  });
+
+  it("allows obligation deletion only with archive permission and without blocking dependencies", async () => {
+    const manager = await createUser({
+      email: "obligation-delete@example.com",
+      password: "ValidPassword1!",
+      role: "COMPLIANCE_MANAGER"
+    });
+    const { legalDoc } = await seedLegalDoc();
+    const cookie = await login(manager.email, "ValidPassword1!");
+
+    const createResponse = await request("/obligations", {
+      method: "POST",
+      cookie,
+      body: {
+        ...baseObligationPayload(legalDoc.id),
+        title: "Loeschbare Auflage"
+      }
+    });
+    assert.equal(createResponse.status, 201);
+    const createPayload = (await createResponse.json()) as {
+      obligation: { id: string };
+    };
+
+    const deleteResponse = await request(`/obligations/${createPayload.obligation.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(deleteResponse.status, 200);
+
+    const detailResponse = await request(`/obligations/${createPayload.obligation.id}`, {
+      cookie
+    });
+    assert.equal(detailResponse.status, 404);
+
+    const listResponse = await request("/obligations", {
+      cookie
+    });
+    assert.equal(listResponse.status, 200);
+    const listPayload = (await listResponse.json()) as Array<{ id: string }>;
+    assert.equal(listPayload.some((obligation) => obligation.id === createPayload.obligation.id), false);
+  });
+
+  it("keeps edit available but blocks hard delete without archive permission", async () => {
+    const admin = await createUser({
+      email: "obligation-delete-seed-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const editor = await createUser({
+      email: "obligation-delete-editor@example.com",
+      password: "ValidPassword1!",
+      role: "COMPLIANCE_EDITOR"
+    });
+    const { legalDoc } = await seedLegalDoc();
+    const adminCookie = await login(admin.email, "ValidPassword1!");
+
+    const createResponse = await request("/obligations", {
+      method: "POST",
+      cookie: adminCookie,
+      body: {
+        ...baseObligationPayload(legalDoc.id),
+        title: "Editor darf bearbeiten"
+      }
+    });
+    assert.equal(createResponse.status, 201);
+    const createPayload = (await createResponse.json()) as {
+      obligation: { id: string };
+    };
+
+    const editorCookie = await login(editor.email, "ValidPassword1!");
+    const updateResponse = await request(`/obligations/${createPayload.obligation.id}`, {
+      method: "PATCH",
+      cookie: editorCookie,
+      body: {
+        title: "Editor darf bearbeiten - aktualisiert"
+      }
+    });
+    assert.equal(updateResponse.status, 200);
+
+    const deleteResponse = await request(`/obligations/${createPayload.obligation.id}`, {
+      method: "DELETE",
+      cookie: editorCookie
+    });
+    assert.equal(deleteResponse.status, 403);
+
+    const trailingSlashDeleteResponse = await request(`/obligations/${createPayload.obligation.id}/`, {
+      method: "DELETE",
+      cookie: editorCookie
+    });
+    assert.equal(trailingSlashDeleteResponse.status, 403);
+  });
+
+  it("blocks obligation deletion when task state, documents, or comments exist", async () => {
+    const admin = await createUser({
+      email: "obligation-delete-blocked@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const { legalDoc } = await seedLegalDoc();
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const taskStateResponse = await request("/obligations", {
+      method: "POST",
+      cookie,
+      body: {
+        ...baseObligationPayload(legalDoc.id),
+        title: "Auflage mit TaskState"
+      }
+    });
+    assert.equal(taskStateResponse.status, 201);
+    const taskStatePayload = (await taskStateResponse.json()) as {
+      obligation: { id: string };
+    };
+    await prisma.taskStateEntry.create({
+      data: {
+        taskInstanceId: `obligation:${taskStatePayload.obligation.id}:2026-01-15`,
+        status: "OPEN",
+        evidence: []
+      }
+    });
+
+    const taskStateDeleteResponse = await request(`/obligations/${taskStatePayload.obligation.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(taskStateDeleteResponse.status, 409);
+    const taskStateDeletePayload = (await taskStateDeleteResponse.json()) as {
+      errorCode?: string;
+    };
+    assert.equal(taskStateDeletePayload.errorCode, "OBLIGATION_DELETE_BLOCKED");
+
+    const documentResponse = await request("/obligations", {
+      method: "POST",
+      cookie,
+      body: {
+        ...baseObligationPayload(legalDoc.id),
+        title: "Auflage mit Dokument"
+      }
+    });
+    assert.equal(documentResponse.status, 201);
+    const documentPayload = (await documentResponse.json()) as {
+      obligation: { id: string };
+    };
+    await prisma.document.create({
+      data: {
+        ownerType: "OBLIGATION",
+        ownerId: documentPayload.obligation.id,
+        filename: "nachweis.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 10,
+        storagePath: "test/nachweis.pdf",
+        createdByUserId: admin.id
+      }
+    });
+
+    const documentDeleteResponse = await request(`/obligations/${documentPayload.obligation.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(documentDeleteResponse.status, 409);
+
+    const taskEvidenceResponse = await request("/obligations", {
+      method: "POST",
+      cookie,
+      body: {
+        ...baseObligationPayload(legalDoc.id),
+        title: "Auflage mit Task Evidence Dokument"
+      }
+    });
+    assert.equal(taskEvidenceResponse.status, 201);
+    const taskEvidencePayload = (await taskEvidenceResponse.json()) as {
+      obligation: { id: string };
+    };
+    await prisma.document.create({
+      data: {
+        ownerType: "TASK_EVIDENCE",
+        ownerId: `obligation:${taskEvidencePayload.obligation.id}:2026-04-01`,
+        filename: "task-evidence.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 10,
+        storagePath: "test/task-evidence.pdf",
+        createdByUserId: admin.id
+      }
+    });
+
+    const taskEvidenceDeleteResponse = await request(`/obligations/${taskEvidencePayload.obligation.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(taskEvidenceDeleteResponse.status, 409);
+    assert.ok(await prisma.obligation.findUnique({ where: { id: taskEvidencePayload.obligation.id } }));
+
+    const unrelatedTaskEvidenceResponse = await request("/obligations", {
+      method: "POST",
+      cookie,
+      body: {
+        ...baseObligationPayload(legalDoc.id),
+        title: "Auflage ohne passende Task Evidence"
+      }
+    });
+    assert.equal(unrelatedTaskEvidenceResponse.status, 201);
+    const unrelatedTaskEvidencePayload = (await unrelatedTaskEvidenceResponse.json()) as {
+      obligation: { id: string };
+    };
+    await prisma.document.create({
+      data: {
+        ownerType: "TASK_EVIDENCE",
+        ownerId: `deadline:${unrelatedTaskEvidencePayload.obligation.id}`,
+        filename: "deadline-evidence.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 10,
+        storagePath: "test/deadline-evidence.pdf",
+        createdByUserId: admin.id
+      }
+    });
+
+    const unrelatedTaskEvidenceDeleteResponse = await request(
+      `/obligations/${unrelatedTaskEvidencePayload.obligation.id}`,
+      {
+        method: "DELETE",
+        cookie
+      }
+    );
+    assert.equal(unrelatedTaskEvidenceDeleteResponse.status, 200);
+
+    const commentResponse = await request("/obligations", {
+      method: "POST",
+      cookie,
+      body: {
+        ...baseObligationPayload(legalDoc.id),
+        title: "Auflage mit Kommentar"
+      }
+    });
+    assert.equal(commentResponse.status, 201);
+    const commentPayload = (await commentResponse.json()) as {
+      obligation: { id: string };
+    };
+    await prisma.comment.create({
+      data: {
+        entityType: "OBLIGATION",
+        entityId: commentPayload.obligation.id,
+        authorUserId: admin.id,
+        body: "Diese Auflage hat einen Kommentar."
+      }
+    });
+
+    const commentDeleteResponse = await request(`/obligations/${commentPayload.obligation.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(commentDeleteResponse.status, 409);
+  });
+
+  it("blocks direct deletion for exact whitespace-padded legacy ids with dependencies", async () => {
+    const admin = await createUser({
+      email: "obligation-delete-whitespace-id@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const { legalDoc } = await seedLegalDoc();
+    const cookie = await login(admin.email, "ValidPassword1!");
+    const obligationId = " legacy-obligation-id ";
+
+    await prisma.obligation.create({
+      data: {
+        ...baseObligationPayload(legalDoc.id),
+        id: obligationId,
+        title: "Whitespace padded legacy obligation"
+      }
+    });
+    await prisma.document.create({
+      data: {
+        ownerType: "OBLIGATION",
+        ownerId: obligationId,
+        filename: "legacy-whitespace.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 10,
+        storagePath: "test/legacy-whitespace.pdf",
+        createdByUserId: admin.id
+      }
+    });
+
+    const deleteResponse = await request(`/obligations/${encodeURIComponent(obligationId)}`, {
+      method: "DELETE",
+      cookie
+    });
+
+    assert.equal(deleteResponse.status, 409);
+    assert.ok(await prisma.obligation.findUnique({ where: { id: obligationId } }));
+  });
+
+  it("blocks obligation deletion without archive permission", async () => {
+    const admin = await createUser({
+      email: "obligation-delete-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const viewer = await createUser({
+      email: "obligation-delete-viewer@example.com",
+      password: "ValidPassword1!",
+      role: "READ_ONLY"
+    });
+    const { legalDoc } = await seedLegalDoc();
+    const adminCookie = await login(admin.email, "ValidPassword1!");
+
+    const createResponse = await request("/obligations", {
+      method: "POST",
+      cookie: adminCookie,
+      body: {
+        ...baseObligationPayload(legalDoc.id),
+        title: "Nicht fuer Viewer loeschbar"
+      }
+    });
+    assert.equal(createResponse.status, 201);
+    const createPayload = (await createResponse.json()) as {
+      obligation: { id: string };
+    };
+
+    const viewerCookie = await login(viewer.email, "ValidPassword1!");
+    const deleteResponse = await request(`/obligations/${createPayload.obligation.id}`, {
+      method: "DELETE",
+      cookie: viewerCookie
+    });
+    assert.equal(deleteResponse.status, 403);
+  });
+
+  it("keeps obligation archive and restore guarded by archive permission", async () => {
+    const manager = await createUser({
+      email: "obligation-archive-manager@example.com",
+      password: "ValidPassword1!",
+      role: "COMPLIANCE_MANAGER"
+    });
+    const { legalDoc } = await seedLegalDoc();
+    const cookie = await login(manager.email, "ValidPassword1!");
+
+    const createResponse = await request("/obligations", {
+      method: "POST",
+      cookie,
+      body: {
+        ...baseObligationPayload(legalDoc.id),
+        title: "Archivierbare Auflage"
+      }
+    });
+    assert.equal(createResponse.status, 201);
+    const createPayload = (await createResponse.json()) as {
+      obligation: { id: string };
+    };
+
+    const archiveResponse = await request(`/obligations/${createPayload.obligation.id}/archive`, {
+      method: "POST",
+      cookie
+    });
+    assert.equal(archiveResponse.status, 200);
+
+    const restoreResponse = await request(`/obligations/${createPayload.obligation.id}/restore`, {
+      method: "POST",
+      cookie
+    });
+    assert.equal(restoreResponse.status, 200);
   });
 
   it("validates external execution organization and user references", async () => {

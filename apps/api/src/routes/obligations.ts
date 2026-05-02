@@ -5,6 +5,8 @@ import {
   type PrismaClient
 } from "@prisma/client";
 import { Router, type NextFunction, type Request, type Response } from "express";
+import type { AppConfig } from "../config.js";
+import { LEGACY_RECOVERY_BLOCK_MESSAGE } from "../legacyRecovery.js";
 import {
   applyNoStoreHeaders,
   requireAdminRoutePermissions,
@@ -50,6 +52,30 @@ type DbClient = PrismaClient | Prisma.TransactionClient;
 type ObligationWriteDto = ObligationDto & {
   projectId?: string;
 };
+
+type ObligationDeleteBlockingDependency = {
+  kind: "TASK_STATE" | "DOCUMENT" | "COMMENT";
+  count: number;
+};
+
+type ObligationBulkDeleteBlockingDependency = ObligationDeleteBlockingDependency & {
+  obligationId: string;
+};
+
+const OBLIGATION_DELETE_BLOCKED_ERROR_CODE = "OBLIGATION_DELETE_BLOCKED";
+const OBLIGATION_DELETE_BLOCKED_MESSAGE =
+  "Obligation cannot be deleted because dependent data exists. Archive the obligation instead.";
+
+class ObligationBulkDeleteBlockedError extends Error {
+  status = 409;
+  blockingDependencies: ObligationBulkDeleteBlockingDependency[];
+
+  constructor(blockingDependencies: ObligationBulkDeleteBlockingDependency[]) {
+    super(OBLIGATION_DELETE_BLOCKED_MESSAGE);
+    this.name = "ObligationBulkDeleteBlockedError";
+    this.blockingDependencies = blockingDependencies;
+  }
+}
 
 type ObligationRelationValidationResult =
   | {
@@ -451,8 +477,141 @@ async function findObligationById(db: DbClient, id: string) {
   });
 }
 
+async function listObligationIdsFromDb(db: DbClient) {
+  const obligations = await db.obligation.findMany({
+    select: {
+      id: true
+    },
+    orderBy: {
+      id: "asc"
+    }
+  });
+
+  return obligations.map((obligation) => obligation.id);
+}
+
+async function getObligationDeleteBlockingDependencies(
+  db: DbClient,
+  obligationId: string
+): Promise<ObligationDeleteBlockingDependency[]> {
+  const [taskStateCount, documentCount, commentCount] = await Promise.all([
+    db.taskStateEntry.count({
+      where: {
+        taskInstanceId: {
+          startsWith: `obligation:${obligationId}:`
+        }
+      }
+    }),
+    db.document.count({
+      where: {
+        OR: [
+          {
+            ownerType: "OBLIGATION",
+            ownerId: obligationId
+          },
+          {
+            ownerType: "TASK_EVIDENCE",
+            ownerId: {
+              startsWith: `obligation:${obligationId}:`
+            }
+          }
+        ]
+      }
+    }),
+    db.comment.count({
+      where: {
+        entityType: "OBLIGATION",
+        entityId: obligationId
+      }
+    })
+  ]);
+
+  return [
+    taskStateCount > 0 ? { kind: "TASK_STATE" as const, count: taskStateCount } : null,
+    documentCount > 0 ? { kind: "DOCUMENT" as const, count: documentCount } : null,
+    commentCount > 0 ? { kind: "COMMENT" as const, count: commentCount } : null
+  ].filter((row): row is ObligationDeleteBlockingDependency => Boolean(row));
+}
+
+async function getObligationBulkDeleteBlockingDependencies(
+  db: DbClient,
+  obligationIds: string[]
+): Promise<ObligationBulkDeleteBlockingDependency[]> {
+  const uniqueIds = [...new Set(obligationIds.filter((id) => id.length > 0))];
+  if (uniqueIds.length === 0) {
+    return [];
+  }
+
+  const dependenciesByObligation = await Promise.all(
+    uniqueIds.map(async (obligationId) => {
+      const dependencies = await getObligationDeleteBlockingDependencies(db, obligationId);
+      return dependencies.map((dependency) => ({
+        obligationId,
+        ...dependency
+      }));
+    })
+  );
+
+  return dependenciesByObligation.flat();
+}
+
+function buildObligationDeleteBlockedBody(
+  blockingDependencies: Array<ObligationDeleteBlockingDependency | ObligationBulkDeleteBlockingDependency>
+) {
+  return {
+    ok: false,
+    errorCode: OBLIGATION_DELETE_BLOCKED_ERROR_CODE,
+    message: OBLIGATION_DELETE_BLOCKED_MESSAGE,
+    blockingDependencies
+  };
+}
+
+async function assertObligationsCanBeHardDeleted(db: DbClient, obligationIds: string[]) {
+  const blockingDependencies = await getObligationBulkDeleteBlockingDependencies(db, obligationIds);
+  if (blockingDependencies.length > 0) {
+    throw new ObligationBulkDeleteBlockedError(blockingDependencies);
+  }
+}
+
+async function lockObligationHardDeleteTables(tx: Prisma.TransactionClient) {
+  await tx.$executeRaw(
+    Prisma.sql`LOCK TABLE "Obligation", "TaskStateEntry", "Document", "Comment" IN SHARE ROW EXCLUSIVE MODE`
+  );
+}
+
+async function assertExistingObligationsCanBeHardDeleted(tx: Prisma.TransactionClient) {
+  await lockObligationHardDeleteTables(tx);
+  const obligationIds = await listObligationIdsFromDb(tx);
+  await assertObligationsCanBeHardDeleted(tx, obligationIds);
+}
+
+function sendObligationBulkDeleteBlockedResponse(res: Response, error: unknown) {
+  if (!(error instanceof ObligationBulkDeleteBlockedError)) {
+    return false;
+  }
+
+  res.status(error.status).json(buildObligationDeleteBlockedBody(error.blockingDependencies));
+  return true;
+}
+
+function blockLegacyRecoveryIfDisabled(
+  res: Response,
+  config: Pick<AppConfig, "legacyRecoveryEndpointsEnabled">
+) {
+  if (config.legacyRecoveryEndpointsEnabled) {
+    return false;
+  }
+
+  res.status(403).json({
+    ok: false,
+    message: LEGACY_RECOVERY_BLOCK_MESSAGE
+  });
+  return true;
+}
+
 async function replaceObligationsInDb(prisma: PrismaClient, obligations: ObligationDto[]) {
   await prisma.$transaction(async (tx) => {
+    await assertExistingObligationsCanBeHardDeleted(tx);
     await tx.obligation.deleteMany();
 
     for (const obligation of obligations) {
@@ -460,6 +619,19 @@ async function replaceObligationsInDb(prisma: PrismaClient, obligations: Obligat
         data: toObligationCreateInput(obligation)
       });
     }
+  });
+}
+
+async function deleteObligationsInDb(prisma: PrismaClient) {
+  await prisma.$transaction(async (tx) => {
+    await assertExistingObligationsCanBeHardDeleted(tx);
+    await tx.obligation.deleteMany();
+  });
+}
+
+async function assertCurrentObligationsCanBeHardDeleted(prisma: PrismaClient) {
+  await prisma.$transaction(async (tx) => {
+    await assertExistingObligationsCanBeHardDeleted(tx);
   });
 }
 
@@ -730,7 +902,12 @@ async function normalizeObligationForWrite(
   };
 }
 
-export function createObligationsRouter(prisma: PrismaClient) {
+export function createObligationsRouter(
+  prisma: PrismaClient,
+  config: Pick<AppConfig, "legacyRecoveryEndpointsEnabled"> = {
+    legacyRecoveryEndpointsEnabled: false
+  }
+) {
   const router = Router();
 
   router.get("/obligations", async (req: Request, res: Response, next: NextFunction) => {
@@ -1055,6 +1232,50 @@ export function createObligationsRouter(prisma: PrismaClient) {
     }
   });
 
+  router.delete("/obligations/:id", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      applyNoStoreHeaders(res);
+
+      const user = await requireInternalRouteUser(req, res, prisma);
+      if (!user) {
+        return;
+      }
+
+      const result = await prisma.$transaction(async (tx) => {
+        const existing = await findObligationById(tx, req.params.id);
+        if (!existing) {
+          return {
+            status: 404 as const,
+            body: { ok: false, message: "Obligation not found." }
+          };
+        }
+
+        const blockingDependencies = await getObligationDeleteBlockingDependencies(tx, existing.id);
+        if (blockingDependencies.length > 0) {
+          return {
+            status: 409 as const,
+            body: buildObligationDeleteBlockedBody(blockingDependencies)
+          };
+        }
+
+        await tx.obligation.delete({
+          where: {
+            id: existing.id
+          }
+        });
+
+        return {
+          status: 200 as const,
+          body: { ok: true }
+        };
+      });
+
+      res.status(result.status).json(result.body);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.put("/admin/internal/obligations/bulk-replace", async (req: Request, res: Response, next: NextFunction) => {
     try {
       applyNoStoreHeaders(res);
@@ -1063,6 +1284,11 @@ export function createObligationsRouter(prisma: PrismaClient) {
       if (!user) {
         return;
       }
+      if (blockLegacyRecoveryIfDisabled(res, config)) {
+        return;
+      }
+
+      await assertCurrentObligationsCanBeHardDeleted(prisma);
 
       const snapshot = normalizeObligationsSnapshot(req.body);
       const normalizedObligations: ObligationDto[] = [];
@@ -1083,6 +1309,9 @@ export function createObligationsRouter(prisma: PrismaClient) {
         obligations: await listObligationsFromDb(prisma)
       });
     } catch (error) {
+      if (sendObligationBulkDeleteBlockedResponse(res, error)) {
+        return;
+      }
       next(error);
     }
   });
@@ -1095,13 +1324,19 @@ export function createObligationsRouter(prisma: PrismaClient) {
       if (!user) {
         return;
       }
+      if (blockLegacyRecoveryIfDisabled(res, config)) {
+        return;
+      }
 
-      await prisma.obligation.deleteMany();
+      await deleteObligationsInDb(prisma);
 
       res.json({
         ok: true
       });
     } catch (error) {
+      if (sendObligationBulkDeleteBlockedResponse(res, error)) {
+        return;
+      }
       next(error);
     }
   });
@@ -1114,6 +1349,11 @@ export function createObligationsRouter(prisma: PrismaClient) {
       if (!user) {
         return;
       }
+      if (blockLegacyRecoveryIfDisabled(res, config)) {
+        return;
+      }
+
+      await assertCurrentObligationsCanBeHardDeleted(prisma);
 
       const snapshot = await readObligationsSnapshotFromPortal(prisma);
       if (!snapshot) {
@@ -1138,6 +1378,9 @@ export function createObligationsRouter(prisma: PrismaClient) {
         obligations: await listObligationsFromDb(prisma)
       });
     } catch (error) {
+      if (sendObligationBulkDeleteBlockedResponse(res, error)) {
+        return;
+      }
       next(error);
     }
   });
@@ -1150,7 +1393,11 @@ export function createObligationsRouter(prisma: PrismaClient) {
       if (!user) {
         return;
       }
+      if (blockLegacyRecoveryIfDisabled(res, config)) {
+        return;
+      }
 
+      await assertCurrentObligationsCanBeHardDeleted(prisma);
       const obligations = await listObligationsFromDb(prisma);
       await writeObligationsSnapshotToPortal(prisma, obligations, user.id);
 
@@ -1159,6 +1406,9 @@ export function createObligationsRouter(prisma: PrismaClient) {
         obligations
       });
     } catch (error) {
+      if (sendObligationBulkDeleteBlockedResponse(res, error)) {
+        return;
+      }
       next(error);
     }
   });

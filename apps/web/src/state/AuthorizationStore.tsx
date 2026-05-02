@@ -24,6 +24,7 @@ export type AuthorizationPermissions = {
   canEditLegalDocs: boolean;
   canCreateObligations: boolean;
   canEditObligations: boolean;
+  canDeleteObligations: boolean;
   canCreateDeadlines: boolean;
   canEditDeadlines: boolean;
   canCompleteTasks: boolean;
@@ -117,6 +118,7 @@ export function AuthorizationProvider({ children }: { children: React.ReactNode 
         canEditLegalDocs: hasPermission("legalDocs.edit"),
         canCreateObligations: hasPermission("obligations.create"),
         canEditObligations: hasPermission("obligations.edit"),
+        canDeleteObligations: !isExternal && hasPermission("obligations.archive"),
         canCreateDeadlines: hasPermission("deadlines.create"),
         canEditDeadlines: hasPermission("deadlines.edit"),
         canCompleteTasks,

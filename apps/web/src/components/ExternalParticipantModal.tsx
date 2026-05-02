@@ -268,6 +268,7 @@ export default function ExternalParticipantModal({
               }));
             }}
           />
+          <span className="helperText">{t("projects.external.externalOrgHint")}</span>
         </div>
         <div className="formField">
           <span className="fieldLabel">{t("projects.external.externalUser")}</span>

@@ -10,7 +10,7 @@ type LegacyRecoveryRouteConfig = {
   permissionKeys: PermissionKey[];
 };
 
-const LEGACY_RECOVERY_BLOCK_MESSAGE =
+export const LEGACY_RECOVERY_BLOCK_MESSAGE =
   "Legacy recovery endpoints for migrated domains are disabled by default. Set ENABLE_LEGACY_RECOVERY_ENDPOINTS=true only for an explicit maintenance run.";
 
 export const LEGACY_RECOVERY_ROUTE_DEFINITIONS: ReadonlyArray<LegacyRecoveryRouteConfig> = [

@@ -18,7 +18,7 @@ type ExternalOrgsContextValue = {
   createExternalOrg: (
     input: {
       name: string;
-      type: string;
+      type?: string;
       phone?: string;
       email?: string;
       address?: string;
@@ -28,7 +28,7 @@ type ExternalOrgsContextValue = {
     id: string,
     input: Partial<{
       name: string;
-      type: string;
+      type?: string;
       phone?: string;
       email?: string;
       address?: string;
@@ -86,7 +86,7 @@ export function ExternalOrgsProvider({ children }: { children: React.ReactNode }
   const createExternalOrgEntry = useCallback(
     async (input: {
       name: string;
-      type: string;
+      type?: string;
       phone?: string;
       email?: string;
       address?: string;
@@ -103,7 +103,7 @@ export function ExternalOrgsProvider({ children }: { children: React.ReactNode }
       id: string,
       input: Partial<{
         name: string;
-        type: string;
+        type?: string;
         phone?: string;
         email?: string;
         address?: string;

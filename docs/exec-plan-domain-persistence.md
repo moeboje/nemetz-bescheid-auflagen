@@ -428,6 +428,40 @@
 - keine Rueckkehr zu Snapshot oder `localStorage` als Source of Truth.
 - keine PowerAutomate-Flow-Aenderungen, keine neuen Dependencies und keine UX-Neugestaltung ausser bestehender Sperrkommunikation.
 
+## 2v. Gezielter Pflicht-Fixlauf 2026-04-30 fuer externe Firmen, Admin-Passwortsetzen und Auflagen-Loeschen
+- Dies ist kein Azure-Lauf, keine neue Persistenzphase, keine Rollenarchitektur und keine UI-Neugestaltung.
+- Externe Firmen bleiben serverseitig in PostgreSQL und im vorhandenen Admin-Bereich. `admin.access + externalOrgs.view` liest, `admin.access + externalOrgs.manage` legt an, bearbeitet, archiviert und stellt wieder her. Der fachliche Name ist Pflicht; der technische Typ bleibt gespeichert und wird beim Fehlen kontrolliert mit `Firma` vorbelegt.
+- Die Benutzerverwaltung nutzt den bestehenden Admin-Reset-Endpunkt weiter. Der direkte Passwort-Setz-Modus wird als sichtbarer Standard verwendet, ohne Link-, Manual- oder Auto-Modus zu entfernen.
+- Auflagen bekommen einen einzelnen destruktiven Delete-Pfad ohne Bulk- oder Recovery-Reaktivierung. DELETE ist fail-closed: Abhaengige TaskState-/Evidence-, Dokument- oder Kommentarspuren blockieren mit 409; Archivieren bleibt dann der sichere Fachweg.
+- Frontend-Stores bleiben API-backed. Es gibt keine Rueckkehr zu localStorage oder Snapshot als Source of Truth.
+- Pflicht-Verifikation:
+- `cd apps/api && npx prisma validate`
+- `cd apps/api && npx prisma generate`
+- `cd apps/api && npm run build`
+- `cd apps/web && npm run build`
+- `git diff --check`
+- falls PostgreSQL lokal erreichbar ist: `cd apps/api && npx prisma db push --skip-generate` und `cd apps/api && npm test`
+
+## 2w. P1-Review-Fixlauf 2026-04-30 fuer Auflagen-Safe-Delete
+- Dies ist keine neue Feature-Phase, keine Azure-Arbeit und keine neue Recovery-Architektur.
+- Ziel dieses Laufs ist ausschliesslich die Nachschaerfung von Auflagen-Hard-Delete:
+- `DELETE /obligations/:id` verlangt mindestens die destruktive Permission `obligations.archive`; `obligations.edit` reicht nur fuer normales Bearbeiten.
+- UI und API verwenden dieselbe Delete-Berechtigung; Edit-Only-Rollen sehen keinen Hard-Delete und erhalten serverseitig 403.
+- Die Dependency-Pruefung fuer TaskState-/Evidence-, Dokument- und Kommentarspuren bleibt zusaetzlich aktiv und blockiert mit 409.
+- Legacy-/Bulk-/Snapshot-Pfade fuer Auflagen bleiben default-off fail-closed und werden zusaetzlich direkt in den Auflagen-Handlern gegen Guard-Bypass abgesichert.
+- Nicht-Ziele:
+- keine neue `obligations.delete` Permission, keine Bulk-Safe-Delete-Orchestrierung und keine Reaktivierung alter Recovery-Pfade.
+
+## 2x. P1-Fixlauf 2026-05-02 fuer Auflagen-Safe-Delete in Legacy-/Bulk-/Recovery-Pfaden
+- Dies ist keine neue Feature-Phase, keine Azure-Arbeit und keine neue Recovery-Architektur.
+- Ziel dieses Laufs ist ausschliesslich, dass `ENABLE_LEGACY_RECOVERY_ENDPOINTS=true` die Safe-Delete-Regeln fuer Auflagen nicht umgehen kann.
+- Zulässiger Umfang:
+- `bulk-delete`, `bulk-replace`, `backfill-from-snapshot` und `rollback-to-snapshot` der Auflagen pruefen vor der Operation alle bestehenden Auflagen gegen dieselben blockierenden Abhaengigkeiten wie der Einzel-Delete.
+- Blocker bleiben TaskState-/Evidence-Spuren, Dokumente und Kommentare; bei Blockern wird mit `409` und ohne Teil-Loeschung abgebrochen.
+- Wenn keine Blocker existieren, bleiben die explizit freigeschalteten Wartungspfade im bisherigen Umfang nutzbar.
+- Nicht-Ziele:
+- keine neuen Auflagen-Workflows, keine UI-Aenderungen, keine neuen Dependencies, keine Azure-Aenderungen und keine Massencascade.
+
 ## 3. Ist-Zustand
 - Browser-persistiert fachlich aktiv ist aktuell nur noch `taskState`; zusätzliche UI-/Recovery-Daten liegen weiterhin via `apps/web/src/state/persistence.ts` lokal.
 - `ScopesStore`, `AuthoritiesStore`, `ProjectsStore`, `LegalDocsStore`, `ObligationsStore` und `DeadlinesStore` sind bereits API-backed und löschen ihre alten Domänen-Storage-Keys aktiv.

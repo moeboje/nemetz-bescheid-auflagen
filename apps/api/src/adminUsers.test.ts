@@ -46,6 +46,7 @@ async function createUser(args: {
   password: string;
   role?: string;
   type?: "INTERNAL" | "EXTERNAL";
+  externalOrgId?: string;
   isArchived?: boolean;
   mustChangePassword?: boolean;
   failedLoginCount?: number;
@@ -58,6 +59,7 @@ async function createUser(args: {
       email: args.email,
       role: args.role ?? "USER",
       type: args.type ?? "INTERNAL",
+      externalOrgId: args.externalOrgId,
       isArchived: args.isArchived ?? false,
       mustChangePassword: args.mustChangePassword ?? false,
       failedLoginCount: args.failedLoginCount ?? 0,
@@ -990,7 +992,6 @@ describe("Admin Users API", () => {
       cookie,
       body: {
         name: "Beispiel Kanzlei",
-        type: "Kanzlei",
         email: "kontakt@beispiel-kanzlei.test"
       }
     });
@@ -999,9 +1000,11 @@ describe("Admin Users API", () => {
       externalOrg: {
         id: string;
         name: string;
+        type: string;
       };
     };
     assert.equal(createPayload.externalOrg.name, "Beispiel Kanzlei");
+    assert.equal(createPayload.externalOrg.type, "Firma");
 
     const patchResponse = await request(`/admin/external-orgs/${createPayload.externalOrg.id}`, {
       method: "PATCH",
@@ -1082,6 +1085,29 @@ describe("Admin Users API", () => {
       }
     });
     assert.equal(createDeniedResponse.status, 403);
+  });
+
+  it("external users cannot access the general external organization lookup", async () => {
+    const org = await prisma.externalOrganization.create({
+      data: {
+        name: "External Portal Org",
+        type: "Firma"
+      }
+    });
+    const externalUser = await createUser({
+      email: "external-org-lookup-denied@example.com",
+      password: "ValidPassword1!",
+      role: "EXTERNAL",
+      type: "EXTERNAL",
+      externalOrgId: org.id
+    });
+    const cookie = await login(externalUser.email, "ValidPassword1!");
+
+    const lookupResponse = await request("/admin/external-orgs/lookup", { cookie });
+    assert.equal(lookupResponse.status, 403);
+
+    const listResponse = await request("/admin/external-orgs", { cookie });
+    assert.equal(listResponse.status, 403);
   });
 
   it("user creation validates role definitions and external organization", async () => {

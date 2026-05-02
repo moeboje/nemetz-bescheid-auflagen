@@ -51,7 +51,7 @@ export async function listExternalOrganizationsLookup() {
 
 export async function createExternalOrganization(input: {
   name: string;
-  type: string;
+  type?: string;
   phone?: string;
   email?: string;
   address?: string;
@@ -67,7 +67,7 @@ export async function updateExternalOrganization(
   id: string,
   input: Partial<{
     name: string;
-    type: string;
+    type?: string;
     phone?: string;
     email?: string;
     address?: string;

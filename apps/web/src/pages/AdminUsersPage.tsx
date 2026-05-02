@@ -60,6 +60,8 @@ type ExternalOrgQuickForm = {
   address: string;
 };
 
+const DEFAULT_EXTERNAL_ORG_TYPE = "Firma";
+
 const emptyForm: UserFormState = {
   firstName: "",
   lastName: "",
@@ -77,7 +79,7 @@ const emptyForm: UserFormState = {
 
 const emptyExternalOrgQuickForm: ExternalOrgQuickForm = {
   name: "",
-  type: "",
+  type: DEFAULT_EXTERNAL_ORG_TYPE,
   phone: "",
   email: "",
   address: ""
@@ -636,7 +638,7 @@ export default function AdminUsersPage() {
   const openResetModal = (input: { userId: string; displayName: string; email: string; isArchived: boolean; isSelf: boolean }) => {
     setResetState({
       ...input,
-      passwordMode: "link",
+      passwordMode: "direct",
       temporaryPassword: "",
       newPassword: "",
       confirmPassword: "",
@@ -818,7 +820,7 @@ export default function AdminUsersPage() {
   };
 
   const validateQuickExternalOrg = () => {
-    if (!externalOrgQuickForm.name.trim() || !externalOrgQuickForm.type.trim()) {
+    if (!externalOrgQuickForm.name.trim()) {
       return t("admin.externalOrgs.validation.required");
     }
     if (externalOrgQuickForm.email.trim() && !isValidEmail(externalOrgQuickForm.email.trim())) {
@@ -844,7 +846,7 @@ export default function AdminUsersPage() {
     try {
       const created = await createExternalOrg({
         name: externalOrgQuickForm.name.trim(),
-        type: externalOrgQuickForm.type.trim(),
+        type: externalOrgQuickForm.type.trim() || DEFAULT_EXTERNAL_ORG_TYPE,
         phone: externalOrgQuickForm.phone.trim() || undefined,
         email: externalOrgQuickForm.email.trim() || undefined,
         address: externalOrgQuickForm.address.trim() || undefined
@@ -856,7 +858,7 @@ export default function AdminUsersPage() {
       setSuccessMessage(t("admin.users.externalOrg.quickAddSuccess"));
     } catch (error) {
       setExternalOrgQuickError(
-        extractUserAdminErrorMessage(error, "admin.externalOrgs.error.save", {
+        extractUserAdminErrorMessage(error, "admin.externalOrgs.error.create", {
           externalOrgConflictKey: "admin.externalOrgs.validation.uniqueName"
         })
       );
@@ -1462,10 +1464,10 @@ export default function AdminUsersPage() {
               <span className="fieldLabel">{t("admin.users.reset.mode")}</span>
               <Select
                 options={[
+                  { value: "direct", label: t("admin.users.reset.mode.direct") },
                   { value: "link", label: t("admin.users.form.passwordMode.link") },
                   { value: "manual", label: t("admin.users.form.passwordMode.manual") },
-                  { value: "auto", label: t("admin.users.form.passwordMode.auto") },
-                  { value: "direct", label: t("admin.users.reset.mode.direct") }
+                  { value: "auto", label: t("admin.users.form.passwordMode.auto") }
                 ]}
                 value={resetState.passwordMode}
                 onChange={(event) => {

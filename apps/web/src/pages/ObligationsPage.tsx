@@ -7,6 +7,7 @@ import {
   DataTable,
   IconButton,
   Input,
+  Modal,
   Select,
   Badge
 } from "@nemetz/ui";
@@ -33,10 +34,17 @@ const levelVariant = {
   RECOMMENDED: "warning"
 } as const;
 
+function formatObligationDeleteError(error?: string) {
+  if (error === "obligation_delete_blocked" || /dependent data/i.test(error ?? "")) {
+    return t("obligations.delete.blocked");
+  }
+  return t("obligations.delete.error");
+}
+
 export default function ObligationsPage() {
   const navigate = useNavigate();
   const runtimeConfig = useRuntimeConfig();
-  const { obligations } = useObligations();
+  const { obligations, deleteObligation, clearMutationError } = useObligations();
   const { legalDocs, getEffectiveScopeLabel } = useLegalDocs();
   const { projects } = useProjects();
   const { companies, sites, facilities, getScopeLabel } = useScopes();
@@ -45,6 +53,10 @@ export default function ObligationsPage() {
   const { permissions } = useAuthorization();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingObligationId, setEditingObligationId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<(typeof obligations)[number] | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteSuccessMessage, setDeleteSuccessMessage] = useState("");
+  const [isDeleteSubmitting, setIsDeleteSubmitting] = useState(false);
   const [filters, setFilters] = useState({
     search: "",
     level: "",
@@ -116,6 +128,43 @@ export default function ObligationsPage() {
     row.scheduleType === "ONCE"
       ? t("common.notAvailable")
       : row.recurrenceEndDate ?? t("obligations.recurrence.unlimited");
+
+  const openDeleteModal = (target: (typeof obligations)[number]) => {
+    if (!permissions.canDeleteObligations) {
+      return;
+    }
+    clearMutationError();
+    setDeleteError("");
+    setDeleteSuccessMessage("");
+    setDeleteTarget(target);
+  };
+
+  const closeDeleteModal = () => {
+    if (isDeleteSubmitting) {
+      return;
+    }
+    setDeleteTarget(null);
+    setDeleteError("");
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget || !permissions.canDeleteObligations) {
+      return;
+    }
+
+    setIsDeleteSubmitting(true);
+    setDeleteError("");
+    const result = await deleteObligation(deleteTarget.id);
+    setIsDeleteSubmitting(false);
+
+    if (result.ok) {
+      setDeleteTarget(null);
+      setDeleteSuccessMessage(t("obligations.delete.success"));
+      return;
+    }
+
+    setDeleteError(formatObligationDeleteError(result.error));
+  };
 
   const filteredObligations = useMemo(() => {
     return obligations.filter((obligation) => {
@@ -306,6 +355,12 @@ export default function ObligationsPage() {
         </label>
       </Card>
 
+      {deleteSuccessMessage ? (
+        <Card>
+          <p className="placeholderText">{deleteSuccessMessage}</p>
+        </Card>
+      ) : null}
+
       <DataTable
         columns={columns}
         data={filteredObligations}
@@ -328,6 +383,15 @@ export default function ObligationsPage() {
             >
               <EditIcon />
             </IconButton>
+            {permissions.canDeleteObligations ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => openDeleteModal(row)}
+              >
+                {t("obligations.action.delete")}
+              </Button>
+            ) : null}
           </div>
         )}
       />
@@ -340,6 +404,29 @@ export default function ObligationsPage() {
         }}
         obligation={obligations.find((item) => item.id === editingObligationId)}
       />
+
+      <Modal
+        open={Boolean(deleteTarget)}
+        onClose={closeDeleteModal}
+        closeAriaLabel={t("modal.close")}
+        header={t("obligations.delete.title")}
+        footer={
+          <div className="modalFooter">
+            <Button variant="secondary" onClick={closeDeleteModal} disabled={isDeleteSubmitting}>
+              {t("common.cancel")}
+            </Button>
+            <Button onClick={() => void handleDelete()} disabled={isDeleteSubmitting}>
+              {isDeleteSubmitting ? t("obligations.delete.pending") : t("obligations.action.delete")}
+            </Button>
+          </div>
+        }
+      >
+        <div className="modalForm">
+          <p className="placeholderText">{t("obligations.delete.text")}</p>
+          <p className="metaValue">{deleteTarget?.title ?? ""}</p>
+          {deleteError ? <p className="validationText">{deleteError}</p> : null}
+        </div>
+      </Modal>
     </div>
   );
 }

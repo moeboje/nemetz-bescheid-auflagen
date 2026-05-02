@@ -8,11 +8,13 @@ import {
 import { useAuth } from "./AuthStore";
 import { useAuditLog } from "./AuditLogStore";
 import { clearPersistedValue, makeStorageKey } from "./persistence";
+import { ApiError } from "../api/client";
 import {
   archiveObligation as apiArchiveObligation,
   bulkDeleteObligations,
   bulkReplaceObligations,
   createObligation as apiCreateObligation,
+  deleteObligation as apiDeleteObligation,
   listObligations,
   restoreObligation as apiRestoreObligation,
   updateObligation as apiUpdateObligation
@@ -25,6 +27,10 @@ type ObligationCreateInput = Omit<
   id?: string;
   projectId?: string;
 };
+
+export type ObligationMutationResult =
+  | { ok: true }
+  | { ok: false; error?: string };
 
 export type ObligationsContextValue = {
   obligations: Obligation[];
@@ -39,6 +45,7 @@ export type ObligationsContextValue = {
   ) => Promise<Obligation | null>;
   archiveObligation: (id: string) => Promise<Obligation | null>;
   restoreObligation: (id: string) => Promise<Obligation | null>;
+  deleteObligation: (id: string) => Promise<ObligationMutationResult>;
   getObligationsForLegalDoc: (legalDocId: string) => Obligation[];
   replaceObligations: (value: Obligation[]) => Promise<void>;
   resetObligations: () => Promise<void>;
@@ -170,6 +177,13 @@ function getMutationErrorMessage(error: unknown) {
     return error.message;
   }
   return "request_failed";
+}
+
+function getDeleteErrorMessage(error: unknown) {
+  if (error instanceof ApiError && error.status === 409) {
+    return "obligation_delete_blocked";
+  }
+  return getMutationErrorMessage(error);
 }
 
 export function ObligationsProvider({ children }: { children: React.ReactNode }) {
@@ -424,6 +438,35 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
     [logEvent, obligations]
   );
 
+  const deleteObligation = useCallback(
+    async (id: string): Promise<ObligationMutationResult> => {
+      const existing = obligations.find((obligation) => obligation.id === id);
+      if (!existing) {
+        return { ok: false, error: "not_found" };
+      }
+
+      setMutationError(undefined);
+      try {
+        await apiDeleteObligation(id);
+        setObligations((prev) => prev.filter((obligation) => obligation.id !== id));
+        clearPersistedValue(OBLIGATIONS_STORAGE_KEY);
+        logEvent({
+          actorLabel: "Demo User",
+          entityType: "OBLIGATION",
+          entityId: id,
+          action: "DELETED",
+          summary: existing.title
+        });
+        return { ok: true };
+      } catch (error) {
+        const message = getDeleteErrorMessage(error);
+        setMutationError(message);
+        return { ok: false, error: message };
+      }
+    },
+    [logEvent, obligations]
+  );
+
   const getObligationsForLegalDoc = useCallback(
     (legalDocId: string) =>
       obligations.filter((obligation) => obligation.legalDocId === legalDocId),
@@ -458,6 +501,7 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
       updateObligation,
       archiveObligation,
       restoreObligation,
+      deleteObligation,
       getObligationsForLegalDoc,
       replaceObligations,
       resetObligations,
@@ -466,6 +510,7 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
     [
       addObligation,
       archiveObligation,
+      deleteObligation,
       getObligationsForLegalDoc,
       obligations,
       mutationError,
