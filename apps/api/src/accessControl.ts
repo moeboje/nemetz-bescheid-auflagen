@@ -628,7 +628,10 @@ export function mapRequestToPermission(input: { method: string; path: string }) 
     if (isRead) {
       return "tasks.view" as PermissionKey;
     }
-    if (path.includes("/complete") || path.includes("/status") || path.includes("/evidence")) {
+    if (/^\/task-state\/[^/]+\/status\/?$/.test(path)) {
+      return null;
+    }
+    if (path.includes("/complete") || path.includes("/evidence")) {
       return "tasks.complete" as PermissionKey;
     }
     return "tasks.edit" as PermissionKey;

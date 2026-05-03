@@ -396,6 +396,17 @@ describe("Task state evidence requirements", () => {
     });
 
     assert.equal(response.status, 403);
+
+    const trailingSlashResponse = await request(`/task-state/${encodeURIComponent(id)}/evidence/`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        note: "Should be blocked"
+      }
+    });
+
+    assert.equal(trailingSlashResponse.status, 403);
     assert.equal(await prisma.taskStateEntry.findUnique({ where: { taskInstanceId: id } }), null);
   });
 
@@ -416,6 +427,62 @@ describe("Task state evidence requirements", () => {
     });
     assert.equal(completeResponse.status, 403);
 
+    const trailingSlashCompleteResponse = await request(`/task-state/${encodeURIComponent(id)}/complete/`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        note: "Should be blocked"
+      }
+    });
+    assert.equal(trailingSlashCompleteResponse.status, 403);
+
+    const openResponse = await request(`/task-state/${encodeURIComponent(id)}/status`, {
+      method: "POST",
+      cookie,
+      body: {
+        status: "OPEN"
+      }
+    });
+    assert.equal(openResponse.status, 200);
+    const openPayload = (await openResponse.json()) as { taskStateEntry: { status: string } };
+    assert.equal(openPayload.taskStateEntry.status, "OPEN");
+
+    const trailingSlashOpenResponse = await request(`/task-state/${encodeURIComponent(id)}/status/`, {
+      method: "POST",
+      cookie,
+      body: {
+        status: "OPEN"
+      }
+    });
+    assert.equal(trailingSlashOpenResponse.status, 200);
+    const trailingSlashOpenPayload = (await trailingSlashOpenResponse.json()) as { taskStateEntry: { status: string } };
+    assert.equal(trailingSlashOpenPayload.taskStateEntry.status, "OPEN");
+
+    const inProgressResponse = await request(`/task-state/${encodeURIComponent(id)}/status`, {
+      method: "POST",
+      cookie,
+      body: {
+        status: "IN_PROGRESS"
+      }
+    });
+    assert.equal(inProgressResponse.status, 200);
+    const inProgressPayload = (await inProgressResponse.json()) as { taskStateEntry: { status: string } };
+    assert.equal(inProgressPayload.taskStateEntry.status, "IN_PROGRESS");
+
+    const trailingSlashInProgressResponse = await request(`/task-state/${encodeURIComponent(id)}/status/`, {
+      method: "POST",
+      cookie,
+      body: {
+        status: "IN_PROGRESS"
+      }
+    });
+    assert.equal(trailingSlashInProgressResponse.status, 200);
+    const trailingSlashInProgressPayload = (await trailingSlashInProgressResponse.json()) as {
+      taskStateEntry: { status: string };
+    };
+    assert.equal(trailingSlashInProgressPayload.taskStateEntry.status, "IN_PROGRESS");
+
     const statusResponse = await request(`/task-state/${encodeURIComponent(id)}/status`, {
       method: "POST",
       cookie,
@@ -425,9 +492,20 @@ describe("Task state evidence requirements", () => {
     });
     assert.equal(statusResponse.status, 403);
 
-    await prisma.taskStateEntry.create({
+    const trailingSlashStatusResponse = await request(`/task-state/${encodeURIComponent(id)}/status/`, {
+      method: "POST",
+      cookie,
+      body: {
+        status: "DONE"
+      }
+    });
+    assert.equal(trailingSlashStatusResponse.status, 403);
+
+    await prisma.taskStateEntry.update({
+      where: {
+        taskInstanceId: id
+      },
       data: {
-        taskInstanceId: id,
         status: "DONE",
         completedAt: new Date(),
         completedByUserId: user.id,
@@ -443,6 +521,140 @@ describe("Task state evidence requirements", () => {
     assert.equal(reopenResponse.status, 200);
     const payload = (await reopenResponse.json()) as { taskStateEntry: { status: string } };
     assert.equal(payload.taskStateEntry.status, "OPEN");
+  });
+
+  it("uses tasks.complete for DONE status and keeps non-DONE status on tasks.edit", async () => {
+    await createRole("TASK_COMPLETE_STATUS_ONLY", ["tasks.view", "tasks.complete"]);
+    const user = await createUser("task-state-complete-status-only@example.com", "ValidPassword1!", "TASK_COMPLETE_STATUS_ONLY");
+    const obligation = await seedObligation({}, user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const openResponse = await request(`/task-state/${encodeURIComponent(id)}/status`, {
+      method: "POST",
+      cookie,
+      body: {
+        status: "OPEN"
+      }
+    });
+    assert.equal(openResponse.status, 403);
+
+    const trailingSlashOpenResponse = await request(`/task-state/${encodeURIComponent(id)}/status/`, {
+      method: "POST",
+      cookie,
+      body: {
+        status: "OPEN"
+      }
+    });
+    assert.equal(trailingSlashOpenResponse.status, 403);
+
+    const doneResponse = await request(`/task-state/${encodeURIComponent(id)}/status`, {
+      method: "POST",
+      cookie,
+      body: {
+        status: "DONE"
+      }
+    });
+    assert.equal(doneResponse.status, 200);
+    const donePayload = (await doneResponse.json()) as { taskStateEntry: { status: string; completedByUserId?: string } };
+    assert.equal(donePayload.taskStateEntry.status, "DONE");
+    assert.equal(donePayload.taskStateEntry.completedByUserId, user.id);
+
+    const trailingSlashDoneResponse = await request(`/task-state/${encodeURIComponent(id)}/status/`, {
+      method: "POST",
+      cookie,
+      body: {
+        status: "DONE"
+      }
+    });
+    assert.equal(trailingSlashDoneResponse.status, 200);
+    const trailingSlashDonePayload = (await trailingSlashDoneResponse.json()) as {
+      taskStateEntry: { status: string; completedByUserId?: string };
+    };
+    assert.equal(trailingSlashDonePayload.taskStateEntry.status, "DONE");
+    assert.equal(trailingSlashDonePayload.taskStateEntry.completedByUserId, user.id);
+  });
+
+  it("rejects status changes without tasks.edit or tasks.complete", async () => {
+    await createRole("TASK_STATUS_NO_WRITE", ["tasks.view"]);
+    const user = await createUser("task-state-status-no-write@example.com", "ValidPassword1!", "TASK_STATUS_NO_WRITE");
+    const obligation = await seedObligation({}, user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    for (const status of ["OPEN", "IN_PROGRESS", "DONE"]) {
+      for (const statusPath of ["status", "status/"]) {
+        const response = await request(`/task-state/${encodeURIComponent(id)}/${statusPath}`, {
+          method: "POST",
+          cookie,
+          body: {
+            status
+          }
+        });
+        assert.equal(response.status, 403);
+      }
+    }
+
+    assert.equal(await prisma.taskStateEntry.findUnique({ where: { taskInstanceId: id } }), null);
+  });
+
+  it("keeps external users fail-closed for task-state status changes", async () => {
+    const externalOrg = await prisma.externalOrganization.create({
+      data: {
+        name: "Task State External Org",
+        type: "SERVICE_PROVIDER"
+      }
+    });
+    const externalUser = await prisma.user.create({
+      data: {
+        firstName: "External",
+        lastName: "Task",
+        email: "task-state-external-status@example.com",
+        role: "EXTERNAL",
+        type: "EXTERNAL",
+        externalOrgId: externalOrg.id,
+        passwordHash: await hashPassword("ValidPassword1!")
+      }
+    });
+    const obligation = await seedObligation({});
+    const project = await prisma.project.findFirstOrThrow({
+      where: {
+        legalDocuments: {
+          some: {
+            obligations: {
+              some: {
+                id: obligation.id
+              }
+            }
+          }
+        }
+      },
+      select: {
+        id: true
+      }
+    });
+    await prisma.projectAccess.create({
+      data: {
+        projectId: project.id,
+        userId: externalUser.id,
+        accessRole: "EXTERNAL_EXECUTOR"
+      }
+    });
+    const cookie = await login(externalUser.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    for (const statusPath of ["status", "status/"]) {
+      const response = await request(`/task-state/${encodeURIComponent(id)}/${statusPath}`, {
+        method: "POST",
+        cookie,
+        body: {
+          status: "IN_PROGRESS"
+        }
+      });
+
+      assert.equal(response.status, 403);
+    }
+    assert.equal(await prisma.taskStateEntry.findUnique({ where: { taskInstanceId: id } }), null);
   });
 
   it("rejects legacy reconcile attempts that would complete tasks without tasks.complete", async () => {

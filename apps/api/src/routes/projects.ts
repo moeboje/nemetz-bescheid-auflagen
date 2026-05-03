@@ -14,11 +14,11 @@ import {
 } from "./routeAuth.js";
 import {
   canManageProjectAccess,
-  getAccessibleProjectIds,
+  getReadableProjectIdsForDomain,
   getProjectAccessFacts,
   hasGlobalProjectReadAccess,
   isInternalUser,
-  requireProjectAccess,
+  requireProjectDomainRead,
   requireProjectDomainWrite,
   toProjectAccessEntryDto,
   type ProjectAccessSource
@@ -1528,7 +1528,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
         return;
       }
 
-      const accessibleProjectIds = await getAccessibleProjectIds(prisma, user);
+      const accessibleProjectIds = await getReadableProjectIdsForDomain(prisma, user, "projects");
       const projects =
         accessibleProjectIds === null
           ? await listProjectsSnapshot(prisma)
@@ -1564,13 +1564,14 @@ export function createProjectsRouter(prisma: PrismaClient) {
         return;
       }
 
-      const access = await requireProjectAccess({
+      const canReadProject = await requireProjectDomainRead({
         db: prisma,
         user,
         projectId: req.params.id,
+        domain: "projects",
         res
       });
-      if (!access) {
+      if (!canReadProject) {
         return;
       }
 

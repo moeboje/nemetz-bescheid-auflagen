@@ -89,6 +89,18 @@
 - Nicht-Ziele:
 - keine Azure-, Notification-/PowerAutomate-, MigrationBootstrap-, Import-/Export-/Recovery-Aenderungen, keine neuen Dependencies, keine UI-Neugestaltung.
 
+## 2ag. Gezielter RBAC-Fixlauf 2026-05-03 fuer Projekt-Read und TaskState-Status
+- Dies ist keine neue Feature-Phase, keine Azure-Arbeit und keine Rollenarchitektur.
+- Ziel dieses Laufs ist ausschliesslich die Behebung der zwei Review-Findings zu Projekt-Read-Routen und `TaskState`-Statuswechseln.
+- Backend-Regel:
+- ProjectAccess ist nur Projekt-Scope und ersetzt fuer interne Benutzer kein Projekt-Domain-Leserecht.
+- Interne `GET /projects`- und `GET /projects/:id`-Aufrufe brauchen zuerst `projects.view` oder `projects.viewAll`; danach wird ProjectAccess bzw. globaler Lesescope angewendet.
+- Externe Benutzer behalten nur den bestehenden explizit gescopten Project-Shell-Zugriff und erhalten keine breite Projektliste oder interne Vollsicht.
+- `POST /task-state/:taskInstanceId/status` prueft status-spezifisch im Handler: `DONE` braucht `tasks.complete`, `OPEN` und `IN_PROGRESS` brauchen `tasks.edit`.
+- `/complete` und Evidence-Completion bleiben weiterhin `tasks.complete`.
+- Nicht-Ziele:
+- keine Azure-, Notification-/PowerAutomate-, MigrationBootstrap-, Import-/Export-/Recovery-Aenderungen, keine neuen Dependencies, keine UI-Neugestaltung.
+
 ## 2a. Verifizierter Stand 2026-04-15
 - Phase 1 ist im aktuellen Code bereits serverseitig umgesetzt:
 - `apps/api/src/routes/scopes.ts`

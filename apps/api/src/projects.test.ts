@@ -620,6 +620,7 @@ describe("Projects submission type", () => {
   it("scopes project lists and details by explicit ProjectAccess", async () => {
     await createRole("PROJECT_SCOPE_ADMIN_ONLY", ["admin.access"]);
     await createRole("PROJECT_SCOPE_USER_ADMIN", ["admin.access", "users.manage"]);
+    await createRole("PROJECT_SCOPE_LEGAL_DOC_ONLY", ["legalDocs.view"]);
     await createRole("PROJECT_SCOPE_VIEW_ALL", ["projects.viewAll"]);
     await createRole("PROJECT_SCOPE_GLOBAL_EDITOR", ["projects.viewAll", "projects.edit"]);
 
@@ -637,6 +638,11 @@ describe("Projects submission type", () => {
       email: "project-access-user-admin-scope@example.com",
       password: "ValidPassword1!",
       role: "PROJECT_SCOPE_USER_ADMIN"
+    });
+    const legalDocOnlyUser = await createUser({
+      email: "project-access-legal-doc-only@example.com",
+      password: "ValidPassword1!",
+      role: "PROJECT_SCOPE_LEGAL_DOC_ONLY"
     });
     const viewAllUser = await createUser({
       email: "project-access-view-all@example.com",
@@ -692,10 +698,34 @@ describe("Projects submission type", () => {
         referenceLegalDocIds: []
       }
     });
+    const visibleLegalDoc = await prisma.legalDocument.create({
+      data: {
+        id: "project-access-visible-legal-doc",
+        projectId: firstProject.id,
+        type: "NOTICE",
+        title: "Visible Legal Doc Through Domain Scope",
+        attachments: []
+      }
+    });
+    await prisma.projectAccess.createMany({
+      data: [
+        {
+          projectId: firstProject.id,
+          userId: userAdmin.id,
+          accessRole: "PROJECT_VIEWER"
+        },
+        {
+          projectId: firstProject.id,
+          userId: legalDocOnlyUser.id,
+          accessRole: "PROJECT_VIEWER"
+        }
+      ]
+    });
 
     const adminCookie = await login(admin.email, "ValidPassword1!");
     const adminAccessOnlyCookie = await login(adminAccessOnly.email, "ValidPassword1!");
     const userAdminCookie = await login(userAdmin.email, "ValidPassword1!");
+    const legalDocOnlyCookie = await login(legalDocOnlyUser.email, "ValidPassword1!");
     const viewAllCookie = await login(viewAllUser.email, "ValidPassword1!");
     const globalEditorCookie = await login(globalEditor.email, "ValidPassword1!");
     const internalCookie = await login(internalUser.email, "ValidPassword1!");
@@ -720,6 +750,16 @@ describe("Projects submission type", () => {
     assert.deepEqual(await userAdminList.json(), []);
     const userAdminDetail = await request(`/projects/${firstProject.id}`, { cookie: userAdminCookie });
     assert.equal(userAdminDetail.status, 403);
+
+    const legalDocOnlyProjectList = await request("/projects", { cookie: legalDocOnlyCookie });
+    assert.equal(legalDocOnlyProjectList.status, 200);
+    assert.deepEqual(await legalDocOnlyProjectList.json(), []);
+    const legalDocOnlyProjectDetail = await request(`/projects/${firstProject.id}`, { cookie: legalDocOnlyCookie });
+    assert.equal(legalDocOnlyProjectDetail.status, 403);
+    const legalDocOnlyLegalDocs = await request("/legal-docs", { cookie: legalDocOnlyCookie });
+    assert.equal(legalDocOnlyLegalDocs.status, 200);
+    const legalDocOnlyLegalDocsPayload = (await legalDocOnlyLegalDocs.json()) as Array<{ id: string }>;
+    assert.deepEqual(legalDocOnlyLegalDocsPayload.map((entry) => entry.id), [visibleLegalDoc.id]);
 
     const viewAllList = await request("/projects", { cookie: viewAllCookie });
     assert.equal(viewAllList.status, 200);
@@ -815,12 +855,18 @@ describe("Projects submission type", () => {
     const internalProjects = (await internalList.json()) as Array<{ id: string; currentUserAccessRole?: string }>;
     assert.deepEqual(internalProjects.map((project) => project.id), [firstProject.id]);
     assert.equal(internalProjects[0]?.currentUserAccessRole, "PROJECT_VIEWER");
+    const internalVisibleDetail = await request(`/projects/${firstProject.id}`, { cookie: internalCookie });
+    assert.equal(internalVisibleDetail.status, 200);
 
     const externalList = await request("/projects", { cookie: externalCookie });
     assert.equal(externalList.status, 200);
     const externalProjects = (await externalList.json()) as Array<{ id: string; currentUserAccessRole?: string }>;
     assert.deepEqual(externalProjects.map((project) => project.id), [firstProject.id]);
     assert.equal(externalProjects[0]?.currentUserAccessRole, "EXTERNAL_PROJECT_VIEWER");
+    const externalVisibleDetail = await request(`/projects/${firstProject.id}`, { cookie: externalCookie });
+    assert.equal(externalVisibleDetail.status, 200);
+    const externalHiddenDetail = await request(`/projects/${secondProject.id}`, { cookie: externalCookie });
+    assert.equal(externalHiddenDetail.status, 403);
 
     const hiddenDetail = await request(`/projects/${secondProject.id}`, { cookie: internalCookie });
     assert.equal(hiddenDetail.status, 403);
