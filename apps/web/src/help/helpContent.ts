@@ -85,7 +85,7 @@ export const HELP_CONTEXT_SLUGS = {
   notifications: "reports-compliance-summary-and-notifications",
   adminUsers: "admin-users-and-roles",
   adminAuthorities: "admin-authorities-and-contacts",
-  adminData: "admin-data-management-and-recovery",
+  adminData: "export-import-recovery",
   security: "security-login-password-mfa",
   mobile: "mobile-usage-and-field-work",
   troubleshooting: "troubleshooting-common-issues",
@@ -97,43 +97,83 @@ export const HELP_CONTEXT_SLUGS = {
 export const HELP_CATEGORIES: HelpCategory[] = [
   {
     slug: "getting-started",
-    title: "Einstieg",
-    summary: "Portal verstehen, Grundbegriffe klaeren und den ersten sinnvollen Startpunkt finden."
+    title: "Erste Schritte",
+    summary: "Einloggen, Dashboard, Navigation und die wichtigsten Begriffe im Alltag."
   },
   {
-    slug: "portal-areas",
-    title: "Portalbereiche",
-    summary: "Modulbezogene Hilfe fuer Dashboard, Projekte, Rechtsdokumente, Auflagen, Fristen, Aufgaben und Dokumente."
+    slug: "roles-permissions",
+    title: "Rollen und Berechtigungen",
+    summary: "Warum du bestimmte Projekte, Bereiche oder Buttons siehst oder nicht siehst."
   },
   {
-    slug: "workflows",
-    title: "Aufgaben & Workflows",
-    summary: "Schritt-fuer-Schritt-Hilfe fuer haeufige Arbeitsablaeufe im Tagesgeschaeft."
+    slug: "projects",
+    title: "Projekte",
+    summary: "Projekte anlegen, filtern, bearbeiten und mit Status, Einreichtyp und Zugriff pflegen."
   },
   {
-    slug: "admin",
-    title: "Admin",
-    summary: "Benutzer, Rollen, Stammdaten, Datenmanagement, Demo, Import/Export und Recovery."
+    slug: "project-detail-tabs",
+    title: "Projekt-Detailseite und Tabs",
+    summary: "Alle Projekt-Tabs und die wichtigsten Aktionen im Projekt erklaert."
   },
   {
-    slug: "submissions",
-    title: "Fachliche Einreichhilfe",
-    summary: "Orientierung fuer Gewerbe, AWG und UVP/UVE im Produktkontext."
+    slug: "legal-documents",
+    title: "Rechtsdokumente",
+    summary: "Aktive Bescheide und andere Rechtsdokumente erfassen und nachverfolgen."
   },
   {
-    slug: "security",
-    title: "Sicherheit & Zugang",
-    summary: "Login, Passwort, Microsoft-Anmeldung, MFA und allgemeine Sicherheitsfragen."
+    slug: "legacy-decisions",
+    title: "Altbescheide",
+    summary: "Historische Bescheide dokumentieren, pruefen und von aktiven Pflichten trennen."
   },
   {
-    slug: "troubleshooting",
-    title: "Troubleshooting & FAQ",
-    summary: "Hauefige Probleme, Schnellchecks und passende Anschlussartikel."
+    slug: "obligations",
+    title: "Auflagen",
+    summary: "Auflagen mit Verantwortlichen, Wiederholung, Erinnerungen und Nachweisen verwalten."
   },
   {
-    slug: "glossary",
-    title: "Glossar",
-    summary: "Wichtige Begriffe und Abkuerzungen aus Portal und Fachkontext."
+    slug: "deadlines",
+    title: "Fristen",
+    summary: "Fristen anlegen, abschliessen, wieder oeffnen und Erinnerungen verstehen."
+  },
+  {
+    slug: "tasks-evidence",
+    title: "Aufgaben und Nachweise",
+    summary: "Offene Arbeit erledigen und Nachweise wie Fotos, Dokumente oder Berichte hinterlegen."
+  },
+  {
+    slug: "external-users",
+    title: "Externe Firmen und externe Benutzer",
+    summary: "Organisationen, externe Portalzugange und eingeschraenkten Projektzugriff einordnen."
+  },
+  {
+    slug: "admin-area",
+    title: "Admin-Bereich",
+    summary: "Benutzer, Rollen, externe Firmen, Behoerden, Sicherheit und Admin-Aktionen."
+  },
+  {
+    slug: "notifications-email",
+    title: "Benachrichtigungen und E-Mails",
+    summary: "In-App-Hinweise, E-Mail-Versand, PowerAutomate, Dry-Run und Versandstatus."
+  },
+  {
+    slug: "export-recovery",
+    title: "Export, Import und Wiederherstellung",
+    summary: "Teil-Export, gesperrte Import-/Reset-Wege und sicheres Vorgehen bei Recovery."
+  },
+  {
+    slug: "account-security",
+    title: "Mein Konto und Sicherheit",
+    summary: "Eigenes Passwort, MFA, Recovery-Codes und sichere Anmeldung."
+  },
+  {
+    slug: "mobile",
+    title: "Mobile Nutzung",
+    summary: "Portal am Smartphone oder Tablet nutzen, ohne Desktop-Arbeiten zu verwechseln."
+  },
+  {
+    slug: "faq",
+    title: "Haeufige Fragen",
+    summary: "Kurze Antworten auf typische Fragen und Probleme."
   }
 ];
 
@@ -141,218 +181,236 @@ export const HELP_ARTICLES: HelpArticle[] = [
   {
     slug: "portal-overview-and-first-steps",
     title: "Portalueberblick und erste Schritte",
-    summary: "Ein kompakter Einstieg fuer neue Mitarbeiter und gelegentliche Nutzer.",
+    summary: "So findest du dich nach dem Login zurecht und verstehst, wie die wichtigsten Bereiche zusammenhaengen.",
     articleType: "overview",
     categorySlug: "getting-started",
     visibility: "authenticated",
-    audiences: ["new_staff", "operative_users", "project_workers"],
-    tags: ["Einstieg", "Onboarding", "Portal", "Ueberblick"],
-    searchTerms: ["wo anfangen", "erste schritte", "onboarding", "ueberblick"],
+    audiences: ["new_staff", "operative_users", "project_workers", "mobile_users"],
+    tags: ["Einstieg", "Dashboard", "Navigation", "Portal"],
+    searchTerms: ["erste schritte", "login", "dashboard", "navigation", "wo anfangen"],
     relatedArticleSlugs: [
-      "scope-structure-and-master-data",
+      "roles-and-project-permissions",
       "projects-workspace",
       "dashboard-overview"
     ],
     contextKeys: ["dashboard", "projectsList"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Wofuer ist das Portal gedacht?",
         lines: [
-          "Das Portal verbindet Stammdaten, Projekte, Rechtsdokumente, Auflagen, Fristen und Aufgaben in einem durchgaengigen Arbeitsmodell.",
-          "Ziel ist nicht nur Dokumentation, sondern belastbare operative Nachverfolgung mit klaren Referenzen."
+          "Das Portal hilft dabei, Projekte, Bescheide, Rechtsdokumente, Auflagen, Fristen, Aufgaben, Nachweise und Beteiligte an einer Stelle zu verwalten.",
+          "Du siehst nur Bereiche, Projekte und Aktionen, fuer die du berechtigt bist."
         ]
       },
       {
-        heading: "Wann brauche ich das?",
+        heading: "So startest du",
         lines: [
-          "Wenn Sie neu im Portal sind, einen Arbeitsbereich zum ersten Mal nutzen oder den Gesamtzusammenhang verstehen muessen."
-        ]
-      },
-      {
-        heading: "Schritt fuer Schritt",
-        lines: [
-          "Pruefen Sie zuerst den Scope: Company, Standort und Anlage muessen passen.",
-          "Legen Sie danach oder darauf aufbauend ein Projekt mit Behoerde, Ansprechpartner und Einreichtyp an.",
-          "Verknuepfen Sie Rechtsdokumente mit dem Projekt und leiten Sie daraus Auflagen und Fristen ab.",
-          "Arbeiten Sie offene Aufgaben und Nachweise ueber Aufgaben- und Fristenansichten im Tagesbetrieb ab."
+          "Melde dich an und oeffne danach das Dashboard.",
+          "Nutze das Hauptmenue links, um zu Projekten, Rechtsdokumenten, Auflagen, Fristen, Aufgaben, Reports oder Admin-Bereichen zu wechseln.",
+          "Nutze Suche und Filter in Listen, wenn du ein Projekt, Dokument oder eine Aufgabe schneller finden moechtest.",
+          "Oeffne ein Projekt, wenn du die zugehoerigen Rechtsdokumente, Fristen, Unterlagen, Altbescheide, Auflagen oder Beteiligten sehen moechtest."
         ],
         ordered: true
       },
       {
-        heading: "Worauf achten?",
+        heading: "Wenn etwas fehlt",
         lines: [
-          "Archivierung ist nicht dasselbe wie Projektstatus oder Einreichtyp.",
-          "Viele Folgebeziehungen setzen stabile Stammdaten voraus; ueberspringen Sie Scope und Ansprechpartner nicht."
+          "Wenn du ein Projekt oder eine Aktion nicht siehst, liegt das meistens an deinen Berechtigungen.",
+          "Bitte einen Admin oder Projektverantwortlichen, Rolle und Projektzugriff zu pruefen.",
+          "Ein fehlender Button bedeutet meistens, dass du die Aktion ansehen, aber nicht selbst ausfuehren darfst."
         ]
       },
       {
-        heading: "Verwandte Themen",
+        heading: "Wichtige Begriffe",
         lines: [
-          "Die naechsten sinnvollen Artikel sind Scope-Struktur, Projekte und Dashboard."
+          "Ein Projekt ist der Arbeitsrahmen fuer ein Vorhaben oder Verfahren.",
+          "Ein Rechtsdokument ist ein aktiver Bescheid, eine Genehmigung oder ein vergleichbares Dokument.",
+          "Ein Altbescheid ist historische Dokumentation und erzeugt keine aktiven Pflichten automatisch.",
+          "Eine Auflage beschreibt eine Pflicht aus einem Rechtsdokument.",
+          "Eine Frist ist ein konkreter Termin. Eine Aufgabe ist die operative Arbeit, die erledigt werden muss.",
+          "Ein Nachweis ist ein Foto, Dokument, Bericht oder anderer Beleg zum Abschluss."
         ]
       }
     ]
   },
   {
     slug: "dashboard-overview",
-    title: "Dashboard verstehen und sinnvoll nutzen",
-    summary: "Das Dashboard ist die schnelle Uebersichtsseite fuer offene Arbeit und aktuelle Risiken.",
+    title: "Dashboard nutzen",
+    summary: "Das Dashboard zeigt dir schnell, wo offene Arbeit, ueberfaellige Aufgaben und wichtige Hinweise liegen.",
     articleType: "overview",
-    categorySlug: "portal-areas",
+    categorySlug: "getting-started",
     visibility: "authenticated",
     audiences: ["operative_users", "project_workers", "mobile_users"],
-    tags: ["Dashboard", "KPI", "Ueberfaellig", "Benachrichtigungen"],
-    searchTerms: ["dashboard", "kennzahlen", "ueberfaellige aufgaben", "statistiken"],
+    tags: ["Dashboard", "Aufgaben", "Fristen", "Benachrichtigungen"],
+    searchTerms: ["dashboard", "ueberfaellig", "offene aufgaben", "kennzahlen"],
     relatedArticleSlugs: ["tasks-and-completion", "deadlines-and-evidence"],
     contextKeys: ["dashboard"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Was zeigt das Dashboard?",
         lines: [
-          "Das Dashboard zeigt verdichtete Kennzahlen, ueberfaellige Aufgaben und aktuelle Benachrichtigungen.",
-          "Es ist ein Einstieg fuer Priorisierung, nicht die Stelle fuer tiefe Bearbeitung."
+          "Du siehst offene Aufgaben, ueberfaellige Arbeit, anstehende Fristen und aktuelle Hinweise.",
+          "Das Dashboard ist fuer den schnellen Ueberblick gedacht. Die eigentliche Bearbeitung passiert in den Detailseiten."
         ]
       },
       {
-        heading: "Wann brauche ich das?",
+        heading: "So arbeitest du damit",
         lines: [
-          "Zu Tagesbeginn, bei Wochenstarts, vor Statusrunden oder wenn Sie schnell erkennen muessen, wo Handlungsbedarf besteht."
+          "Starte am Dashboard, wenn du priorisieren moechtest.",
+          "Oeffne danach die passende Aufgabe, Frist oder das passende Projekt.",
+          "Pruefe bei unerwarteten Zahlen immer auch Filter, Zeitraum und archivierte Eintraege in der Zielansicht."
+        ],
+        ordered: true
+      }
+    ]
+  },
+  {
+    slug: "roles-and-project-permissions",
+    title: "Rollen, Berechtigungen und Projektzugriff",
+    summary: "Rollen bestimmen, was du grundsaetzlich darfst. Projektzugriff bestimmt, fuer welche Projekte das gilt.",
+    articleType: "reference",
+    categorySlug: "roles-permissions",
+    visibility: "authenticated",
+    audiences: ["new_staff", "operative_users", "project_workers", "admins"],
+    tags: ["Rollen", "Berechtigungen", "Projektzugriff", "Externe Benutzer"],
+    searchTerms: ["berechtigung", "zugriff", "rolle", "projekt fehlt", "button fehlt"],
+    relatedArticleSlugs: [
+      "project-access-management",
+      "external-orgs-and-users",
+      "admin-users-and-roles"
+    ],
+    contextKeys: ["projectsList", "projectDetail"],
+    sections: [
+      {
+        heading: "Das Grundprinzip",
+        lines: [
+          "Jeder Benutzer hat eine Rolle. Diese Rolle legt fest, welche Bereiche und Aktionen grundsaetzlich erlaubt sind.",
+          "Zusaetzlich kann ein Benutzer Zugriff auf einzelne Projekte bekommen.",
+          "Projektzugriff allein reicht nicht immer aus. Wenn die Rolle einen Fachbereich nicht erlaubt, bleibt dieser Bereich trotzdem verborgen oder nur lesbar."
         ]
       },
       {
-        heading: "Worauf achten?",
+        heading: "Was wird ausgeblendet?",
         lines: [
-          "Kennzahlen sind Zusammenfassungen. Bearbeitet wird danach in Aufgaben-, Fristen- oder Fachansichten.",
-          "Wenn Zahlen unerwartet wirken, pruefen Sie Filter, Archivstatus und den Zeitraum in den Zielansichten."
+          "Projekte ohne Zugriff werden nicht angezeigt.",
+          "Dazu gehoerende Rechtsdokumente, Altbescheide, Auflagen, Fristen, Aufgaben, Dokumente und Kommentare werden ebenfalls nicht angezeigt.",
+          "Archivierte Projekte koennen fuer normale Benutzer ausgeblendet sein, auch wenn sie frueher sichtbar waren."
         ]
       },
       {
-        heading: "Haeufige Fehler",
+        heading: "Typische Zugriffsebenen",
         lines: [
-          "Das Dashboard als einzige Quelle fuer Detailbewertung zu nutzen.",
-          "Ueberfaelligkeiten zu lesen, ohne die zugrunde liegenden Auflagen- oder Fristenreferenzen zu oeffnen."
+          "Projekt ansehen bedeutet: Das Projekt und freigegebene Projektinhalte lesen.",
+          "Projekt bearbeiten bedeutet: Im Projekt Inhalte bearbeiten, wenn die Rolle den jeweiligen Fachbereich erlaubt.",
+          "Externer Projektzugriff bedeutet: Eine externe Person sieht nur ausdruecklich freigegebene Projektinhalte.",
+          "Externe Ausfuehrende koennen fuer Aufgaben oder Durchfuehrung eingebunden sein, sehen aber nicht automatisch das ganze Portal."
+        ]
+      },
+      {
+        heading: "Beispiele",
+        lines: [
+          "Ein Benutzer mit Leserecht fuer Projekte sieht nur Projekte, die ihm zugewiesen wurden.",
+          "Ein Bearbeiter kann nur in freigegebenen Projekten arbeiten und nur dort, wo seine Rolle Bearbeitung erlaubt.",
+          "Ein externer Benutzer sieht nur freigegebene Inhalte und keine internen Admin- oder Gesamtlisten."
         ]
       }
     ]
   },
   {
     slug: "scope-structure-and-master-data",
-    title: "Scope-Struktur und Stammdaten",
-    summary: "Companies, Standorte und Anlagen sauber pflegen, damit nachgelagerte Referenzen stabil bleiben.",
-    articleType: "workflow",
-    categorySlug: "portal-areas",
+    title: "Companies, Standorte und Anlagen",
+    summary: "Scopes helfen dir, Projekte und Dokumente dem richtigen Unternehmen, Standort und der richtigen Anlage zuzuordnen.",
+    articleType: "reference",
+    categorySlug: "projects",
     visibility: "authenticated",
     audiences: ["operative_users", "project_workers", "admins"],
-    tags: ["Scope", "Company", "Standort", "Anlage", "Stammdaten"],
+    tags: ["Scope", "Company", "Standort", "Anlage"],
     searchTerms: ["scope", "company", "standort", "anlage", "stammdaten"],
     relatedArticleSlugs: ["projects-workspace", "admin-authorities-and-contacts"],
     contextKeys: ["scopes"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Wofuer ist der Scope da?",
         lines: [
-          "Scope beschreibt die hierarchische Struktur aus Company, Standort und Anlage.",
-          "Diese Struktur ist Grundlage fuer Projekte, Rechtsdokumente, Fristen und Aufgaben."
+          "Der Scope besteht aus Company, Standort und optional Anlage.",
+          "Viele Listen und Reports nutzen diese Zuordnung, damit du nach dem richtigen Bereich filtern kannst."
         ]
       },
       {
-        heading: "Wann brauche ich das?",
+        heading: "So verwendest du ihn",
         lines: [
-          "Vor der ersten Projektanlage, bei neuen Standorten oder wenn Referenzen in Projekten unklar oder fehlerhaft sind."
-        ]
-      },
-      {
-        heading: "Schritt fuer Schritt",
-        lines: [
-          "Legen Sie zunaechst die Company an.",
-          "Erfassen Sie darunter den passenden Standort.",
-          "Ergaenzen Sie nur dann eine Anlage, wenn das Projekt oder Dokument wirklich anlagenbezogen ist.",
-          "Pruefen Sie nach groesseren Aenderungen die betroffenen Projekte und Folgeobjekte."
+          "Lege zuerst die Company an.",
+          "Lege darunter den Standort an.",
+          "Lege eine Anlage nur an, wenn das Projekt oder Dokument wirklich anlagenbezogen ist.",
+          "Pruefe nach Aenderungen, ob betroffene Projekte noch richtig zugeordnet sind."
         ],
         ordered: true
-      },
-      {
-        heading: "Worauf achten?",
-        lines: [
-          "Ein falsch gewaehlter Scope fuehrt spaeter zu unklaren Filterergebnissen und Referenzproblemen.",
-          "Archivieren Sie Stammdaten nur bewusst, weil sie Folgeobjekte indirekt beeinflussen."
-        ]
-      },
-      {
-        heading: "Praxisbeispiel",
-        lines: [
-          "Wenn ein neues Werk zu einer bestehenden Company gehoert, wird zuerst der Standort angelegt und danach bei Bedarf die konkrete Anlage fuer das Projekt gewaehlt."
-        ]
       }
     ]
   },
   {
     slug: "projects-workspace",
-    title: "Projekte anlegen und sauber pflegen",
-    summary: "Projekte sind der Arbeitskontext fuer Dokumente, Auflagen, Fristen und Beteiligte.",
+    title: "Projekte anlegen und bearbeiten",
+    summary: "Ein Projekt ist der Arbeitsrahmen fuer Rechtsdokumente, Altbescheide, Auflagen, Fristen, Aufgaben und Beteiligte.",
     articleType: "workflow",
-    categorySlug: "portal-areas",
+    categorySlug: "projects",
     visibility: "authenticated",
     audiences: ["project_workers", "operative_users", "advanced_users"],
-    tags: ["Projekte", "Projektanlage", "Beteiligte", "Owner", "Scope"],
-    searchTerms: ["projekt", "projekt anlegen", "owner", "deputy", "behoerde"],
+    tags: ["Projekte", "Projektanlage", "Status", "Einreichtyp", "Beteiligte"],
+    searchTerms: ["projekt", "projekt anlegen", "projekt bearbeiten", "owner", "teilnehmer"],
     relatedArticleSlugs: [
       "project-status-and-submission-type",
       "project-detail-and-checklist",
-      "legal-documents-workspace"
+      "project-access-management"
     ],
     contextKeys: ["projectsList"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Was ist ein Projekt?",
         lines: [
-          "Im Projekt werden Scope, Behoerde, Ansprechpartner, Verantwortliche und weitere Referenzen gebuendelt.",
-          "Rechtsdokumente, Auflagen und Fristen knuepfen fachlich an dieses Projekt an."
+          "Ein Projekt buendelt den fachlichen Vorgang mit Scope, Behoerde, Ansprechpartnern, Verantwortlichen und Beteiligten.",
+          "Rechtsdokumente, Altbescheide, Auflagen und Fristen werden im Portal ueber das Projekt zusammengefuehrt."
         ]
       },
       {
-        heading: "Wann brauche ich das?",
+        heading: "Projektliste",
         lines: [
-          "Sobald ein neuer Vorgang, eine neue Einreichung oder ein bestaehender Projektkontext im Portal abgebildet werden soll."
+          "In der Projektliste kannst du nach Suche, Company, Standort, Anlage, Behoerde, Status, Einreichtyp und archivierten Projekten filtern.",
+          "Die Liste zeigt wichtige Projektdaten, Status, Einreichtyp, Behoerde, Verantwortliche und Aufgabenlage.",
+          "Ob du ein Projekt anlegen, bearbeiten, archivieren oder wiederherstellen darfst, haengt von Rolle und Projektzugriff ab."
         ]
       },
       {
-        heading: "Schritt fuer Schritt",
+        heading: "Projekt anlegen",
         lines: [
-          "Waehlen Sie den korrekten Scope.",
-          "Setzen Sie Behoerde und Ansprechpartner, damit spaetere Referenzen belastbar bleiben.",
-          "Pflegen Sie Owner, Stellvertretung und weitere Teilnehmer fuer die operative Zusammenarbeit.",
-          "Ergaenzen Sie erst danach Abhaengigkeiten und Referenzdokumente, wenn sie fachlich wirklich gebraucht werden."
+          "Vergib einen klaren Titel.",
+          "Waehle Status und Einreichtyp.",
+          "Ordne Company, Standort und bei Bedarf Anlage zu.",
+          "Waehle Behoerde und Kontakt, wenn sie bekannt sind.",
+          "Setze Verantwortliche, Stellvertretung, interne Beteiligte und bei Bedarf externe Beteiligte.",
+          "Ergaenze Abhaengigkeiten oder Referenzdokumente nur, wenn sie fachlich wirklich passen."
         ],
         ordered: true
       },
       {
-        heading: "Worauf achten?",
+        heading: "Warum sehe ich ein Projekt nicht?",
         lines: [
-          "Status, Einreichtyp und Archivierung sind drei verschiedene Dinge.",
-          "Teilnehmer und externe Beteiligte sollten nur gepflegt werden, wenn sie fuer das Projekt wirklich relevant sind.",
-          "Projektzugriff wird serverseitig gesteuert. Wenn ein Benutzer kein Projekt sieht, sind auch die zugehoerigen Rechtsdokumente, Auflagen, Fristen, Aufgaben und Dokumente nicht verfuegbar."
-        ]
-      },
-      {
-        heading: "Haeufige Fehler",
-        lines: [
-          "Projekt ohne belastbaren Scope oder ohne passende Behoerde anzulegen.",
-          "Einreichtyp und Projektstatus fachlich zu vermischen."
+          "Meist fehlt der Projektzugriff oder die passende Rolle.",
+          "Bitte einen Admin oder Projektverantwortlichen, den Zugriff im Projekt oder in der Benutzerverwaltung zu pruefen."
         ]
       }
     ]
   },
   {
     slug: "project-status-and-submission-type",
-    title: "Projektstatus, Einreichtyp und Archivierung sauber trennen",
-    summary: "Status zeigt den Verfahrensstand, Einreichtyp den fachlichen Kontext und Archivierung die Sichtbarkeit.",
+    title: "Projektstatus und Einreichtyp",
+    summary: "Status, Einreichtyp und Archivierung bedeuten unterschiedliche Dinge und sollten nicht vermischt werden.",
     articleType: "reference",
-    categorySlug: "workflows",
+    categorySlug: "projects",
     visibility: "authenticated",
     audiences: ["project_workers", "advanced_users", "admins"],
-    tags: ["Projektstatus", "Einreichtyp", "Archivierung", "GEWERBE", "AWG", "UVP_UVE"],
-    searchTerms: ["status", "einreichtyp", "gewerbe", "awg", "uvp", "archiviert"],
+    tags: ["Projektstatus", "Einreichtyp", "Gewerbe", "AWG", "UVP/UVE"],
+    searchTerms: ["status", "einreichtyp", "gewerbe", "awg", "uvp", "uve"],
     relatedArticleSlugs: [
       "projects-workspace",
       "submission-help-gewerbe",
@@ -362,371 +420,500 @@ export const HELP_ARTICLES: HelpArticle[] = [
     contextKeys: ["projectStatus"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Projektstatus",
         lines: [
-          "Projektstatus beschreibt den fachlichen Bearbeitungs- und Verfahrensstand.",
-          "Einreichtyp beschreibt den fachlichen Kontext des Projekts: `GEWERBE`, `AWG` oder `UVP_UVE`.",
-          "Archivierung blendet Projekte aus aktiven Arbeitslisten aus, aendert aber weder Status noch Einreichtyp."
+          "Der Status beschreibt, wo das Projekt fachlich steht, zum Beispiel Entwurf, Vorbereitung, eingereicht oder abgeschlossen.",
+          "Der Status ist keine Berechtigung und keine Archivierung."
         ]
       },
       {
-        heading: "Wann brauche ich das?",
+        heading: "Einreichtyp",
         lines: [
-          "Beim Anlegen und Pflegen von Projekten, bei Statusrunden und wenn unklar ist, warum ein Projekt in einer bestimmten Liste erscheint."
+          "Der Einreichtyp beschreibt den fachlichen Kontext: Gewerbe, AWG oder UVP/UVE.",
+          "Der Einreichtyp hilft, Projekte, Checklisten und Einreichlogik richtig einzuordnen."
         ]
       },
       {
-        heading: "Worauf achten?",
+        heading: "Archivierung",
         lines: [
-          "Neue Projekte erhalten einen Startstatus, aber keinen stillen Einreichtyp-Default.",
-          "Ein archiviertes Projekt bleibt fachlich dasselbe Projekt; es ist nur nicht mehr Teil der aktiven Standardarbeit."
-        ]
-      },
-      {
-        heading: "Praxisbeispiel",
-        lines: [
-          "Ein `AWG`-Projekt kann von `DRAFT` auf `SUBMISSION_PREPARATION` und spaeter auf `SUBMITTED` wechseln, ohne dass der Einreichtyp geaendert wird."
+          "Archivieren nimmt ein Projekt aus der aktiven Arbeit heraus.",
+          "Beim Archivieren kann je nach Ansicht auch abgefragt werden, ob zugehoerige Rechtsdokumente, Auflagen und Fristen mit archiviert werden sollen.",
+          "Archivieren ersetzt nicht den fachlich richtigen Projektstatus."
         ]
       }
     ]
   },
   {
     slug: "project-detail-and-checklist",
-    title: "Projektdetail, Beziehungen und Checkliste",
-    summary: "Das Projektdetail fuehrt Uebersicht, Folgeobjekte, Dokumente, Beteiligte und die optionale Projektcheckliste zusammen.",
-    articleType: "step_by_step",
-    categorySlug: "workflows",
+    title: "Projekt-Detailseite und Tabs",
+    summary: "Die Projekt-Detailseite zeigt alle wichtigen Projektinformationen und die verknuepften Arbeitsbereiche.",
+    articleType: "reference",
+    categorySlug: "project-detail-tabs",
     visibility: "authenticated",
-    audiences: ["project_workers", "advanced_users"],
-    tags: ["Projektdetail", "Checkliste", "Abhaengigkeiten", "Referenzen"],
-    searchTerms: ["projektdetail", "checkliste", "abhaengigkeiten", "referenzdokumente"],
+    audiences: ["project_workers", "operative_users", "advanced_users"],
+    tags: ["Projektdetail", "Tabs", "Checkliste", "Altbescheide", "Zugriff"],
+    searchTerms: ["projektdetail", "tab", "uebersicht", "unterlagen", "altbescheide", "zugriff"],
     relatedArticleSlugs: [
-      "projects-workspace",
-      "legal-document-detail-and-follow-up",
-      "submission-help-awg"
+      "legal-documents-workspace",
+      "legacy-decisions",
+      "obligations-and-scheduling",
+      "project-access-management"
     ],
     contextKeys: ["projectDetail"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Uebersicht",
         lines: [
-          "Im Projektdetail laufen Metadaten, Dokumente, Fristen, Beteiligte, Kommentare und Historie zusammen.",
-          "Wenn das Feature aktiv ist, gibt es zusaetzlich einen Checklisten-Tab fuer projektbezogene Arbeitspunkte."
+          "Hier siehst du die wichtigsten Projektdaten: Status, Einreichtyp, Scope, Behoerde, Kontakt, Verantwortliche, Stellvertretung und Projektbeziehungen.",
+          "Wenn naechste Fristen oder Aufgaben angezeigt werden, dienen sie als schneller Hinweis auf aktuelle Arbeit."
         ]
       },
       {
-        heading: "Wann brauche ich das?",
+        heading: "Rechtsdokumente",
         lines: [
-          "Wenn ein Projekt bereits existiert und Sie Folgeobjekte, Beziehungen oder den aktuellen Bearbeitungsstand vertieft bearbeiten wollen."
+          "Hier liegen die aktiven Rechtsdokumente des Projekts.",
+          "Du kannst ein Rechtsdokument oeffnen, bearbeiten oder neu anlegen, wenn du die passende Berechtigung hast."
         ]
       },
       {
-        heading: "Schritt fuer Schritt",
+        heading: "Fristen",
         lines: [
-          "Pruefen Sie zuerst die Uebersicht: Status, Einreichtyp, Scope und Referenzen.",
-          "Bearbeiten Sie danach die betroffenen Tabs, nicht alles gleichzeitig.",
-          "Nutzen Sie die Checkliste fuer operative Arbeitspunkte, nicht als Ersatz fuer Status oder Archivierung."
+          "Hier findest du Fristen mit Projektbezug.",
+          "Du kannst Fristen anlegen, bearbeiten, abschliessen oder wieder oeffnen, wenn deine Berechtigung das erlaubt."
+        ]
+      },
+      {
+        heading: "Unterlagen",
+        lines: [
+          "Hier werden Dateien und Dokumente direkt am Projekt abgelegt.",
+          "Unterlagen sind nicht dasselbe wie Altbescheide. Altbescheide haben einen eigenen Tab und eigene Angaben."
+        ]
+      },
+      {
+        heading: "Altbescheide",
+        lines: [
+          "Hier dokumentierst du historische Bescheide.",
+          "Altbescheide erzeugen keine aktiven Auflagen, Fristen oder Aufgaben automatisch."
+        ]
+      },
+      {
+        heading: "Auflagen",
+        lines: [
+          "Dieser Tab zeigt Auflagen aus den Rechtsdokumenten des Projekts.",
+          "Du kannst hier eine neue Auflage anlegen, wenn mindestens ein aktives Rechtsdokument vorhanden ist und du schreiben darfst.",
+          "Wenn kein aktives Rechtsdokument vorhanden ist, lege zuerst ein Rechtsdokument an."
+        ]
+      },
+      {
+        heading: "Beteiligte, Checkliste, Zugriff, Notizen und Historie",
+        lines: [
+          "Beteiligte zeigt interne Beteiligte und externe Beteiligte wie Firmen oder Ansprechpartner.",
+          "Die Checkliste ist sichtbar, wenn die Projektcheckliste aktiviert ist.",
+          "Zugriff ist nur fuer berechtigte Admins oder Benutzerverwalter sichtbar und steuert explizite Projektfreigaben.",
+          "Notizen und Historie helfen bei Nachvollziehbarkeit und Abstimmung."
+        ]
+      },
+      {
+        heading: "Praxisbeispiel",
+        lines: [
+          "Du willst eine neue Auflage zu einem Projekt erfassen? Oeffne das Projekt, gehe auf Auflagen und klicke auf Auflage anlegen. Wenn der Button fehlt, pruefe Berechtigung und aktives Rechtsdokument."
+        ]
+      }
+    ]
+  },
+  {
+    slug: "project-access-management",
+    title: "Projektzugriff verwalten",
+    summary: "Im Zugriff-Tab wird festgelegt, welche Benutzer ein Projekt sehen oder bearbeiten duerfen.",
+    articleType: "step_by_step",
+    categorySlug: "roles-permissions",
+    visibility: "admin",
+    audiences: ["admins", "advanced_users"],
+    tags: ["Projektzugriff", "Benutzer", "Admin", "Externe Benutzer"],
+    searchTerms: ["projektzugriff", "zugriff tab", "benutzer hinzufuegen", "zugriff entfernen"],
+    relatedArticleSlugs: ["roles-and-project-permissions", "admin-users-and-roles"],
+    contextKeys: ["projectDetail", "adminUsers"],
+    sections: [
+      {
+        heading: "Wer sieht den Tab?",
+        lines: [
+          "Der Zugriff-Tab ist nur sichtbar, wenn du Benutzer verwalten darfst und nicht als externer Benutzer angemeldet bist.",
+          "Normale Bearbeiter sehen den Tab nicht, auch wenn sie im Projekt arbeiten duerfen."
+        ]
+      },
+      {
+        heading: "Zugriff vergeben",
+        lines: [
+          "Oeffne das Projekt und den Tab Zugriff.",
+          "Waehle den Benutzer aus.",
+          "Waehle eine passende Zugriffsebene.",
+          "Ergaenze bei Bedarf eine Notiz.",
+          "Speichere die Freigabe."
         ],
         ordered: true
       },
       {
-        heading: "Worauf achten?",
+        heading: "Zugriff entfernen",
         lines: [
-          "Abhaengige Projekte und Referenzdokumente sind bewusst getrennte Konzepte.",
-          "Die Projektcheckliste ist generisch und ersetzt keine fachliche AWG- oder UVP-Bewertung.",
-          "Der Zugriff-Tab ist fuer berechtigte Admins die explizite Projektfreigabe; Owner, Stellvertretung und interne Teilnehmer koennen zusaetzlich impliziten Zugriff haben.",
-          "Altbescheide sind historische Projektunterlagen. Sie sind auffindbar und dokumentiert, erzeugen aber keine aktiven Auflagen, Fristen oder Aufgaben automatisch."
+          "Explizit vergebener Zugriff kann entfernt werden.",
+          "Impliziter Zugriff, zum Beispiel ueber Owner, Stellvertretung oder interne Beteiligung, wird als solcher angezeigt und nicht wie eine normale Freigabe entfernt."
         ]
       }
     ]
   },
   {
     slug: "legal-documents-workspace",
-    title: "Rechtsdokumente strukturiert erfassen",
-    summary: "Rechtsdokumente verbinden den fachlichen Bescheid mit Projekt, Scope und Folgearbeit.",
+    title: "Rechtsdokumente",
+    summary: "Rechtsdokumente sind aktive fachliche Dokumente wie Bescheide, Genehmigungen oder vergleichbare Unterlagen.",
     articleType: "workflow",
-    categorySlug: "portal-areas",
+    categorySlug: "legal-documents",
     visibility: "authenticated",
     audiences: ["project_workers", "operative_users", "advanced_users"],
-    tags: ["Rechtsdokumente", "Bescheid", "Projektbezug", "Scope-Override"],
-    searchTerms: ["rechtsdokument", "bescheid", "genehmigung", "aktenzeichen", "scope override"],
+    tags: ["Rechtsdokumente", "Bescheid", "Genehmigung", "Auflagen", "Fristen"],
+    searchTerms: ["rechtsdokument", "bescheid", "genehmigung", "aktenzeichen", "dokument anlegen"],
     relatedArticleSlugs: [
       "legal-document-detail-and-follow-up",
-      "obligations-and-scheduling",
-      "documents-uploads-and-evidence"
+      "legacy-decisions",
+      "obligations-and-scheduling"
     ],
     contextKeys: ["legalDocsList"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Was ist ein Rechtsdokument?",
         lines: [
-          "Rechtsdokumente bilden Bescheide, Genehmigungen und vergleichbare Referenzdokumente im Portal ab.",
-          "Sie sind die fachliche Quelle fuer viele Auflagen und Fristen."
+          "Ein Rechtsdokument ist ein aktives Dokument mit Projektbezug, aus dem Auflagen oder Fristen entstehen koennen.",
+          "Es unterscheidet sich vom Altbescheid: Ein Altbescheid ist historische Dokumentation und nicht automatisch aktiv."
         ]
       },
       {
-        heading: "Wann brauche ich das?",
+        heading: "Rechtsdokumentliste",
         lines: [
-          "Sobald ein Dokument projektbezogen erfasst, geordnet, mit Metadaten versehen oder fuer Folgearbeit nutzbar gemacht werden muss."
+          "Du kannst nach Suche, Typ, Projekt, Scope und archivierten Eintraegen filtern.",
+          "Ein Dokument kann fehlen, wenn du keinen Projektzugriff hast, kein Leserecht fuer Rechtsdokumente hast oder das Dokument archiviert ist."
         ]
       },
       {
-        heading: "Schritt fuer Schritt",
+        heading: "Rechtsdokument anlegen",
         lines: [
-          "Verknuepfen Sie jedes Dokument mit einem bestehenden Projekt.",
-          "Pflegen Sie Typ, Referenz/Aktenzeichen und relevante Datumsfelder sauber.",
-          "Nutzen Sie Scope-Override nur, wenn das Dokument bewusst von der Projektstruktur abweicht."
+          "Waehle ein Projekt aus.",
+          "Pflege Titel, Typ, Referenz oder Aktenzeichen und relevante Datumsangaben.",
+          "Fuelle die im Formular sichtbaren Felder aus.",
+          "Zusaetzliche Angaben aus einer AI-Pruefung erscheinen nur im entsprechenden Pruefflow.",
+          "Lade Unterlagen hoch, wenn sie zum Dokument gehoeren.",
+          "Lege daraus nur fachlich gepruefte Auflagen oder Fristen an."
         ],
         ordered: true
       },
       {
-        heading: "Worauf achten?",
+        heading: "Archivieren und Wiederherstellen",
         lines: [
-          "Ein Scope-Override ist eine fachliche Ausnahme und sollte sparsam eingesetzt werden.",
-          "AI-Review ist nur eine Arbeitshilfe; die fachliche Verantwortung fuer uebernommene Inhalte bleibt beim Nutzer."
+          "Archivieren nimmt ein Rechtsdokument aus der aktiven Arbeit.",
+          "Beim Archivieren kann je nach Ansicht auch abgefragt werden, ob zugehoerige Auflagen und Fristen mit archiviert werden sollen.",
+          "Wiederherstellen ist nur sichtbar, wenn du die passende Berechtigung hast."
         ]
       }
     ]
   },
   {
     slug: "legal-document-detail-and-follow-up",
-    title: "Rechtsdokument-Detail, Folgeobjekte und AI-Review",
-    summary: "Im Dokumentdetail bearbeiten Sie Folgeobjekte, Dokumentanhaenge, Kommentare und gegebenenfalls AI-Auswertung.",
-    articleType: "step_by_step",
-    categorySlug: "workflows",
+    title: "Rechtsdokument-Detailseite",
+    summary: "Die Detailseite zeigt Uebersicht, Auflagen, Fristen, Unterlagen, Notizen und Historie eines Rechtsdokuments.",
+    articleType: "reference",
+    categorySlug: "legal-documents",
     visibility: "authenticated",
     audiences: ["project_workers", "advanced_users"],
-    tags: ["Dokumentdetail", "AI-Review", "Folgeobjekte", "Anhaenge"],
-    searchTerms: ["dokumentdetail", "ai review", "anhang", "obligations tab", "deadlines tab"],
-    relatedArticleSlugs: [
-      "legal-documents-workspace",
-      "obligations-and-scheduling",
-      "deadlines-and-evidence"
-    ],
+    tags: ["Rechtsdokument Detail", "Auflagen", "Fristen", "Unterlagen", "Historie"],
+    searchTerms: ["rechtsdokument detail", "dokument tabs", "auflagen am dokument", "fristen am dokument"],
+    relatedArticleSlugs: ["legal-documents-workspace", "obligations-and-scheduling", "deadlines-and-evidence"],
     contextKeys: ["legalDocDetail"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Tabs",
         lines: [
-          "Das Dokumentdetail ist die operative Stelle fuer Folgeobjekte, Anhange, Kommentare und Historie eines einzelnen Rechtsdokuments."
+          "Uebersicht zeigt die wichtigsten Dokumentdaten, Projektbezug, Scope, Behoerde und Datumsangaben.",
+          "Auflagen zeigt Auflagen, die zu diesem Rechtsdokument gehoeren.",
+          "Fristen zeigt dokumentbezogene Fristen.",
+          "Unterlagen dient fuer Dateien am Rechtsdokument.",
+          "Notizen und Historie dienen der Nachvollziehbarkeit."
         ]
       },
       {
-        heading: "Wann brauche ich das?",
+        heading: "Folgearbeit",
         lines: [
-          "Wenn Sie aus einem Dokument Auflagen oder Fristen ableiten, Dokumente hochladen oder bestaehende Folgeobjekte pruefen wollen."
+          "Lege Auflagen und Fristen nur an, wenn der Inhalt fachlich geprueft wurde.",
+          "Wenn ein Dokument archiviert ist, koennen zugehoerige Inhalte je nach Ansicht weiter nachvollziehbar bleiben, sind aber nicht mehr Teil der normalen aktiven Arbeit."
+        ]
+      }
+    ]
+  },
+  {
+    slug: "legacy-decisions",
+    title: "Altbescheide",
+    summary: "Altbescheide sind historische Bescheide fuer Dokumentation und Nachvollziehbarkeit.",
+    articleType: "workflow",
+    categorySlug: "legacy-decisions",
+    visibility: "authenticated",
+    audiences: ["project_workers", "advanced_users", "admins"],
+    tags: ["Altbescheide", "Historische Bescheide", "Archiv", "Relevanz"],
+    searchTerms: ["altbescheid", "alter bescheid", "historisch", "nur archiv", "zu pruefen"],
+    relatedArticleSlugs: ["project-detail-and-checklist", "legal-documents-workspace"],
+    contextKeys: ["projectDetail", "documents"],
+    sections: [
+      {
+        heading: "Was ist ein Altbescheid?",
+        lines: [
+          "Altbescheide sind historische Bescheide. Sie koennen sehr alt sein und haben oft keine aktuelle Geltung mehr.",
+          "Sie werden abgelegt, damit spaeter nachvollziehbar bleibt, was es frueher gab.",
+          "Ein Altbescheid ist nicht automatisch ein aktives Rechtsdokument."
         ]
       },
       {
-        heading: "Worauf achten?",
+        heading: "Altbescheid erfassen",
         lines: [
-          "Archivieren Sie nicht vorschnell auf Dokumentebene, wenn darunter noch operative Folgeobjekte laufen.",
-          "AI-Ergebnisse sind Vorschlaege. Uebernehmen Sie nur fachlich gepruefte Inhalte."
+          "Oeffne das Projekt und den Tab Altbescheide.",
+          "Klicke auf Altbescheid hochladen.",
+          "Pflege Titel, Geschaeftszahl oder Aktenzahl, Behoerde und Ausstellungsdatum.",
+          "Waehle den passenden Status oder die passende Relevanz.",
+          "Ergaenze eine Relevanznotiz, wenn der Bescheid nur historisch oder noch zu pruefen ist.",
+          "Verknuepfe ihn nur dann mit einem aktiven Rechtsdokument, wenn das fachlich passt."
+        ],
+        ordered: true
+      },
+      {
+        heading: "Status und Relevanz",
+        lines: [
+          "Nur Archiv bedeutet: historische Dokumentation ohne aktive Pflichten.",
+          "Zu pruefen bedeutet: Inhalt muss fachlich noch bewertet werden.",
+          "Teilweise relevant bedeutet: einzelne Inhalte koennen wichtig sein.",
+          "Ersetzt oder nicht mehr gueltig bedeutet: der Bescheid wurde abgeloest.",
+          "In aktives Rechtsdokument uebernommen bedeutet: relevante Inhalte wurden in die aktive Arbeit ueberfuehrt."
+        ]
+      },
+      {
+        heading: "Wichtiger Hinweis",
+        lines: [
+          "Lege aktive Auflagen oder Fristen nur an, wenn der Inhalt fachlich geprueft wurde.",
+          "Fuer alte Bescheide ohne aktuelle Geltung ist meist Nur Archiv oder Ersetzt passend, mit einer Notiz wie: Nur historische Dokumentation, keine aktiven Pflichten uebernommen."
         ]
       }
     ]
   },
   {
     slug: "obligations-and-scheduling",
-    title: "Auflagen planen, terminieren und sauber verantworten",
-    summary: "Auflagen steuern wiederkehrende und einmalige operative Pflichtarbeit.",
-    articleType: "step_by_step",
-    categorySlug: "portal-areas",
+    title: "Auflagen",
+    summary: "Auflagen beschreiben Pflichten aus Rechtsdokumenten und steuern wiederkehrende oder einmalige Arbeit.",
+    articleType: "workflow",
+    categorySlug: "obligations",
     visibility: "authenticated",
     audiences: ["operative_users", "project_workers", "advanced_users"],
-    tags: ["Auflagen", "Scheduling", "Intervall", "Reminder", "Verantwortliche"],
-    searchTerms: ["auflage", "scheduling", "intervall", "reminder", "pflichtnachweis"],
-    relatedArticleSlugs: ["tasks-and-completion", "deadlines-and-evidence"],
+    tags: ["Auflagen", "Wiederholung", "Reminder", "Nachweis", "Loeschen"],
+    searchTerms: ["auflage", "wiederholung", "wiederholungsende", "externe firma", "loeschen blockiert"],
+    relatedArticleSlugs: ["tasks-and-completion", "deadlines-and-evidence", "external-orgs-and-users"],
     contextKeys: ["obligations"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Was ist eine Auflage?",
         lines: [
-          "Auflagen beschreiben Verpflichtungen aus einem Rechtsdokument und erzeugen daraus operative Arbeit.",
-          "Je nach Konfiguration entstehen wiederkehrende oder einmalige Task-Instanzen."
+          "Eine Auflage ist eine fachliche Pflicht, die normalerweise aus einem Rechtsdokument stammt.",
+          "Du kannst eine Auflage auf der Auflagenseite oder im Projekt-Tab Auflagen anlegen, wenn ein aktives Rechtsdokument vorhanden ist."
         ]
       },
       {
-        heading: "Wann brauche ich das?",
+        heading: "Auflage anlegen",
         lines: [
-          "Wenn Sie dokumentbezogene Verpflichtungen strukturieren, terminieren und verantwortlich zuordnen muessen."
-        ]
-      },
-      {
-        heading: "Schritt fuer Schritt",
-        lines: [
-          "Formulieren Sie die Auflage fachlich klar und knapp.",
-          "Waehlen Sie das passende Scheduling und den ersten sinnvollen Faelligkeitspunkt.",
-          "Setzen Sie Owner und Reminder fruehzeitig.",
-          "Definieren Sie Pflichtnachweise nur dort, wo ein Abschluss ohne Evidence nicht ausreichend waere."
+          "Waehle das Rechtsdokument.",
+          "Erfasse Titel, Beschreibung und Einstufung.",
+          "Waehle interne Verantwortliche und bei Bedarf eine Stellvertretung.",
+          "Waehle bei Bedarf eine externe Firma oder einen externen Ansprechpartner.",
+          "Lege fest, ob die Auflage einmalig oder wiederkehrend ist.",
+          "Setze Erinnerung am Faelligkeitstag oder x Tage vorher.",
+          "Definiere Pflichtnachweise, wenn Foto, Dokument oder Bericht erforderlich sind."
         ],
         ordered: true
       },
       {
-        heading: "Haeufige Fehler",
+        heading: "Wiederholungsende",
         lines: [
-          "Intervall und Startdatum unklar zu setzen, sodass unerwartete Task-Serien entstehen.",
-          "Pflichtnachweise zu breit zu definieren und damit die operative Bearbeitung unnoetig zu erschweren."
+          "Ohne Enddatum laeuft eine wiederkehrende Auflage unbefristet weiter.",
+          "Mit Enddatum werden Aufgaben nur bis zu diesem Datum erzeugt.",
+          "Pruefe das Enddatum besonders bei befristeten Bescheiden oder saisonalen Pflichten."
+        ]
+      },
+      {
+        heading: "Bearbeiten, archivieren und loeschen",
+        lines: [
+          "Bearbeiten ist nur moeglich, wenn du im Projekt schreiben darfst und deine Rolle Auflagen erlaubt.",
+          "Endgueltiges Loeschen kann blockiert sein, wenn Aufgabenstatus, Nachweise oder Dokumente sowie Kommentare vorhanden sind.",
+          "So verhindert das Portal Datenverlust. In solchen Faellen ist Archivieren meist der bessere Weg, wenn es dir angeboten wird."
         ]
       }
     ]
   },
   {
     slug: "deadlines-and-evidence",
-    title: "Fristen abschliessen, nachweisen und wieder oeffnen",
-    summary: "Fristen sind terminorientierte Pflichten mit Projekt- oder Dokumentbezug und optionalem Evidence-Abschluss.",
+    title: "Fristen",
+    summary: "Fristen sind konkrete Termine mit Projekt- oder Rechtsdokumentbezug.",
     articleType: "workflow",
-    categorySlug: "portal-areas",
+    categorySlug: "deadlines",
     visibility: "authenticated",
     audiences: ["operative_users", "project_workers", "mobile_users"],
-    tags: ["Fristen", "Evidence", "Due Date", "Reminder", "Reopen"],
-    searchTerms: ["frist", "evidence", "due date", "erledigt", "wiederoeffnen"],
+    tags: ["Fristen", "Faelligkeit", "Reminder", "Abschliessen", "Wieder oeffnen"],
+    searchTerms: ["frist", "faelligkeit", "reminder", "am faelligkeitstag", "wiederoeffnen"],
     relatedArticleSlugs: ["tasks-and-completion", "documents-uploads-and-evidence"],
     contextKeys: ["deadlines"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Was ist eine Frist?",
         lines: [
-          "Fristen bilden terminorientierte Pflichten ab, die direkt an Projekte oder Rechtsdokumente gekoppelt sein koennen."
+          "Eine Frist ist ein Termin, der nachverfolgt werden muss.",
+          "Sie kann mit einem Projekt und, wenn passend, mit einem Rechtsdokument verbunden sein."
         ]
       },
       {
-        heading: "Wann brauche ich das?",
+        heading: "Frist anlegen",
         lines: [
-          "Wenn Termine eigenstaendig nachverfolgt, mit Reminder versehen oder mit Nachweisen abgeschlossen werden muessen."
-        ]
+          "Vergib einen Titel.",
+          "Setze das Faelligkeitsdatum.",
+          "Ordne Projekt und bei Bedarf Rechtsdokument zu.",
+          "Waehle Verantwortliche und Stellvertretung.",
+          "Setze die E-Mail-Erinnerung: 0 Tage bedeutet am Faelligkeitstag, jede andere Zahl bedeutet entsprechend viele Tage vorher."
+        ],
+        ordered: true
       },
       {
-        heading: "Worauf achten?",
+        heading: "Abschliessen und wieder oeffnen",
         lines: [
-          "Offen, erledigt und ueberfaellig werden aus Faelligkeit und Abschlusszustand abgeleitet.",
-          "Wenn Evidence aktiviert ist, sollte der Nachweis unmittelbar beim Abschluss erfasst werden."
-        ]
-      },
-      {
-        heading: "Praxisbeispiel",
-        lines: [
-          "Eine Frist fuer eine Einreichung kann direkt am Projekt haengen, waehrend eine Nachreichfrist am konkreten Rechtsdokument haengt."
+          "Fristen koennen abgeschlossen werden, wenn du die passende Berechtigung hast.",
+          "Beim Abschluss kann ein Nachweis erfasst werden.",
+          "Abgeschlossene Fristen bleiben nachvollziehbar und koennen bei Bedarf wieder geoeffnet werden, wenn du das darfst."
         ]
       }
     ]
   },
   {
     slug: "tasks-and-completion",
-    title: "Aufgaben filtern, abschliessen und dokumentieren",
-    summary: "Aufgaben sind die operative Arbeitsansicht fuer Auflagen- und Fristenarbeit.",
+    title: "Aufgaben und Nachweise",
+    summary: "Aufgaben sind die taegliche Arbeitsliste fuer Auflagen, Fristen und faellige Erledigungen.",
     articleType: "workflow",
-    categorySlug: "portal-areas",
+    categorySlug: "tasks-evidence",
     visibility: "authenticated",
     audiences: ["operative_users", "project_workers", "mobile_users"],
-    tags: ["Aufgaben", "TaskState", "Evidence", "ICS", "Filter"],
-    searchTerms: ["aufgaben", "task", "ics export", "erledigen", "nachweis"],
+    tags: ["Aufgaben", "Nachweise", "Erledigen", "Wieder oeffnen", "Externe Benutzer"],
+    searchTerms: ["aufgabe", "nachweis", "foto", "bericht", "dokument", "abschliessen"],
     relatedArticleSlugs: ["obligations-and-scheduling", "deadlines-and-evidence"],
     contextKeys: ["tasks"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Was sind Aufgaben?",
         lines: [
-          "Die Aufgabenansicht zeigt operative Arbeitspakete aus Auflagen und Fristen in einer einheitlichen Liste."
+          "Aufgaben entstehen aus Auflagen, Fristen oder anderer faelliger Arbeit im Portal.",
+          "Die Aufgabenliste zeigt offene, laufende und erledigte Aufgaben, je nach Filter und Berechtigung."
         ]
       },
       {
-        heading: "Wann brauche ich das?",
+        heading: "Aufgabe abschliessen",
         lines: [
-          "Fuer taegliche Priorisierung, Abschluss, Wiederoeffnung und Nachweisverwaltung."
-        ]
-      },
-      {
-        heading: "Schritt fuer Schritt",
-        lines: [
-          "Nutzen Sie Status-, Typ-, Zeitraum-, Projekt- und Scope-Filter, bevor Sie Aufgaben bewerten.",
-          "Oeffnen Sie den Abschlussdialog direkt aus der Liste, wenn Evidence oder Abschlusskommentar noetig sind.",
-          "Nutzen Sie den ICS-Export nur fuer persoenliche Planung, nicht als fachliche Quelle fuer Statusbewertung."
+          "Oeffne die Aufgabe oder nutze die Aktion in der Liste.",
+          "Fuege einen Kommentar hinzu, wenn etwas erklaert werden muss.",
+          "Lade erforderliche Nachweise hoch, zum Beispiel Foto, Dokument oder Bericht.",
+          "Schliesse die Aufgabe ab."
         ],
         ordered: true
       },
       {
-        heading: "Haeufige Fehler",
+        heading: "Nachweise",
         lines: [
-          "Keine Aufgaben zu sehen, weil Filter, Zeitraum oder Assignee-Fokus noch gesetzt sind.",
-          "Eine erledigte Aufgabe wieder zu oeffnen, ohne die fachliche Ursache zu dokumentieren."
+          "Nachweise zeigen, warum eine Aufgabe oder Frist als erledigt gilt.",
+          "Wenn Pflichtnachweise verlangt werden, kann die Aufgabe ohne diese Nachweise nicht abgeschlossen werden.",
+          "Vorhandene Nachweise schuetzen Auflagen vor unabsichtlichem endgueltigem Loeschen."
+        ]
+      },
+      {
+        heading: "Warum darf ich nicht abschliessen?",
+        lines: [
+          "Du kannst eine Aufgabe eventuell sehen, aber nicht abschliessen, wenn dir Bearbeitungsrecht, Abschlussrecht oder Projektzugriff fehlt.",
+          "Externe Benutzer sehen nur freigegebene oder zugewiesene Inhalte und keinen allgemeinen Aufgabenbereich, sofern dieser fuer sie nicht vorgesehen ist."
         ]
       }
     ]
   },
   {
     slug: "documents-uploads-and-evidence",
-    title: "Dokumente, Uploads, Anhaenge und Evidence richtig einordnen",
-    summary: "Das Portal unterscheidet zwischen serverseitigen Dokumenten und lokalen Evidence-Dateiinhalten.",
+    title: "Unterlagen, Dokumente und Nachweise",
+    summary: "Unterlagen gehoeren zu Projekten, Rechtsdokumenten oder Altbescheiden. Nachweise gehoeren zum Abschluss von Aufgaben oder Fristen.",
     articleType: "reference",
-    categorySlug: "portal-areas",
+    categorySlug: "tasks-evidence",
     visibility: "authenticated",
     audiences: ["operative_users", "mobile_users", "advanced_users"],
-    tags: ["Dokumente", "Upload", "Anhang", "Evidence", "Preview", "Download"],
-    searchTerms: ["dokumente", "upload", "attachment", "evidence", "preview", "download"],
-    relatedArticleSlugs: ["deadlines-and-evidence", "tasks-and-completion", "admin-data-management-and-recovery"],
+    tags: ["Dokumente", "Upload", "Unterlagen", "Nachweise", "Download"],
+    searchTerms: ["dokumente", "upload", "unterlagen", "nachweis", "evidence", "download"],
+    relatedArticleSlugs: ["tasks-and-completion", "deadlines-and-evidence", "legacy-decisions"],
     contextKeys: ["documents"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Der Unterschied",
         lines: [
-          "Dokumente in `DocumentsPanel` sind serverseitig gespeichert und fuer das jeweilige Objekt verknuepft.",
-          "Evidence-Dateimetadaten werden fachlich mit Aufgabe oder Frist verbunden, ihre Datei-Inhalte liegen jedoch lokal im Browser."
+          "Unterlagen sind Dateien direkt an einem Projekt, Rechtsdokument oder Altbescheid.",
+          "Nachweise sind Belege fuer die Erledigung einer Aufgabe oder Frist.",
+          "Ein Dokument kann also Informationsquelle sein, ein Nachweis ist Teil des Abschlusses."
         ]
       },
       {
-        heading: "Wann brauche ich das?",
+        heading: "Uploads und Downloads",
         lines: [
-          "Beim Hochladen von Unterlagen, beim mobilen Foto-Nachweis, bei Vorschau/Download und nach Importen mit fehlenden Datei-Inhalten."
-        ]
-      },
-      {
-        heading: "Worauf achten?",
-        lines: [
-          "Ein JSON-Export enthaelt keine binaeren Datei-Inhalte aus lokaler Evidence-Speicherung.",
-          "Wenn nach einem Import `content missing` oder `storage: none` erscheint, muessen Nachweise neu hochgeladen werden.",
-          "Downloads werden serverseitig ueber das verknuepfte Objekt und dessen Projektzugriff geprueft, auch fuer Altbescheide."
-        ]
-      },
-      {
-        heading: "Praxisbeispiel",
-        lines: [
-          "Ein PDF im Dokumentpanel bleibt serverseitig verfuegbar, ein lokales Foto als Evidence-Nachweis muss nach Browser- oder Geraetwechsel eventuell erneut erfasst werden."
+          "Hochladen, Vorschau und Download sind nur sichtbar, wenn du Zugriff auf das zugehoerige Projekt und die passende Berechtigung hast.",
+          "Wenn ein Datei-Inhalt nicht mehr verfuegbar ist, muss der Nachweis neu hochgeladen werden."
         ]
       }
     ]
   },
   {
-    slug: "reports-compliance-summary-and-notifications",
-    title: "Reports, Compliance Summary und Benachrichtigungen lesen",
-    summary: "Diese Bereiche helfen bei Ueberblick, Trendbeobachtung und Erinnerung, ersetzen aber keine Fachbearbeitung.",
-    articleType: "overview",
-    categorySlug: "portal-areas",
+    slug: "external-orgs-and-users",
+    title: "Externe Firmen und externe Benutzer",
+    summary: "Externe Firmen sind Organisationen. Externe Benutzer sind Personen mit eingeschraenktem Portalzugang.",
+    articleType: "reference",
+    categorySlug: "external-users",
     visibility: "authenticated",
-    audiences: ["operative_users", "advanced_users", "admins"],
-    tags: ["Reports", "Compliance Summary", "Benachrichtigungen", "Reminder"],
-    searchTerms: ["report", "compliance summary", "notifications", "reminder"],
-    relatedArticleSlugs: ["dashboard-overview", "tasks-and-completion"],
-    contextKeys: ["reports", "notifications"],
+    audiences: ["project_workers", "admins", "advanced_users"],
+    tags: ["Externe Firmen", "Externe Benutzer", "Beteiligte", "Projektzugriff"],
+    searchTerms: ["externe firma", "externer benutzer", "externer zugriff", "beteiligte"],
+    relatedArticleSlugs: ["admin-users-and-roles", "admin-authorities-and-contacts", "roles-and-project-permissions"],
+    contextKeys: ["projectDetail", "adminUsers"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Der Unterschied",
         lines: [
-          "Reports und die Compliance Summary verdichten Aufgaben- und Fristenlagen.",
-          "Benachrichtigungen zeigen aktive Reminder, Overdue-Hinweise und Systemmeldungen."
+          "Eine externe Firma ist eine Organisation, zum Beispiel ein Dienstleister, Ingenieurbuero oder Berater.",
+          "Ein externer Benutzer ist eine konkrete Person mit Portalzugang.",
+          "Ein externer Beteiligter im Projekt ist nicht immer automatisch ein Portalbenutzer."
         ]
       },
       {
-        heading: "Wann brauche ich das?",
+        heading: "Externe Firma anlegen",
         lines: [
-          "Fuer Statusrunden, Management-Transparenz, Priorisierung und Nachverfolgung offener Arbeit."
-        ]
+          "Oeffne Admin und dann Externe Firmen.",
+          "Lege Name, Typ, Kontaktangaben und Adresse an.",
+          "Waehle die externe Firma danach bei Projektbeteiligten, bei externen Durchfuehrenden von Auflagen oder bei externen Benutzern aus, wenn sie dort gebraucht wird.",
+          "Rechtsdokumente haben derzeit kein eigenes Feld zur direkten Auswahl einer externen Firma."
+        ],
+        ordered: true
       },
       {
-        heading: "Worauf achten?",
+        heading: "Externen Benutzer anlegen",
         lines: [
-          "Nicht jede Benachrichtigung ist eine neue fachliche Aufgabe.",
-          "Die Summary ist ein Lesemodul. Operative Korrekturen erfolgen in Projekten, Aufgaben, Fristen oder Auflagen."
+          "Oeffne Admin und dann Benutzer.",
+          "Waehle den Benutzertyp Extern.",
+          "Ordne die externe Firma zu.",
+          "Setze ein Initialpasswort, erzeuge einen Reset-Link oder nutze den vorgesehenen Zugangspfad.",
+          "Vergib danach ausdruecklich Projektzugriff, wenn die Person Projektinhalte sehen soll."
+        ],
+        ordered: true
+      },
+      {
+        heading: "Sicherheitsprinzip",
+        lines: [
+          "Externe Benutzer erhalten nur Zugriff auf Inhalte, die ausdruecklich freigegeben wurden.",
+          "Wenn externe Benutzer deaktiviert sind oder archiviert wurden, koennen sie sich nicht anmelden."
         ]
       }
     ]
@@ -734,189 +921,302 @@ export const HELP_ARTICLES: HelpArticle[] = [
   {
     slug: "admin-users-and-roles",
     title: "Admin: Benutzer und Rollen",
-    summary: "Benutzer und Rollen steuern, wer was sehen und bearbeiten darf.",
+    summary: "Admins verwalten Benutzer, Rollen, Passwoerter, MFA und grundlegende Zugriffe.",
     articleType: "workflow",
-    categorySlug: "admin",
+    categorySlug: "admin-area",
     visibility: "admin",
     audiences: ["admins"],
-    tags: ["Admin", "Benutzer", "Rollen", "Passwort Reset", "MFA Reset"],
-    searchTerms: ["admin users", "rollen", "password reset", "mfa reset"],
-    relatedArticleSlugs: ["security-login-password-mfa", "admin-data-management-and-recovery"],
+    tags: ["Admin", "Benutzer", "Rollen", "Passwortreset", "MFA"],
+    searchTerms: ["admin users", "rollen", "passwort reset", "mfa reset", "benutzer archivieren"],
+    relatedArticleSlugs: ["roles-and-project-permissions", "security-login-password-mfa", "project-access-management"],
     contextKeys: ["adminUsers"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Benutzer verwalten",
         lines: [
-          "Die Admin-Unterseiten fuer Benutzer und Rollen regeln den Zugriff auf Fachbereiche und Schreibrechte."
+          "In Admin > Benutzer kannst du interne und externe Benutzer anlegen, bearbeiten, archivieren oder wiederherstellen.",
+          "Du siehst Rolle, Benutzertyp, externe Firma, letzten Login, Sperrstatus und MFA-Status.",
+          "Archivierte Benutzer bleiben nachvollziehbar, sollten aber keine aktive Verantwortung mehr tragen."
         ]
       },
       {
-        heading: "Wann brauche ich das?",
+        heading: "Passwortreset",
         lines: [
-          "Beim Onboarding neuer Nutzer, bei Rollenwechseln oder wenn ein Passwort- oder MFA-Reset noetig ist."
+          "Ein Admin kann fuer andere Benutzer ein Passwort setzen, ein Initialpasswort erzeugen oder einen Reset-Link verwenden.",
+          "Mit Passwortwechsel beim naechsten Login muss der Benutzer danach ein eigenes Passwort setzen.",
+          "Das eigene Passwort aenderst du nicht in der Admin-Liste, sondern unter Mein Konto und Kontosicherheit."
         ]
       },
       {
-        heading: "Worauf achten?",
+        heading: "MFA und gesperrte Konten",
         lines: [
-          "Archivierte Benutzer bleiben Teil der Historie, sollten aber keine operative Verantwortung mehr tragen.",
-          "Rollenanpassungen und Passwort-/MFA-Resets sind administrative Eingriffe und sollten nachvollziehbar bleiben."
+          "Admins koennen MFA erzwingen, MFA zuruecksetzen oder gesperrte Konten entsperren, wenn die Berechtigung vorhanden ist.",
+          "Ein MFA-Reset sollte nur erfolgen, wenn die Identitaet des Benutzers sicher geklaert ist."
+        ]
+      },
+      {
+        heading: "Rollen",
+        lines: [
+          "Rollen bestimmen grundsaetzlich, welche Bereiche jemand sehen oder bearbeiten darf.",
+          "Projektzugriff bestimmt, fuer welche Projekte das gilt.",
+          "Systemrollen koennen eingeschraenkt bearbeitbar sein. Benutzerdefinierte Rollen werden ueber Berechtigungen gepflegt."
         ]
       }
     ]
   },
   {
     slug: "admin-authorities-and-contacts",
-    title: "Admin: Behoerden, Ansprechpartner und externe Firmen",
-    summary: "Diese Stammdaten sind die stabile Grundlage fuer belastbare Referenzen im Projektkontext.",
+    title: "Admin: Behoerden, Kontakte und externe Firmen",
+    summary: "Diese Admin-Bereiche pflegen wichtige Stammdaten fuer Projekte, Rechtsdokumente und Beteiligte.",
     articleType: "workflow",
-    categorySlug: "admin",
+    categorySlug: "admin-area",
     visibility: "admin",
     audiences: ["admins", "advanced_users"],
-    tags: ["Admin", "Behoerden", "Ansprechpartner", "Externe Firmen"],
-    searchTerms: ["behoerde", "ansprechpartner", "external org", "stammdaten"],
-    relatedArticleSlugs: ["scope-structure-and-master-data", "projects-workspace"],
+    tags: ["Admin", "Behoerden", "Kontakte", "Externe Firmen"],
+    searchTerms: ["behoerde", "kontakt", "ansprechpartner", "external org", "externe firma"],
+    relatedArticleSlugs: ["external-orgs-and-users", "projects-workspace", "legal-documents-workspace"],
     contextKeys: ["adminAuthorities"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Behoerden",
         lines: [
-          "Behoerden, Ansprechpartner und externe Firmen werden zentral gepflegt, damit Projekte und Dokumente nicht auf Freitext-Referenzen angewiesen sind."
+          "In Admin > Behoerden pflegst du Behoerden und ihre Kontakte.",
+          "Kontakte koennen Name, Funktion, Abteilung, E-Mail, Telefon, Mobilnummer, Notiz und Primaerkontakt enthalten.",
+          "Archivieren oder Wiederherstellen ist nur sichtbar, wenn du die passende Berechtigung hast."
         ]
       },
       {
-        heading: "Worauf achten?",
+        heading: "Externe Firmen",
         lines: [
-          "Primary Contacts sollten nur bewusst gesetzt werden.",
-          "Archivieren Sie Kontakte oder Behoerden nicht unbemerkt, wenn sie in aktiven Projekten noch verwendet werden."
+          "In Admin > Externe Firmen legst du externe Organisationen an.",
+          "Diese Firmen koennen spaeter bei Projektbeteiligten, Auflagen oder externen Benutzern verwendet werden.",
+          "Archivierte Firmen bleiben historisch nachvollziehbar, sollten aber nicht fuer neue aktive Zuordnungen verwendet werden."
         ]
       }
     ]
   },
   {
-    slug: "admin-data-management-and-recovery",
-    title: "Admin: Import, Export, Reset, Demo und Recovery",
-    summary: "Datenmanagement ist ein Werkzeug fuer Sicherung, Test, Wiederherstellung und Fehlerisolation.",
-    articleType: "step_by_step",
-    categorySlug: "admin",
+    slug: "admin-security-and-settings",
+    title: "Admin: Sicherheitseinstellungen",
+    summary: "Globale Sicherheitseinstellungen steuern Passwortregeln, externe Benutzer und Kontoschutz.",
+    articleType: "reference",
+    categorySlug: "admin-area",
     visibility: "admin",
     audiences: ["admins"],
-    tags: ["Import", "Export", "Reset", "Demo", "Recovery", "Safe Mode", "Diagnostics"],
-    searchTerms: ["import", "export", "reset", "demo", "safe mode", "recovery", "integritaetspruefung"],
-    relatedArticleSlugs: [
-      "documents-uploads-and-evidence",
-      "troubleshooting-common-issues",
-      "security-login-password-mfa"
-    ],
-    contextKeys: ["adminData"],
+    tags: ["Admin", "Sicherheit", "Passwortregeln", "Externe Benutzer", "MFA"],
+    searchTerms: ["admin security", "passwortregeln", "allow external users", "mfa pflicht"],
+    relatedArticleSlugs: ["security-login-password-mfa", "external-orgs-and-users"],
+    contextKeys: ["security"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Was wird hier eingestellt?",
         lines: [
-          "Die Datenverwaltung bietet einen servergestuetzten Teil-Export fuer Fachdomänen sowie Werkzeuge fuer TaskState-Cleanup, Benachrichtigungsaktualisierung und Integritaetspruefung.",
-          "Der JSON-Export ist kein vollstaendiges Disaster-Recovery-Backup fuer alle serververwalteten Admin-, Benutzer- und Sicherheitseinstellungen."
+          "Admins koennen Passwortregeln, Sperrverhalten nach Fehlversuchen, Sitzungsdauer und externe Benutzer steuern.",
+          "Je nach Konfiguration koennen MFA-Pflichten und Sicherheitsuebersichten angezeigt werden."
         ]
-      },
-      {
-        heading: "Schritt fuer Schritt",
-        lines: [
-          "Erstellen Sie vor groesseren Aenderungen immer zuerst einen Export.",
-          "Pruefen Sie genau, welche serverseitigen und lokalen Datenbloecke der Teil-Export nicht enthaelt.",
-          "Gesamt-Import, Gesamt-Reset und Demo-Replace bleiben bis zu einem serverseitig orchestrierten Recovery-Pfad gesperrt.",
-          "Verwenden Sie Safe Mode oder den Recovery-Export nur fuer Fehlerisolierung und Wiederherstellung."
-        ],
-        ordered: true
       },
       {
         heading: "Worauf achten?",
         lines: [
-          "Evidence-Datei-Inhalte sind nicht vollstaendig im JSON-Export enthalten.",
-          "Benutzer, Rollen, externe Firmen, globale Security Settings sowie serverseitige Notification-Settings und Versandhistorie gehoeren nicht zu diesem generischen Export.",
-          "Ein lokaler ErrorBoundary-Reset betrifft nur Browserdaten zur Fehlerisolierung und ersetzt keinen serverseitigen Restore."
+          "Externe Benutzer aktivieren oder deaktivieren wirkt sich direkt auf externe Logins aus.",
+          "Sicherheitseinstellungen sollten bewusst und sparsam geaendert werden."
+        ]
+      }
+    ]
+  },
+  {
+    slug: "reports-compliance-summary-and-notifications",
+    title: "Reports und In-App-Benachrichtigungen",
+    summary: "Reports geben Ueberblick. In-App-Benachrichtigungen sind Hinweise im Portal und nicht dasselbe wie E-Mail-Versand.",
+    articleType: "overview",
+    categorySlug: "notifications-email",
+    visibility: "authenticated",
+    audiences: ["operative_users", "advanced_users", "admins"],
+    tags: ["Reports", "Benachrichtigungen", "In-App", "CSV"],
+    searchTerms: ["reports", "compliance", "notifications", "benachrichtigung", "csv"],
+    relatedArticleSlugs: ["notifications-email-powerautomate", "dashboard-overview"],
+    contextKeys: ["reports"],
+    sections: [
+      {
+        heading: "Reports",
+        lines: [
+          "Reports fassen Aufgaben, Fristen, Rueckstaende und Erfuellung nach Zeitraum, Scope und Projekt zusammen.",
+          "Je nach Berechtigung kannst du CSV-Exporte oder weitere Auswertungen nutzen."
+        ]
+      },
+      {
+        heading: "In-App-Benachrichtigungen",
+        lines: [
+          "Die Benachrichtigungsseite zeigt Hinweise im Portal, zum Beispiel Reminder, ueberfaellige Punkte oder Systemmeldungen.",
+          "Du kannst Hinweise ausblenden oder spaeter erneut anzeigen lassen.",
+          "Diese Hinweise sind nicht dasselbe wie die E-Mail-Versandliste im Admin-Bereich."
+        ]
+      }
+    ]
+  },
+  {
+    slug: "notifications-email-powerautomate",
+    title: "Benachrichtigungen, E-Mail und PowerAutomate",
+    summary: "Das Portal kann Benachrichtigungen erzeugen. E-Mails werden ueber den konfigurierten Versandweg verarbeitet.",
+    articleType: "reference",
+    categorySlug: "notifications-email",
+    visibility: "admin",
+    audiences: ["admins"],
+    tags: ["Notifications", "E-Mail", "PowerAutomate", "Dry-Run", "Outbox"],
+    searchTerms: ["notifications", "powerautomate", "dry-run", "retry", "cancel", "passwort reset"],
+    relatedArticleSlugs: ["reports-compliance-summary-and-notifications", "admin-users-and-roles"],
+    contextKeys: ["notifications"],
+    sections: [
+      {
+        heading: "Was passiert hier?",
+        lines: [
+          "Das Portal kann E-Mail-Benachrichtigungen fuer Passwort-Reset sowie fuer faellige, ueberfaellige oder neu zugewiesene Fristen erzeugen.",
+          "Wenn E-Mail-Versand aktiviert ist, werden E-Mails ueber PowerAutomate oder den eingerichteten Versandweg verschickt."
+        ]
+      },
+      {
+        heading: "Admin Notifications",
+        lines: [
+          "Admin > Notifications zeigt Uebersicht, Versandhistorie, fehlgeschlagene Eintraege, Einstellungen und Systemstatus.",
+          "Admins koennen Details ansehen, fehlgeschlagene oder wartende Eintraege erneut versuchen oder abbrechen, wenn sie die Berechtigung haben.",
+          "Die Einstellungen steuern derzeit Frist-Erinnerungen und Fristzuweisungen. Einige weitere Einstellungen koennen sichtbar sein, erzeugen aktuell aber noch keine automatischen E-Mails."
+        ]
+      },
+      {
+        heading: "Dry-Run",
+        lines: [
+          "Dry-Run bedeutet Testmodus.",
+          "Wenn der Versand im Testmodus ist, erscheinen Benachrichtigungen im System, aber es werden keine echten E-Mails verschickt.",
+          "Dry-Run ist hilfreich, um Regeln und Inhalte zu pruefen, ohne Empfaenger zu kontaktieren."
+        ]
+      },
+      {
+        heading: "Nicht verwechseln",
+        lines: [
+          "In-App-Benachrichtigungen im Portal sind Hinweise fuer Benutzer.",
+          "Die Admin-Versandliste zeigt geplante, gesendete, fehlgeschlagene oder abgebrochene E-Mail-Vorgaenge."
+        ]
+      }
+    ]
+  },
+  {
+    slug: "export-import-recovery",
+    title: "Export, Import und Wiederherstellung",
+    summary: "Der Export ist ein Teil-Export fuer Analyse und Absicherung, kein vollstaendiges Backup der ganzen Anwendung.",
+    articleType: "reference",
+    categorySlug: "export-recovery",
+    visibility: "admin",
+    audiences: ["admins"],
+    tags: ["Export", "Import", "Recovery", "Reset", "Teil-Export"],
+    searchTerms: ["export", "import", "recovery", "reset", "backup", "teil-export"],
+    relatedArticleSlugs: ["admin-users-and-roles", "notifications-email-powerautomate", "troubleshooting-common-issues"],
+    contextKeys: ["adminData"],
+    sections: [
+      {
+        heading: "Was ist im Export enthalten?",
+        lines: [
+          "Der Export enthaelt bestimmte Fachdatenbereiche fuer Analyse und Wiederherstellungspruefung.",
+          "Er ist kein vollstaendiges Backup der gesamten Anwendung."
+        ]
+      },
+      {
+        heading: "Was ist nicht enthalten?",
+        lines: [
+          "Nicht enthalten sind Passwoerter, Reset-Tokens, Secrets, PowerAutomate-Webhooks und vergleichbare Sicherheitsdaten.",
+          "Benutzer, Rollen, externe Firmen, Sicherheitseinstellungen und die E-Mail-Versandhistorie gehoeren nicht zum generischen Fach-Export.",
+          "Datei-Inhalte aus Nachweisen koennen fehlen und muessen dann neu hochgeladen werden."
+        ]
+      },
+      {
+        heading: "Import, Reset und Demo-Replace",
+        lines: [
+          "Gesamt-Import, Gesamt-Reset und Demo-Replace sind aus Sicherheitsgruenden gesperrt oder eingeschraenkt.",
+          "Der Grund ist Schutz vor Datenverlust und vor widerspruechlichen Daten.",
+          "Spiele keine alten JSON-Dateien einfach ein, wenn etwas fehlt. Informiere einen Admin und klaere den passenden Recovery-Weg."
+        ]
+      },
+      {
+        heading: "Recovery",
+        lines: [
+          "Bei Recovery gilt: erst pruefen, dann handeln.",
+          "Nutze Exporte zur Analyse und Abstimmung, nicht als blindes Gesamt-Backup.",
+          "Wenn Inhalte fehlen oder gesperrt sind, dokumentiere den Fall und pruefe Berechtigungen, Archivstatus und Projektzugriff."
         ]
       }
     ]
   },
   {
     slug: "security-login-password-mfa",
-    title: "Login, Passwort, Microsoft-Anmeldung und MFA",
-    summary: "Zugang und Sicherheit sind bewusst getrennte Schritte: anmelden, MFA bestaetigen und sicher verwalten.",
+    title: "Mein Konto, Passwort und MFA",
+    summary: "Hier geht es um deinen eigenen Zugang: Passwort aendern, MFA einrichten und Recovery-Codes sicher aufbewahren.",
     articleType: "workflow",
-    categorySlug: "security",
+    categorySlug: "account-security",
     visibility: "public",
     audiences: ["new_staff", "operative_users", "admins"],
-    tags: ["Login", "Passwort", "MFA", "Microsoft", "Recovery-Code", "Sicherheit"],
-    searchTerms: ["login", "anmelden", "passwort", "mfa", "microsoft", "recovery code"],
+    tags: ["Login", "Passwort", "MFA", "Recovery-Code", "Mein Konto"],
+    searchTerms: ["login", "passwort", "mfa", "kontosicherheit", "recovery code", "reset link"],
     relatedArticleSlugs: ["admin-users-and-roles", "troubleshooting-common-issues"],
     contextKeys: ["security"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Mein Konto",
         lines: [
-          "Das Portal unterstuetzt klassische Anmeldung, optional Microsoft-Anmeldung und MFA mit Authenticator-Code oder Recovery-Code."
+          "Ueber das Benutzermenue oeffnest du Mein Konto und Kontosicherheit.",
+          "Dort kannst du dein eigenes Passwort aendern und MFA einrichten oder verwalten."
         ]
       },
       {
-        heading: "Wann brauche ich das?",
+        heading: "Passwort",
         lines: [
-          "Beim ersten Login, beim Passwortverlust, beim MFA-Setup, bei einem Geraetewechsel oder wenn MFA neu bestaetigt werden muss."
+          "Dein eigenes Passwort aenderst du in Kontosicherheit.",
+          "Wenn ein Admin dein Passwort zuruecksetzt, musst du beim naechsten Login eventuell ein neues eigenes Passwort setzen.",
+          "Ein Reset-Link kann ablaufen. Fordere bei Bedarf einen neuen Link an."
         ]
       },
       {
-        heading: "Schritt fuer Schritt",
+        heading: "MFA und Recovery-Codes",
         lines: [
-          "Melden Sie sich mit E-Mail und Passwort oder ueber Microsoft an.",
-          "Wenn MFA verlangt wird, bestaetigen Sie den Login mit Authenticator-Code oder Recovery-Code.",
-          "Pflegen Sie MFA in den Sicherheitseinstellungen und speichern Sie Recovery-Codes getrennt und sicher."
-        ],
-        ordered: true
-      },
-      {
-        heading: "Worauf achten?",
-        lines: [
-          "Ein Recovery-Code ist kein Alltagslogin, sondern ein Notfallpfad.",
-          "Passwort-Reset und MFA-Deaktivierung sind unterschiedliche Prozesse."
+          "MFA schuetzt dein Konto mit einem zusaetzlichen Code aus einer Authenticator-App.",
+          "Recovery-Codes sind fuer den Notfall, zum Beispiel bei Geraetewechsel.",
+          "Bewahre Recovery-Codes sicher auf und teile sie nicht."
         ]
       },
       {
-        heading: "Haeufige Fehler",
+        heading: "Wenn Login nicht funktioniert",
         lines: [
-          "MFA-Code auf einem alten Geraet zu suchen, obwohl bereits ein neues Setup aktiv ist.",
-          "Zu spaet zu bemerken, dass der Reset-Link oder MFA-Setup-Link abgelaufen ist."
+          "Pruefe zuerst E-Mail, Passwort, MFA-Code und Ablaufdatum des Reset-Links.",
+          "Wenn dein Konto deaktiviert, archiviert oder fuer externe Benutzer gesperrt ist, kann nur ein Admin helfen."
         ]
       }
     ]
   },
   {
     slug: "mobile-usage-and-field-work",
-    title: "Mobile Nutzung und Arbeiten im Feld",
-    summary: "Die Web-App ist fuer Kernaufgaben mobil nutzbar, aber nicht jede Seite ist fuer tiefe Bearbeitung gleich gut geeignet.",
+    title: "Mobile Nutzung",
+    summary: "Das Portal ist mobil nutzbar. Fuer lange Formulare und Admin-Arbeit ist Desktop meist besser.",
     articleType: "reference",
-    categorySlug: "workflows",
+    categorySlug: "mobile",
     visibility: "authenticated",
     audiences: ["mobile_users", "operative_users"],
-    tags: ["Mobil", "Smartphone", "Tablet", "Upload", "Feldarbeit"],
-    searchTerms: ["mobile", "smartphone", "tablet", "feldarbeit", "kamera"],
-    relatedArticleSlugs: ["documents-uploads-and-evidence", "tasks-and-completion"],
+    tags: ["Mobil", "Smartphone", "Tablet", "Drawer", "Nachweise"],
+    searchTerms: ["mobile", "smartphone", "tablet", "drawer", "vollbild", "karten"],
+    relatedArticleSlugs: ["tasks-and-completion", "documents-uploads-and-evidence"],
     contextKeys: ["mobile"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "So funktioniert es mobil",
         lines: [
-          "Die wichtigsten Kernaufgaben wie Aufgabenbearbeitung, Fristabschluss und mobile Nachweiserfassung koennen auf Smartphone und kleinem Tablet genutzt werden."
-        ]
-      },
-      {
-        heading: "Wann brauche ich das?",
-        lines: [
-          "Wenn Sie vor Ort Fotos erfassen, Nachweise hochladen, eine Aufgabe direkt abschliessen oder schnell einen Status pruefen wollen."
+          "Auf kleinen Bildschirmen nutzt du die Navigation ueber das Menue oder den Drawer.",
+          "Tabellen koennen als Karten erscheinen, damit die wichtigsten Informationen besser lesbar bleiben.",
+          "Formulare und Dialoge koennen im Vollbild erscheinen."
         ]
       },
       {
         heading: "Worauf achten?",
         lines: [
-          "Laengere Stammdatenpflege, komplexe Admin-Arbeit und umfangreiche Reports funktionieren auf Desktop meist besser.",
-          "Wenn lokale Evidence-Dateien wichtig sind, vermeiden Sie Browserwechsel mitten im Arbeitsablauf."
+          "Bei laengeren Formularen zwischendurch bewusst pruefen, ob alle Pflichtfelder gesetzt sind.",
+          "Speichere vor dem Wechseln der Seite.",
+          "Fuer umfangreiche Admin-Arbeiten, Reports und komplexe Stammdatenpflege ist Desktop empfohlen."
         ]
       }
     ]
@@ -924,151 +1224,101 @@ export const HELP_ARTICLES: HelpArticle[] = [
   {
     slug: "troubleshooting-common-issues",
     title: "Haeufige Probleme schnell einordnen",
-    summary: "Ein zentraler Artikel fuer typische Symptome, erste Checks und die richtigen Anschlussstellen.",
+    summary: "Erste Hilfe, wenn Projekte, Buttons, Aufgaben, E-Mails oder Exporte nicht so aussehen wie erwartet.",
     articleType: "troubleshooting",
-    categorySlug: "troubleshooting",
+    categorySlug: "faq",
     visibility: "authenticated",
     audiences: ["operative_users", "project_workers", "admins"],
-    tags: ["Troubleshooting", "Keine Aufgaben", "Importfehler", "Safe Mode", "Evidence fehlt"],
-    searchTerms: ["problem", "fehler", "keine aufgaben", "import fehlgeschlagen", "safe mode"],
+    tags: ["FAQ", "Troubleshooting", "Berechtigungen", "Export", "Notifications"],
+    searchTerms: ["faq", "problem", "projekt fehlt", "button fehlt", "loeschen blockiert"],
     relatedArticleSlugs: [
-      "admin-data-management-and-recovery",
-      "tasks-and-completion",
-      "documents-uploads-and-evidence",
-      "security-login-password-mfa"
+      "roles-and-project-permissions",
+      "export-import-recovery",
+      "notifications-email-powerautomate"
     ],
     contextKeys: ["troubleshooting"],
     sections: [
       {
-        heading: "Typische Schnellchecks",
+        heading: "Schnellchecks",
         lines: [
-          "Wenn keine Aufgaben sichtbar sind: zuerst Filter, Zeitraum, Assignee und Archivstatus pruefen.",
-          "Wenn etwas ueberfaellig erscheint: Due Date und Abschlussstatus in Frist oder Aufgabe pruefen.",
-          "Wenn ein Import fehlschlaegt: Validierungsfehler und Warnungen vor dem Bestaetigen lesen.",
-          "Wenn Evidence fehlt: pruefen, ob nur Metadaten importiert wurden und die Datei-Inhalte neu hochgeladen werden muessen.",
-          "Wenn die UI in einen Fehlerzustand faellt: Recovery-Export, Reset und Safe Mode nur bewusst nutzen."
-        ],
-        ordered: true
+          "Projekt fehlt: Projektzugriff, Rolle und Archivstatus pruefen lassen.",
+          "Button fehlt: meist fehlt die passende Berechtigung fuer diese Aktion.",
+          "Auflage laesst sich nicht loeschen: Aufgabenstatus, Nachweise oder Dokumente sowie Kommentare koennen das Loeschen blockieren.",
+          "Frist laesst sich nicht abschliessen: Abschlussrecht und Projektzugriff pruefen.",
+          "E-Mail kommt nicht an: Admin Notifications, Dry-Run, Fehlerstatus und Empfaengeradresse pruefen."
+        ]
       },
       {
-        heading: "Worauf achten?",
+        heading: "Wenn etwas gesperrt ist",
         lines: [
-          "Safe Mode isoliert Fehlerzustande, ersetzt aber keine saubere Ursachenanalyse.",
-          "Nicht jeder Importfehler ist ein technischer Fehler; oft fehlen einfach erforderliche Downstream-Daten im Paket."
+          "Import, Reset und Demo-Replace koennen bewusst gesperrt sein, um Datenverlust zu verhindern.",
+          "Klaere den Fall mit einem Admin, statt alte Dateien ungeprueft einzuspielen."
         ]
       }
     ]
   },
   {
     slug: "submission-help-gewerbe",
-    title: "Fachliche Einreichhilfe: Gewerbe-Basis",
-    summary: "Die Gewerbe-Basis beschreibt den allgemeinen Einreichkontext im Produkt, ohne juristische Detailberatung zu leisten.",
+    title: "Einreichtyp Gewerbe",
+    summary: "Gewerbe beschreibt den allgemeinen gewerblichen Einreichkontext eines Projekts.",
     articleType: "submission_guidance",
-    categorySlug: "submissions",
+    categorySlug: "projects",
     visibility: "authenticated",
     audiences: ["project_workers", "advanced_users"],
-    tags: ["Gewerbe", "Einreichhilfe", "Einreichtyp"],
-    searchTerms: ["gewerbe", "einreichung", "gewerbe basis"],
-    relatedArticleSlugs: [
-      "project-status-and-submission-type",
-      "project-detail-and-checklist"
-    ],
+    tags: ["Gewerbe", "Einreichtyp", "Projekt"],
+    searchTerms: ["gewerbe", "einreichung", "einreichtyp"],
+    relatedArticleSlugs: ["project-status-and-submission-type", "projects-workspace"],
     contextKeys: ["submissionGewerbe"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Wann passt Gewerbe?",
         lines: [
-          "Dieser Artikel hilft dabei, Gewerbe-Projekte im Produkt sauber zu strukturieren und typische Arbeitsfragen einzuordnen.",
-          "Er ersetzt keine Rechtsberatung und keine fachliche Prüfung durch die zustaendige Stelle."
-        ]
-      },
-      {
-        heading: "Wann brauche ich das?",
-        lines: [
-          "Wenn ein Projekt fachlich dem Einreichtyp `GEWERBE` zugeordnet ist oder dieser Einreichtyp geprueft wird."
-        ]
-      },
-      {
-        heading: "Worauf achten?",
-        lines: [
-          "Projektstatus und Einreichtyp nicht vermischen.",
-          "Die Projektcheckliste ist eine operative Hilfe, keine formale Einreichbestaetigung."
+          "Waehle Gewerbe, wenn das Projekt fachlich in den allgemeinen gewerblichen Einreichkontext faellt.",
+          "Nutze Status, Unterlagen und Checkliste, um die Vorbereitung nachvollziehbar zu halten."
         ]
       }
     ]
   },
   {
     slug: "submission-help-awg",
-    title: "Fachliche Einreichhilfe: AWG-Zusatz",
-    summary: "AWG-spezifische Orientierung fuer Projekte mit dem Einreichtyp `AWG`.",
+    title: "Einreichtyp AWG",
+    summary: "AWG beschreibt Projekte mit abfallwirtschaftlichem Einreichkontext.",
     articleType: "submission_guidance",
-    categorySlug: "submissions",
+    categorySlug: "projects",
     visibility: "authenticated",
     audiences: ["project_workers", "advanced_users"],
-    tags: ["AWG", "Einreichhilfe", "Checkliste"],
-    searchTerms: ["awg", "awg zusatz", "abfallwirtschaft"],
-    relatedArticleSlugs: [
-      "project-status-and-submission-type",
-      "project-detail-and-checklist",
-      "submission-help-gewerbe"
-    ],
+    tags: ["AWG", "Einreichtyp", "Projekt"],
+    searchTerms: ["awg", "abfallwirtschaft", "einreichtyp"],
+    relatedArticleSlugs: ["project-status-and-submission-type", "projects-workspace"],
     contextKeys: ["submissionAwg"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Wann passt AWG?",
         lines: [
-          "Der AWG-Zusatz hilft dabei, AWG-Projekte im Portal besser zu strukturieren, typische Zusatzunterlagen einzuordnen und Folgearbeit sauber zu planen."
-        ]
-      },
-      {
-        heading: "Wann brauche ich das?",
-        lines: [
-          "Wenn ein Projekt mit `submissionType = AWG` gefuehrt wird oder von einer allgemeinen Gewerbe-Basis in eine vertiefte AWG-Bearbeitung uebergeht."
-        ]
-      },
-      {
-        heading: "Worauf achten?",
-        lines: [
-          "Nicht jeder AWG-spezifische Arbeitspunkt ist bereits als Produktlogik materialisiert.",
-          "Nutzen Sie die Projektcheckliste und Verwandte-Themen-Artikel als strukturierende Hilfe."
+          "Waehle AWG, wenn das Projekt fachlich dem abfallwirtschaftlichen Einreichkontext zugeordnet ist.",
+          "Pruefe besonders Unterlagen, Projektstatus und relevante Auflagen, weil hier oft mehrere Fachbeteiligte zusammenarbeiten."
         ]
       }
     ]
   },
   {
     slug: "submission-help-uvp-uve",
-    title: "Fachliche Einreichhilfe: UVP/UVE-Zusatz",
-    summary: "Orientierung fuer Projekte mit hohem Vorbereitungs- und Abstimmungsbedarf im Kontext `UVP_UVE`.",
+    title: "Einreichtyp UVP/UVE",
+    summary: "UVP/UVE beschreibt Projekte mit umfangreicher Vorbereitung und hohem Dokumentbezug.",
     articleType: "submission_guidance",
-    categorySlug: "submissions",
+    categorySlug: "projects",
     visibility: "authenticated",
     audiences: ["project_workers", "advanced_users"],
-    tags: ["UVP", "UVE", "Einreichhilfe", "Vorbereitung"],
-    searchTerms: ["uvp", "uve", "uvp uve", "uvp preparation"],
-    relatedArticleSlugs: [
-      "project-status-and-submission-type",
-      "project-detail-and-checklist",
-      "submission-help-awg"
-    ],
+    tags: ["UVP", "UVE", "Einreichtyp", "Projekt"],
+    searchTerms: ["uvp", "uve", "einreichtyp"],
+    relatedArticleSlugs: ["project-status-and-submission-type", "projects-workspace"],
     contextKeys: ["submissionUvpUve"],
     sections: [
       {
-        heading: "Worum geht es?",
+        heading: "Wann passt UVP/UVE?",
         lines: [
-          "Der UVP/UVE-Zusatz bietet Produktorientierung fuer Projekte mit umfangreicher Vorbereitung, abgestuften Statuswechseln und hohem Dokumentbezug."
-        ]
-      },
-      {
-        heading: "Wann brauche ich das?",
-        lines: [
-          "Wenn das Projekt den Einreichtyp `UVP_UVE` traegt oder den Statuspfad `UVP_PREPARATION` beruehrt."
-        ]
-      },
-      {
-        heading: "Worauf achten?",
-        lines: [
-          "Die Hilfe beschreibt Produktnutzung und Strukturierung, nicht die fachliche Endbewertung.",
-          "Verwenden Sie Status, Dokumente und Checkliste konsistent und trennen Sie Orientierung von formaler Freigabe."
+          "Waehle UVP/UVE, wenn das Projekt fachlich in diesen umfangreichen Einreichkontext faellt.",
+          "Halte Unterlagen, Status, Beteiligte und Fristen besonders sorgfaeltig aktuell."
         ]
       }
     ]
@@ -1077,49 +1327,113 @@ export const HELP_ARTICLES: HelpArticle[] = [
 
 export const HELP_FAQ_ENTRIES: HelpFaqEntry[] = [
   {
-    id: "faq-no-tasks",
-    question: "Warum sehe ich keine Aufgaben?",
-    answer: "Pruefen Sie zuerst Filter, Zeitraum, Assignee, Scope und ob nur aktive statt archivierter Eintraege angezeigt werden.",
+    id: "faq-project-missing",
+    question: "Warum sehe ich ein Projekt nicht?",
+    answer: "Meist fehlt Projektzugriff, die passende Rolle oder das Projekt ist archiviert. Bitte einen Admin oder Projektverantwortlichen, den Zugriff zu pruefen.",
     visibility: "authenticated",
-    tags: ["Aufgaben", "Filter", "keine Aufgaben"],
-    relatedArticleSlugs: ["tasks-and-completion", "troubleshooting-common-issues"]
+    tags: ["Projekt", "Zugriff", "Berechtigung"],
+    relatedArticleSlugs: ["roles-and-project-permissions", "project-access-management"]
   },
   {
-    id: "faq-overdue",
-    question: "Warum ist eine Aufgabe oder Frist ueberfaellig?",
-    answer: "Der Status ergibt sich aus Due Date und Abschlussstatus. Oeffnen Sie die zugrunde liegende Frist oder Aufgabe und pruefen Sie Datum und Abschluss.",
+    id: "faq-button-missing",
+    question: "Warum sehe ich einen Button nicht?",
+    answer: "Das Portal blendet Aktionen aus, fuer die du keine Berechtigung hast. Wenn du die Aktion brauchst, lass Rolle und Projektzugriff pruefen.",
     visibility: "authenticated",
-    tags: ["ueberfaellig", "Frist", "Aufgabe"],
+    tags: ["Button", "Berechtigung"],
+    relatedArticleSlugs: ["roles-and-project-permissions"]
+  },
+  {
+    id: "faq-obligation-delete-blocked",
+    question: "Warum kann ich eine Auflage nicht loeschen?",
+    answer: "Loeschen kann blockiert sein, wenn Aufgabenstatus, Nachweise oder Dokumente sowie Kommentare vorhanden sind. Das schuetzt vor Datenverlust. Archivieren ist oft der bessere Weg.",
+    visibility: "authenticated",
+    tags: ["Auflage", "Loeschen", "Nachweise"],
+    relatedArticleSlugs: ["obligations-and-scheduling"]
+  },
+  {
+    id: "faq-deadline-complete-blocked",
+    question: "Warum kann ich eine Frist nicht abschliessen?",
+    answer: "Dir kann Abschlussrecht oder Projektzugriff fehlen. Wenn Nachweise verlangt werden, muessen diese beim Abschluss erfasst werden.",
+    visibility: "authenticated",
+    tags: ["Frist", "Abschliessen", "Berechtigung"],
     relatedArticleSlugs: ["deadlines-and-evidence", "tasks-and-completion"]
   },
   {
-    id: "faq-import",
-    question: "Warum schlaegt ein Import fehl oder wird blockiert?",
-    answer: "Der generische Gesamt-Import ist derzeit gesperrt, weil mehrere serverseitige Domänen sonst nicht atomar ersetzt wuerden. Verwenden Sie den JSON-Export nur als Teil-Export und nicht als vollstaendigen Restore-Mechanismus.",
+    id: "faq-legal-doc-vs-legacy",
+    question: "Was ist der Unterschied zwischen Rechtsdokument und Altbescheid?",
+    answer: "Ein Rechtsdokument ist aktiv und kann Grundlage fuer Auflagen oder Fristen sein. Ein Altbescheid ist historische Dokumentation und erzeugt keine aktiven Pflichten automatisch.",
     visibility: "authenticated",
-    tags: ["Import", "Validierung", "Blocker"],
-    relatedArticleSlugs: ["admin-data-management-and-recovery"]
+    tags: ["Rechtsdokument", "Altbescheid"],
+    relatedArticleSlugs: ["legal-documents-workspace", "legacy-decisions"]
   },
   {
-    id: "faq-files-missing",
-    question: "Warum fehlen nach dem Import Datei-Inhalte?",
-    answer: "JSON-Exporte enthalten keine lokalen Evidence-Dateiinhalte. Datei-Metadaten bleiben sichtbar, die Inhalte muessen aber neu hochgeladen werden.",
+    id: "faq-old-decision-no-validity",
+    question: "Wie gebe ich alte Bescheide ohne Gueltigkeit ein?",
+    answer: "Lege sie als Altbescheid an, waehle meist Nur Archiv oder Ersetzt und ergaenze eine Notiz wie: Nur historische Dokumentation, keine aktiven Pflichten uebernommen.",
     visibility: "authenticated",
-    tags: ["Evidence", "Datei", "Import"],
-    relatedArticleSlugs: ["documents-uploads-and-evidence"]
+    tags: ["Altbescheid", "Archiv"],
+    relatedArticleSlugs: ["legacy-decisions"]
   },
   {
-    id: "faq-safe-mode",
-    question: "Was macht Safe Mode?",
-    answer: "Safe Mode startet die App mit einem Fokus auf Fehlerisolierung und ohne regulaeres Weiterarbeiten auf Basis lokaler Browserdaten.",
+    id: "faq-grant-project-access",
+    question: "Wie gebe ich einem Benutzer Zugriff auf ein Projekt?",
+    answer: "Oeffne das Projekt, gehe auf Zugriff, waehle Benutzer und Zugriffsebene und speichere die Freigabe. Der Tab ist nur fuer berechtigte Admins sichtbar.",
+    visibility: "admin",
+    tags: ["Projektzugriff", "Benutzer"],
+    relatedArticleSlugs: ["project-access-management"]
+  },
+  {
+    id: "faq-create-external-org",
+    question: "Wie lege ich eine externe Firma an?",
+    answer: "Oeffne Admin > Externe Firmen, lege die Organisation an und waehle sie danach bei externen Benutzern, Beteiligten oder Auflagen aus.",
+    visibility: "admin",
+    tags: ["Externe Firma", "Admin"],
+    relatedArticleSlugs: ["external-orgs-and-users", "admin-authorities-and-contacts"]
+  },
+  {
+    id: "faq-reset-user-password",
+    question: "Wie setze ich das Passwort eines Benutzers zurueck?",
+    answer: "Oeffne Admin > Benutzer, waehle die Passwort-Aktion und nutze je nach Fall neues Passwort, Initialpasswort oder Reset-Link.",
+    visibility: "admin",
+    tags: ["Passwort", "Reset", "Admin"],
+    relatedArticleSlugs: ["admin-users-and-roles", "security-login-password-mfa"]
+  },
+  {
+    id: "faq-email-immediate",
+    question: "Werden E-Mails sofort versendet?",
+    answer: "Nicht immer. E-Mails werden ueber den eingerichteten Versandweg verarbeitet. Status, Fehler und Wartezeiten pruefst du in Admin > Notifications.",
+    visibility: "admin",
+    tags: ["E-Mail", "Notifications"],
+    relatedArticleSlugs: ["notifications-email-powerautomate"]
+  },
+  {
+    id: "faq-dry-run",
+    question: "Was bedeutet Dry-Run?",
+    answer: "Dry-Run ist Testmodus. Benachrichtigungen erscheinen im System, aber es werden keine echten E-Mails versendet.",
+    visibility: "admin",
+    tags: ["Dry-Run", "PowerAutomate"],
+    relatedArticleSlugs: ["notifications-email-powerautomate"]
+  },
+  {
+    id: "faq-export-included",
+    question: "Was ist im Export enthalten?",
+    answer: "Der Export ist ein Teil-Export bestimmter Fachdaten. Er enthaelt keine Passwoerter, Reset-Tokens, Secrets, Webhooks oder vollstaendige Admin-/Sicherheitsdaten.",
+    visibility: "admin",
+    tags: ["Export", "Recovery"],
+    relatedArticleSlugs: ["export-import-recovery"]
+  },
+  {
+    id: "faq-missing-or-blocked",
+    question: "Was mache ich, wenn etwas fehlt oder gesperrt ist?",
+    answer: "Pruefe zuerst Filter, Archivstatus, Berechtigung und Projektzugriff. Bei Import, Reset oder Recovery bitte einen Admin einbinden und nichts ungeprueft einspielen.",
     visibility: "authenticated",
-    tags: ["Safe Mode", "Recovery"],
-    relatedArticleSlugs: ["admin-data-management-and-recovery", "troubleshooting-common-issues"]
+    tags: ["Troubleshooting", "Gesperrt", "Recovery"],
+    relatedArticleSlugs: ["troubleshooting-common-issues", "export-import-recovery"]
   },
   {
     id: "faq-mfa",
     question: "Ich komme wegen MFA nicht in das Portal. Was nun?",
-    answer: "Verwenden Sie zuerst den aktuellen Authenticator-Code oder einen Recovery-Code. Wenn das nicht moeglich ist, braucht es einen administrativen Reset oder ein neues MFA-Setup.",
+    answer: "Nutze den aktuellen Authenticator-Code oder einen Recovery-Code. Wenn das nicht klappt, braucht es einen Admin-Reset oder ein neues MFA-Setup.",
     visibility: "public",
     tags: ["MFA", "Login", "Recovery-Code"],
     relatedArticleSlugs: ["security-login-password-mfa"]
@@ -1128,53 +1442,79 @@ export const HELP_FAQ_ENTRIES: HelpFaqEntry[] = [
 
 export const HELP_GLOSSARY: HelpGlossaryEntry[] = [
   {
-    term: "Scope",
-    definition: "Die hierarchische Struktur aus Company, Standort und Anlage.",
-    visibility: "authenticated",
-    synonyms: ["Company", "Standort", "Anlage"]
-  },
-  {
-    term: "Projektstatus",
-    definition: "Der fachliche Bearbeitungs- oder Verfahrensstand eines Projekts.",
+    term: "Projekt",
+    definition: "Arbeitsrahmen fuer einen fachlichen Vorgang mit Scope, Beteiligten, Rechtsdokumenten, Auflagen und Fristen.",
     visibility: "authenticated"
   },
   {
-    term: "Einreichtyp",
-    definition: "Die fachliche Klassifikation eines Projekts, z. B. `GEWERBE`, `AWG` oder `UVP_UVE`.",
+    term: "Projektzugriff",
+    definition: "Freigabe, die bestimmt, welche Benutzer ein bestimmtes Projekt sehen oder bearbeiten duerfen.",
+    visibility: "authenticated",
+    synonyms: ["Zugriff", "Freigabe"]
+  },
+  {
+    term: "Rolle",
+    definition: "Sammlung von Berechtigungen, die grundsaetzlich festlegt, welche Bereiche und Aktionen ein Benutzer nutzen darf.",
     visibility: "authenticated"
   },
   {
     term: "Rechtsdokument",
-    definition: "Ein Bescheid, eine Genehmigung oder ein vergleichbares Referenzdokument mit Projektbezug.",
+    definition: "Aktiver Bescheid, Genehmigung oder vergleichbares Dokument mit Projektbezug.",
     visibility: "authenticated",
     synonyms: ["Bescheid", "Genehmigung"]
   },
   {
+    term: "Altbescheid",
+    definition: "Historischer Bescheid fuer Dokumentation und Nachvollziehbarkeit. Er erzeugt keine aktiven Pflichten automatisch.",
+    visibility: "authenticated",
+    synonyms: ["Historischer Bescheid"]
+  },
+  {
     term: "Auflage",
-    definition: "Eine Verpflichtung aus einem Rechtsdokument, aus der operative Arbeit abgeleitet wird.",
+    definition: "Pflicht aus einem Rechtsdokument, aus der operative Arbeit entstehen kann.",
     visibility: "authenticated",
     synonyms: ["Verpflichtung"]
   },
   {
     term: "Frist",
-    definition: "Eine terminbezogene Pflicht mit Projekt- oder Dokumentbezug.",
+    definition: "Konkreter Termin, der ueberwacht und abgeschlossen werden kann.",
     visibility: "authenticated",
-    synonyms: ["Termin"]
+    synonyms: ["Faelligkeit"]
   },
   {
-    term: "Evidence",
-    definition: "Nachweis zum Abschluss einer Aufgabe oder Frist, z. B. Foto, Dokument oder Bericht.",
-    visibility: "authenticated",
-    synonyms: ["Nachweis", "Anhang"]
-  },
-  {
-    term: "Safe Mode",
-    definition: "Ein spezieller Startmodus zur Fehlerisolierung und Recovery-Unterstuetzung.",
+    term: "Aufgabe",
+    definition: "Operative Arbeit, die aus Auflagen, Fristen oder anderer Faelligkeit entsteht.",
     visibility: "authenticated"
   },
   {
+    term: "Nachweis",
+    definition: "Beleg fuer Erledigung, zum Beispiel Foto, Dokument oder Bericht.",
+    visibility: "authenticated",
+    synonyms: ["Evidence", "Beleg"]
+  },
+  {
+    term: "Externe Firma",
+    definition: "Organisation ausserhalb des eigenen Unternehmens, die als Beteiligte, Dienstleister oder Zuordnung verwendet werden kann.",
+    visibility: "authenticated"
+  },
+  {
+    term: "Externer Benutzer",
+    definition: "Person mit eingeschraenktem Portalzugang, die nur ausdruecklich freigegebene Inhalte sieht.",
+    visibility: "authenticated"
+  },
+  {
+    term: "Dry-Run",
+    definition: "Testmodus fuer Benachrichtigungen. Vorgaenge werden erzeugt, aber nicht als echte E-Mail versendet.",
+    visibility: "admin"
+  },
+  {
+    term: "Teil-Export",
+    definition: "Export bestimmter Fachdaten. Er ist kein vollstaendiges Backup der ganzen Anwendung.",
+    visibility: "admin"
+  },
+  {
     term: "MFA",
-    definition: "Mehrfaktor-Authentifizierung mit Authenticator-Code oder Recovery-Code.",
+    definition: "Mehrfaktor-Authentifizierung mit zusaetzlichem Code oder Recovery-Code.",
     visibility: "public",
     synonyms: ["Mehrfaktor", "Authenticator"]
   }
@@ -1182,45 +1522,59 @@ export const HELP_GLOSSARY: HelpGlossaryEntry[] = [
 
 export const HELP_QUICK_LINKS: HelpQuickLink[] = [
   {
-    id: "quick-new-staff",
-    label: "Neu im Portal",
-    description: "Den Gesamtaufbau in wenigen Minuten verstehen.",
+    id: "quick-first-steps",
+    label: "Erste Schritte",
+    description: "Portalaufbau, Navigation und Grundbegriffe verstehen.",
     articleSlug: "portal-overview-and-first-steps",
     visibility: "authenticated"
   },
   {
     id: "quick-projects",
-    label: "Projekt sauber anlegen",
-    description: "Scope, Behoerde, Ansprechpartner und Einreichtyp richtig setzen.",
+    label: "Projektarbeit",
+    description: "Projekte anlegen, filtern und Detail-Tabs nutzen.",
     articleSlug: "projects-workspace",
     visibility: "authenticated"
   },
   {
-    id: "quick-recovery",
-    label: "Import / Export / Recovery",
-    description: "Vor groesseren Aenderungen absichern und Fehler sauber isolieren.",
-    articleSlug: "admin-data-management-and-recovery",
+    id: "quick-permissions",
+    label: "Warum sehe ich das nicht?",
+    description: "Rollen, Berechtigungen und Projektzugriff einordnen.",
+    articleSlug: "roles-and-project-permissions",
+    visibility: "authenticated"
+  },
+  {
+    id: "quick-obligations",
+    label: "Auflagen und Nachweise",
+    description: "Auflagen, Aufgaben, Fristen und Nachweise sauber bearbeiten.",
+    articleSlug: "obligations-and-scheduling",
+    visibility: "authenticated"
+  },
+  {
+    id: "quick-admin",
+    label: "Admin-Hilfe",
+    description: "Benutzer, Rollen, externe Firmen, Sicherheit und Recovery.",
+    articleSlug: "admin-users-and-roles",
     visibility: "admin"
   },
   {
-    id: "quick-mobile",
-    label: "Mobil im Feld arbeiten",
-    description: "Aufgaben abschliessen und Nachweise mobil erfassen.",
-    articleSlug: "mobile-usage-and-field-work",
-    visibility: "authenticated"
+    id: "quick-notifications",
+    label: "E-Mail und Dry-Run",
+    description: "PowerAutomate, Versandstatus und Testmodus verstehen.",
+    articleSlug: "notifications-email-powerautomate",
+    visibility: "admin"
   },
   {
     id: "quick-auth",
     label: "Login und MFA",
-    description: "Zugang, Passwort und Recovery-Codes verstehen.",
+    description: "Passwort, MFA und Recovery-Codes verwalten.",
     articleSlug: "security-login-password-mfa",
     visibility: "public"
   },
   {
-    id: "quick-troubleshooting",
-    label: "Schnelle Fehlerhilfe",
-    description: "Typische Symptome und erste Checks.",
-    articleSlug: "troubleshooting-common-issues",
+    id: "quick-mobile",
+    label: "Mobil nutzen",
+    description: "Navigation, Kartenansichten und mobile Nachweise.",
+    articleSlug: "mobile-usage-and-field-work",
     visibility: "authenticated"
   }
 ];

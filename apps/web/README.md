@@ -51,8 +51,10 @@ npm run dev
   - Scopes (`companies`, `sites`, `facilities`)
   - Authorities und Authority Contacts
   - Projects
+  - ProjectAccess
   - Project Checklists
   - Legal Documents
+  - Legacy Decisions / Altbescheide
   - Obligations
   - Deadlines
   - TaskState
@@ -78,7 +80,9 @@ npm run dev
 ## Fachliche Highlights im aktuellen Modell
 
 - Projekte fuehren `status` und `submissionType` getrennt.
+- Projektzugriff begrenzt, welche Projekte und verbundenen Daten Benutzer sehen.
 - Projekt-Checklisten sind eigene serverseitige Projekt-Subressourcen.
+- Altbescheide sind historische Projektunterlagen und erzeugen keine aktiven Auflagen, Fristen oder Tasks automatisch.
 - Browser-lokale In-App-Notifications bleiben getrennt von serverseitigen E-Mail-Notifications ueber `NotificationOutbox`.
 
 ## Auth Routen
