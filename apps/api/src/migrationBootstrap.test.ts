@@ -233,7 +233,9 @@ describe("migration bootstrap classification", () => {
       "baseline-20260419153000_email_notifications_powerautomate_e1",
       "baseline-20260420113000_email_notifications_powerautomate_e2_mvp",
       "baseline-20260422120000_project_status_submission_type",
-      "baseline-20260429103000_obligation_recurrence_external_execution"
+      "baseline-20260429103000_obligation_recurrence_external_execution",
+      "baseline-20260502120000_project_access_legacy_decisions",
+      "baseline-20260503143000_branding_assets"
     ] as const;
 
     for (const mode of expectedModes) {
@@ -252,6 +254,42 @@ describe("migration bootstrap classification", () => {
     assert.equal(
       classify(fixtureFor("baseline-20260429103000_obligation_recurrence_external_execution")),
       "baseline-20260429103000_obligation_recurrence_external_execution"
+    );
+  });
+
+  it("uses the project access baseline when branding assets are absent", () => {
+    assert.equal(
+      classify(fixtureFor("baseline-20260502120000_project_access_legacy_decisions")),
+      "baseline-20260502120000_project_access_legacy_decisions"
+    );
+  });
+
+  it("uses the latest baseline when branding assets are complete", () => {
+    assert.equal(
+      classify(fixtureFor("baseline-20260503143000_branding_assets")),
+      "baseline-20260503143000_branding_assets"
+    );
+  });
+
+  it("blocks a partial branding asset baseline when the unique type index is missing", () => {
+    assert.equal(
+      classify(
+        without(fixtureFor("baseline-20260503143000_branding_assets"), {
+          presentIndexes: ["BrandingAsset_type_key"]
+        })
+      ),
+      "partial"
+    );
+  });
+
+  it("blocks a partial branding asset baseline when enum values are missing", () => {
+    assert.equal(
+      classify(
+        without(fixtureFor("baseline-20260503143000_branding_assets"), {
+          presentEnumValues: ["BrandingAssetType.SIDEBAR_ICON"]
+        })
+      ),
+      "partial"
     );
   });
 

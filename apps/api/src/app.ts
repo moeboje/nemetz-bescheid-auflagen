@@ -105,6 +105,27 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ROLE_KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const DOCUMENT_OWNER_TYPES = ["PROJECT", "LEGAL_DOC", "OBLIGATION", "DEADLINE", "TASK_EVIDENCE", "LEGACY_DECISION"] as const;
 const COMMENT_ENTITY_TYPES = ["PROJECT", "LEGAL_DOC", "DOCUMENT"] as const;
+const BRANDING_ASSET_TYPES = {
+  logo: "SIDEBAR_LOGO",
+  icon: "SIDEBAR_ICON"
+} as const;
+const BRANDING_LOGO_MAX_BYTES = 1024 * 1024;
+const BRANDING_ICON_MAX_BYTES = 256 * 1024;
+const BRANDING_MULTIPART_MAX_BYTES = BRANDING_LOGO_MAX_BYTES + 64 * 1024;
+const BRANDING_ASSET_CONFIG = {
+  logo: {
+    type: BRANDING_ASSET_TYPES.logo,
+    maxBytes: BRANDING_LOGO_MAX_BYTES,
+    allowedExtensions: [".png", ".jpg", ".jpeg", ".webp"],
+    allowedMimeTypes: ["image/png", "image/jpeg", "image/webp"]
+  },
+  icon: {
+    type: BRANDING_ASSET_TYPES.icon,
+    maxBytes: BRANDING_ICON_MAX_BYTES,
+    allowedExtensions: [".png", ".ico", ".webp"],
+    allowedMimeTypes: ["image/png", "image/x-icon", "image/vnd.microsoft.icon", "image/webp"]
+  }
+} as const;
 const DEFAULT_EXTERNAL_ORG_TYPE = "Firma";
 const MAX_COMMENT_ENTITY_ID_LENGTH = 200;
 const MAX_COMMENT_BODY_LENGTH = 10_000;
@@ -115,6 +136,8 @@ type AdminSortField = (typeof ADMIN_SORT_FIELDS)[number];
 type SortDirection = (typeof SORT_DIRECTIONS)[number];
 type DocumentOwnerType = (typeof DOCUMENT_OWNER_TYPES)[number];
 type CommentEntityType = (typeof COMMENT_ENTITY_TYPES)[number];
+type BrandingAssetKind = keyof typeof BRANDING_ASSET_TYPES;
+type BrandingAssetTypeValue = (typeof BRANDING_ASSET_TYPES)[BrandingAssetKind];
 
 type AuthenticatedRequest = Request & {
   authUser?: PrismaUser;
@@ -298,6 +321,27 @@ type DocumentDto = {
   mimeType: string;
   sizeBytes: number;
   createdAt: string;
+};
+
+type BrandingAssetMetadataDto = {
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  updatedAt: string;
+  url: string;
+};
+
+type BrandingConfigDto = {
+  hasLogo: boolean;
+  hasIcon: boolean;
+  logoUrl?: string;
+  iconUrl?: string;
+  updatedAt?: string;
+};
+
+type AdminDesignDto = BrandingConfigDto & {
+  logo?: BrandingAssetMetadataDto;
+  icon?: BrandingAssetMetadataDto;
 };
 
 type CommentAuthorDto = {
@@ -1142,6 +1186,179 @@ function parseMultipartFormData(contentType: string | undefined, body: Buffer): 
   return {
     fields,
     file
+  };
+}
+
+function normalizeBrandingMimeType(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "image/vnd.microsoft.icon") {
+    return "image/x-icon";
+  }
+  return normalized;
+}
+
+function detectBrandingMimeType(data: Buffer) {
+  if (
+    data.length >= 8 &&
+    data[0] === 0x89 &&
+    data[1] === 0x50 &&
+    data[2] === 0x4e &&
+    data[3] === 0x47 &&
+    data[4] === 0x0d &&
+    data[5] === 0x0a &&
+    data[6] === 0x1a &&
+    data[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) {
+    return "image/jpeg";
+  }
+
+  if (
+    data.length >= 12 &&
+    data.subarray(0, 4).toString("ascii") === "RIFF" &&
+    data.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+
+  if (data.length >= 4 && data[0] === 0x00 && data[1] === 0x00 && data[2] === 0x01 && data[3] === 0x00) {
+    return "image/x-icon";
+  }
+
+  return null;
+}
+
+function extensionMatchesBrandingMimeType(extension: string, mimeType: string) {
+  switch (mimeType) {
+    case "image/png":
+      return extension === ".png";
+    case "image/jpeg":
+      return extension === ".jpg" || extension === ".jpeg";
+    case "image/webp":
+      return extension === ".webp";
+    case "image/x-icon":
+      return extension === ".ico";
+    default:
+      return false;
+  }
+}
+
+function validateBrandingUpload(kind: BrandingAssetKind, file: MultipartFormDataResult["file"]) {
+  if (!file) {
+    return { ok: false as const, status: 400, message: "file is required." };
+  }
+
+  const config = BRANDING_ASSET_CONFIG[kind];
+  const fileData = file.data;
+  if (!fileData.length) {
+    return { ok: false as const, status: 400, message: "file is required." };
+  }
+
+  if (fileData.length > config.maxBytes) {
+    return { ok: false as const, status: 413, message: "File exceeds upload size limit." };
+  }
+
+  const originalFilename = file.filename?.trim() || undefined;
+  const safeFilename = sanitizeFilename(originalFilename);
+  const extension = path.extname(safeFilename).toLowerCase();
+  if (!(config.allowedExtensions as readonly string[]).includes(extension)) {
+    return { ok: false as const, status: 400, message: "Unsupported file extension." };
+  }
+
+  const detectedMimeType = detectBrandingMimeType(fileData);
+  if (
+    !detectedMimeType ||
+    !(config.allowedMimeTypes as readonly string[]).map(normalizeBrandingMimeType).includes(detectedMimeType)
+  ) {
+    return { ok: false as const, status: 400, message: "Unsupported file type." };
+  }
+
+  if (!extensionMatchesBrandingMimeType(extension, detectedMimeType)) {
+    return { ok: false as const, status: 400, message: "File extension does not match file content." };
+  }
+
+  const declaredMimeType = toOptionalTrimmedString(file.contentType)?.toLowerCase();
+  if (
+    declaredMimeType &&
+    declaredMimeType !== "application/octet-stream" &&
+    normalizeBrandingMimeType(declaredMimeType) !== detectedMimeType
+  ) {
+    return { ok: false as const, status: 400, message: "Content-Type does not match file content." };
+  }
+
+  return {
+    ok: true as const,
+    fileName: safeFilename,
+    mimeType: detectedMimeType,
+    sizeBytes: fileData.length,
+    content: fileData,
+    sha256: createHash("sha256").update(fileData).digest("hex")
+  };
+}
+
+function buildBrandingAssetUrl(kind: BrandingAssetKind, asset: { sha256: string; updatedAt: Date }) {
+  const version = asset.sha256.trim() || String(asset.updatedAt.getTime());
+  return `/branding/${kind}?v=${encodeURIComponent(version.slice(0, 16))}`;
+}
+
+function toBrandingAssetMetadata(
+  kind: BrandingAssetKind,
+  asset: {
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    sha256: string;
+    updatedAt: Date;
+  }
+): BrandingAssetMetadataDto {
+  return {
+    fileName: asset.fileName,
+    mimeType: asset.mimeType,
+    sizeBytes: asset.sizeBytes,
+    updatedAt: asset.updatedAt.toISOString(),
+    url: buildBrandingAssetUrl(kind, asset)
+  };
+}
+
+function toBrandingConfigDto(
+  assets: Array<{
+    type: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    sha256: string;
+    updatedAt: Date;
+  }>
+): AdminDesignDto {
+  const logoAsset = assets.find((asset) => asset.type === BRANDING_ASSET_TYPES.logo);
+  const iconAsset = assets.find((asset) => asset.type === BRANDING_ASSET_TYPES.icon);
+  const logo = logoAsset ? toBrandingAssetMetadata("logo", logoAsset) : undefined;
+  const icon = iconAsset ? toBrandingAssetMetadata("icon", iconAsset) : undefined;
+  const updatedAt = assets
+    .map((asset) => asset.updatedAt)
+    .sort((left, right) => right.getTime() - left.getTime())[0];
+
+  return {
+    hasLogo: Boolean(logo),
+    hasIcon: Boolean(icon),
+    logoUrl: logo?.url,
+    iconUrl: icon?.url,
+    updatedAt: toIsoString(updatedAt),
+    logo,
+    icon
+  };
+}
+
+function toPublicBrandingConfigDto(design: AdminDesignDto): BrandingConfigDto {
+  return {
+    hasLogo: design.hasLogo,
+    hasIcon: design.hasIcon,
+    logoUrl: design.logoUrl,
+    iconUrl: design.iconUrl,
+    updatedAt: design.updatedAt
   };
 }
 
@@ -2314,6 +2531,229 @@ export function createApp(config: AppConfig = loadConfig()) {
       next(error);
     }
   });
+
+  async function loadBrandingDesignConfig() {
+    const assets = await prisma.brandingAsset.findMany({
+      where: {
+        type: {
+          in: Object.values(BRANDING_ASSET_TYPES)
+        }
+      },
+      select: {
+        type: true,
+        fileName: true,
+        mimeType: true,
+        sizeBytes: true,
+        sha256: true,
+        updatedAt: true
+      }
+    });
+
+    return toBrandingConfigDto(assets);
+  }
+
+  router.get("/branding", authMiddleware, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      if (!assertAuthenticated(req, res)) {
+        return;
+      }
+
+      res.setHeader("Cache-Control", "private, no-store");
+      res.json(toPublicBrandingConfigDto(await loadBrandingDesignConfig()));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/branding/:kind", authMiddleware, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      if (!assertAuthenticated(req, res)) {
+        return;
+      }
+
+      const kind = req.params.kind === "logo" || req.params.kind === "icon" ? req.params.kind : null;
+      if (!kind) {
+        res.status(404).json({ ok: false, message: "Branding asset not found." });
+        return;
+      }
+
+      const asset = await prisma.brandingAsset.findUnique({
+        where: {
+          type: BRANDING_ASSET_CONFIG[kind].type
+        }
+      });
+
+      if (!asset) {
+        res.status(404).json({ ok: false, message: "Branding asset not found." });
+        return;
+      }
+
+      const etag = `"${asset.sha256}"`;
+      res.setHeader("ETag", etag);
+      res.setHeader("Cache-Control", "private, max-age=300");
+
+      if (req.get("if-none-match") === etag) {
+        res.status(304).end();
+        return;
+      }
+
+      const content = Buffer.from(asset.content);
+      res.setHeader("Content-Type", asset.mimeType);
+      res.setHeader("Content-Length", String(content.length));
+      res.setHeader("Content-Disposition", `inline; ${toContentDispositionFilename(asset.fileName)}`);
+      res.status(200).send(content);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get(
+    "/admin/design",
+    authMiddleware,
+    requireAdminPermissions("masterData.manage"),
+    async (_req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        res.setHeader("Cache-Control", "private, no-store");
+        res.json(await loadBrandingDesignConfig());
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
+  async function handleBrandingUpload(kind: BrandingAssetKind, req: AuthenticatedRequest, res: Response, next: NextFunction) {
+    try {
+      if (!Buffer.isBuffer(req.body)) {
+        res.status(400).json({ ok: false, message: "Multipart payload is required." });
+        return;
+      }
+
+      const parsed = parseMultipartFormData(req.headers["content-type"], req.body);
+      const validation = validateBrandingUpload(kind, parsed?.file);
+      if (!validation.ok) {
+        res.status(validation.status).json({ ok: false, message: validation.message });
+        return;
+      }
+
+      const content = new Uint8Array(validation.content);
+      const updated = await prisma.brandingAsset.upsert({
+        where: {
+          type: BRANDING_ASSET_CONFIG[kind].type
+        },
+        create: {
+          type: BRANDING_ASSET_CONFIG[kind].type,
+          fileName: validation.fileName,
+          mimeType: validation.mimeType,
+          sizeBytes: validation.sizeBytes,
+          content,
+          sha256: validation.sha256,
+          updatedById: req.authUser?.id
+        },
+        update: {
+          fileName: validation.fileName,
+          mimeType: validation.mimeType,
+          sizeBytes: validation.sizeBytes,
+          content,
+          sha256: validation.sha256,
+          updatedById: req.authUser?.id
+        }
+      });
+
+      await audit({
+        actorUserId: req.authUser?.id,
+        action: kind === "logo" ? "BRANDING_LOGO_UPDATED" : "BRANDING_ICON_UPDATED",
+        req,
+        metadata: {
+          assetId: updated.id,
+          assetType: updated.type,
+          fileName: updated.fileName,
+          mimeType: updated.mimeType,
+          sizeBytes: updated.sizeBytes
+        }
+      });
+
+      res.status(200).json({
+        ok: true,
+        design: await loadBrandingDesignConfig()
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  router.post(
+    "/admin/design/logo",
+    authMiddleware,
+    requireAdminPermissions("masterData.manage"),
+    express.raw({ type: "multipart/form-data", limit: BRANDING_MULTIPART_MAX_BYTES }),
+    (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      void handleBrandingUpload("logo", req, res, next);
+    }
+  );
+
+  router.post(
+    "/admin/design/icon",
+    authMiddleware,
+    requireAdminPermissions("masterData.manage"),
+    express.raw({ type: "multipart/form-data", limit: BRANDING_ICON_MAX_BYTES + 64 * 1024 }),
+    (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      void handleBrandingUpload("icon", req, res, next);
+    }
+  );
+
+  async function handleBrandingDelete(kind: BrandingAssetKind, req: AuthenticatedRequest, res: Response, next: NextFunction) {
+    try {
+      const existing = await prisma.brandingAsset.findUnique({
+        where: {
+          type: BRANDING_ASSET_CONFIG[kind].type
+        }
+      });
+
+      if (existing) {
+        await prisma.brandingAsset.delete({
+          where: {
+            type: BRANDING_ASSET_CONFIG[kind].type
+          }
+        });
+
+        await audit({
+          actorUserId: req.authUser?.id,
+          action: kind === "logo" ? "BRANDING_LOGO_DELETED" : "BRANDING_ICON_DELETED",
+          req,
+          metadata: {
+            assetId: existing.id,
+            assetType: existing.type,
+            fileName: existing.fileName
+          }
+        });
+      }
+
+      res.json({
+        ok: true,
+        design: await loadBrandingDesignConfig()
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  router.delete(
+    "/admin/design/logo",
+    authMiddleware,
+    requireAdminPermissions("masterData.manage"),
+    (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      void handleBrandingDelete("logo", req, res, next);
+    }
+  );
+
+  router.delete(
+    "/admin/design/icon",
+    authMiddleware,
+    requireAdminPermissions("masterData.manage"),
+    (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      void handleBrandingDelete("icon", req, res, next);
+    }
+  );
 
   router.post(
     "/documents",

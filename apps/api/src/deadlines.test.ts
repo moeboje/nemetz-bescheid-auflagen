@@ -297,6 +297,15 @@ describe("Deadlines API", () => {
     });
     assert.equal(completeResponse.status, 403);
 
+    const completeSlashResponse = await request(`/deadlines/${deadline.id}/complete/`, {
+      method: "POST",
+      cookie,
+      body: {
+        note: "Should be blocked"
+      }
+    });
+    assert.equal(completeSlashResponse.status, 403);
+
     const statusResponse = await request(`/deadlines/${deadline.id}/status`, {
       method: "POST",
       cookie,
@@ -305,6 +314,15 @@ describe("Deadlines API", () => {
       }
     });
     assert.equal(statusResponse.status, 403);
+
+    const statusSlashResponse = await request(`/deadlines/${deadline.id}/status/`, {
+      method: "POST",
+      cookie,
+      body: {
+        status: "DONE"
+      }
+    });
+    assert.equal(statusSlashResponse.status, 403);
 
     const stored = await prisma.deadline.findUniqueOrThrow({ where: { id: deadline.id } });
     assert.equal(stored.status, "OPEN");
@@ -319,7 +337,10 @@ describe("Deadlines API", () => {
       "DEADLINE_TASK_COMPLETE"
     );
     const completeDeadline = await seedDeadline({ accessUserId: user.id });
+    const completeSlashDeadline = await seedDeadline({ accessUserId: user.id });
     const statusDeadline = await seedDeadline({ accessUserId: user.id });
+    const statusSlashDeadline = await seedDeadline({ accessUserId: user.id });
+    const statusQueryDeadline = await seedDeadline({ accessUserId: user.id });
     const cookie = await login(user.email, "ValidPassword1!");
 
     const completeResponse = await request(`/deadlines/${completeDeadline.id}/complete`, {
@@ -333,6 +354,17 @@ describe("Deadlines API", () => {
     const completePayload = (await completeResponse.json()) as { deadline: { status: string } };
     assert.equal(completePayload.deadline.status, "DONE");
 
+    const completeSlashResponse = await request(`/deadlines/${completeSlashDeadline.id}/complete/`, {
+      method: "POST",
+      cookie,
+      body: {
+        note: "Done"
+      }
+    });
+    assert.equal(completeSlashResponse.status, 200);
+    const completeSlashPayload = (await completeSlashResponse.json()) as { deadline: { status: string } };
+    assert.equal(completeSlashPayload.deadline.status, "DONE");
+
     const statusResponse = await request(`/deadlines/${statusDeadline.id}/status`, {
       method: "POST",
       cookie,
@@ -343,13 +375,37 @@ describe("Deadlines API", () => {
     assert.equal(statusResponse.status, 200);
     const statusPayload = (await statusResponse.json()) as { deadline: { status: string } };
     assert.equal(statusPayload.deadline.status, "DONE");
+
+    const statusSlashResponse = await request(`/deadlines/${statusSlashDeadline.id}/status/`, {
+      method: "POST",
+      cookie,
+      body: {
+        status: "DONE"
+      }
+    });
+    assert.equal(statusSlashResponse.status, 200);
+    const statusSlashPayload = (await statusSlashResponse.json()) as { deadline: { status: string } };
+    assert.equal(statusSlashPayload.deadline.status, "DONE");
+
+    const statusQueryResponse = await request(`/deadlines/${statusQueryDeadline.id}/status?source=rbac`, {
+      method: "POST",
+      cookie,
+      body: {
+        status: "DONE"
+      }
+    });
+    assert.equal(statusQueryResponse.status, 200);
+    const statusQueryPayload = (await statusQueryResponse.json()) as { deadline: { status: string } };
+    assert.equal(statusQueryPayload.deadline.status, "DONE");
   });
 
   it("uses tasks.edit for deadline reopen and non-DONE status changes", async () => {
     await createRole("DEADLINE_TASK_EDIT", ["deadlines.view", "tasks.edit"]);
     const user = await createUser("deadline-task-edit@example.com", "ValidPassword1!", "DEADLINE_TASK_EDIT");
     const reopenDeadline = await seedDeadline({ status: "DONE", accessUserId: user.id });
+    const reopenSlashDeadline = await seedDeadline({ status: "DONE", accessUserId: user.id });
     const statusDeadline = await seedDeadline({ status: "DONE", accessUserId: user.id });
+    const statusSlashDeadline = await seedDeadline({ status: "DONE", accessUserId: user.id });
     const cookie = await login(user.email, "ValidPassword1!");
 
     const reopenResponse = await request(`/deadlines/${reopenDeadline.id}/reopen`, {
@@ -359,6 +415,14 @@ describe("Deadlines API", () => {
     assert.equal(reopenResponse.status, 200);
     const reopenPayload = (await reopenResponse.json()) as { deadline: { status: string } };
     assert.equal(reopenPayload.deadline.status, "OPEN");
+
+    const reopenSlashResponse = await request(`/deadlines/${reopenSlashDeadline.id}/reopen/`, {
+      method: "POST",
+      cookie
+    });
+    assert.equal(reopenSlashResponse.status, 200);
+    const reopenSlashPayload = (await reopenSlashResponse.json()) as { deadline: { status: string } };
+    assert.equal(reopenSlashPayload.deadline.status, "OPEN");
 
     const statusResponse = await request(`/deadlines/${statusDeadline.id}/status`, {
       method: "POST",
@@ -370,6 +434,17 @@ describe("Deadlines API", () => {
     assert.equal(statusResponse.status, 200);
     const statusPayload = (await statusResponse.json()) as { deadline: { status: string } };
     assert.equal(statusPayload.deadline.status, "OPEN");
+
+    const statusSlashResponse = await request(`/deadlines/${statusSlashDeadline.id}/status/`, {
+      method: "POST",
+      cookie,
+      body: {
+        status: "OPEN"
+      }
+    });
+    assert.equal(statusSlashResponse.status, 200);
+    const statusSlashPayload = (await statusSlashResponse.json()) as { deadline: { status: string } };
+    assert.equal(statusSlashPayload.deadline.status, "OPEN");
   });
 
   it("rejects deadline reopen without tasks.edit", async () => {
@@ -380,7 +455,9 @@ describe("Deadlines API", () => {
       "DEADLINE_TASK_COMPLETE_ONLY"
     );
     const reopenDeadline = await seedDeadline({ status: "DONE", accessUserId: user.id });
+    const reopenSlashDeadline = await seedDeadline({ status: "DONE", accessUserId: user.id });
     const statusDeadline = await seedDeadline({ status: "DONE", accessUserId: user.id });
+    const statusSlashDeadline = await seedDeadline({ status: "DONE", accessUserId: user.id });
     const cookie = await login(user.email, "ValidPassword1!");
 
     const reopenResponse = await request(`/deadlines/${reopenDeadline.id}/reopen`, {
@@ -388,6 +465,12 @@ describe("Deadlines API", () => {
       cookie
     });
     assert.equal(reopenResponse.status, 403);
+
+    const reopenSlashResponse = await request(`/deadlines/${reopenSlashDeadline.id}/reopen/`, {
+      method: "POST",
+      cookie
+    });
+    assert.equal(reopenSlashResponse.status, 403);
 
     const statusResponse = await request(`/deadlines/${statusDeadline.id}/status`, {
       method: "POST",
@@ -398,8 +481,19 @@ describe("Deadlines API", () => {
     });
     assert.equal(statusResponse.status, 403);
 
+    const statusSlashResponse = await request(`/deadlines/${statusSlashDeadline.id}/status/`, {
+      method: "POST",
+      cookie,
+      body: {
+        status: "OPEN"
+      }
+    });
+    assert.equal(statusSlashResponse.status, 403);
+
     const stored = await prisma.deadline.findUniqueOrThrow({ where: { id: statusDeadline.id } });
     assert.equal(stored.status, "DONE");
+    const storedSlash = await prisma.deadline.findUniqueOrThrow({ where: { id: statusSlashDeadline.id } });
+    assert.equal(storedSlash.status, "DONE");
   });
 
   it("rejects generic deadline patch completion for deadlines.edit without tasks.complete", async () => {

@@ -4,7 +4,7 @@ import { t } from "../i18n";
 import { type AuthorizationPermissions, useAuthorization } from "../state/AuthorizationStore";
 
 type AdminSubnavItem = {
-  key: "users" | "roles" | "externalOrgs" | "authorities" | "security" | "notifications";
+  key: "users" | "roles" | "externalOrgs" | "authorities" | "security" | "design" | "notifications";
   path: string;
   labelKey:
     | "admin.nav.users"
@@ -12,6 +12,7 @@ type AdminSubnavItem = {
     | "admin.nav.externalOrgs"
     | "admin.nav.authorities"
     | "admin.nav.security"
+    | "admin.nav.design"
     | "admin.nav.notifications";
   isVisible: (permissions: AuthorizationPermissions) => boolean;
 };
@@ -48,6 +49,12 @@ const ITEMS: AdminSubnavItem[] = [
     isVisible: (permissions) => permissions.canViewSecurityAdmin
   },
   {
+    key: "design",
+    path: "/admin/design",
+    labelKey: "admin.nav.design",
+    isVisible: (permissions) => permissions.canViewDesignAdmin
+  },
+  {
     key: "notifications",
     path: "/admin/notifications",
     labelKey: "admin.nav.notifications",
@@ -67,6 +74,9 @@ function getActiveKey(pathname: string): AdminSubnavItem["key"] {
   }
   if (pathname.includes("/admin/security")) {
     return "security";
+  }
+  if (pathname.includes("/admin/design")) {
+    return "design";
   }
   if (pathname.includes("/admin/notifications")) {
     return "notifications";

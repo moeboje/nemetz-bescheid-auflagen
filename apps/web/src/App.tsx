@@ -31,6 +31,7 @@ import AdminExternalOrgsPage from "./pages/AdminExternalOrgsPage";
 import AdminAuthoritiesPage from "./pages/AdminAuthoritiesPage";
 import AdminSecurityPage from "./pages/AdminSecurityPage";
 import AdminNotificationsPage from "./pages/AdminNotificationsPage";
+import AdminDesignPage from "./pages/AdminDesignPage";
 import MfaVerifyPage from "./pages/MfaVerifyPage";
 import AccountPage from "./pages/AccountPage";
 import SecuritySettingsPage from "./pages/SecuritySettingsPage";
@@ -66,6 +67,8 @@ import { getUserDisplayName } from "./data/users";
 import { AuthProvider, useAuth } from "./state/AuthStore";
 import { RolesProvider } from "./state/RolesStore";
 import { ExternalOrgsProvider } from "./state/ExternalOrgsStore";
+import { BrandingProvider, useBranding } from "./state/BrandingStore";
+import { resolveBrandingAssetUrl } from "./api/branding";
 
 const MODULE_PREFIX = "compliance";
 const MODULE_BASE_PATH = `/${MODULE_PREFIX}`;
@@ -98,6 +101,40 @@ function getRoleLabel(companyRole: string, isExternal: boolean) {
     return typeLabel;
   }
   return `${companyRole} · ${typeLabel}`;
+}
+
+function SidebarBranding({ collapsed }: { collapsed: boolean }) {
+  const { branding } = useBranding();
+
+  if (collapsed) {
+    if (!branding.hasIcon || !branding.iconUrl) {
+      return null;
+    }
+
+    return (
+      <div className="sidebarBranding sidebarBrandingCollapsed">
+        <img
+          src={resolveBrandingAssetUrl(branding.iconUrl)}
+          alt={t("branding.sidebarIconAlt")}
+          className="sidebarBrandingIcon"
+        />
+      </div>
+    );
+  }
+
+  if (!branding.hasLogo || !branding.logoUrl) {
+    return null;
+  }
+
+  return (
+    <div className="sidebarBranding sidebarBrandingExpanded">
+      <img
+        src={resolveBrandingAssetUrl(branding.logoUrl)}
+        alt={t("branding.sidebarLogoAlt")}
+        className="sidebarBrandingImage"
+      />
+    </div>
+  );
 }
 
 function AuthLoadingScreen() {
@@ -192,6 +229,8 @@ function AppLayout() {
     ? `${ADMIN_BASE_PATH}/roles`
     : permissions.canViewSecurityAdmin
     ? `${ADMIN_BASE_PATH}/security`
+    : permissions.canViewDesignAdmin
+    ? `${ADMIN_BASE_PATH}/design`
     : permissions.canViewExternalOrgsAdmin
     ? `${ADMIN_BASE_PATH}/external-orgs`
     : permissions.canViewAuthoritiesAdmin
@@ -390,6 +429,7 @@ function AppLayout() {
       mobileOverlayAriaLabel={t("nav.collapseSidebar")}
       sidebar={
         <Sidebar>
+          <SidebarBranding collapsed={sidebarNavCollapsed} />
           {!sidebarNavCollapsed ? <div className="sidebarSectionTitle">{t("nav.module")}</div> : null}
           {navItems
             .filter((item) => item.visible)
@@ -580,6 +620,10 @@ function AppLayout() {
             element={permissions.canViewSecurityAdmin ? <Navigate to={`${ADMIN_BASE_PATH}/security`} replace /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route
+            path="admin/design"
+            element={permissions.canViewDesignAdmin ? <Navigate to={`${ADMIN_BASE_PATH}/design`} replace /> : <Navigate to={restrictedFallback} replace />}
+          />
+          <Route
             path="admin/notifications"
             element={permissions.canViewNotificationsAdmin ? <Navigate to={`${ADMIN_BASE_PATH}/notifications`} replace /> : <Navigate to={restrictedFallback} replace />}
           />
@@ -675,6 +719,10 @@ function AppLayout() {
           element={permissions.canViewSecurityAdmin ? <AdminSecurityPage /> : <Navigate to={restrictedFallback} replace />}
         />
         <Route
+          path="/admin/design"
+          element={permissions.canViewDesignAdmin ? <AdminDesignPage /> : <Navigate to={restrictedFallback} replace />}
+        />
+        <Route
           path="/admin/notifications"
           element={permissions.canViewNotificationsAdmin ? <AdminNotificationsPage /> : <Navigate to={restrictedFallback} replace />}
         />
@@ -756,23 +804,25 @@ export default function App() {
               <UsersProvider>
                 <HelpHintsProvider>
                   <AuthorizationProvider>
-                    <AuditLogProvider>
-                      <ProjectsProvider>
-                        <LegalDocsProvider>
-                          <ObligationsProvider>
-                            <DeadlinesProvider>
-                              <TaskStateProvider>
-                                <TasksProvider>
-                                  <NotificationsProvider>
-                                    <AppRouter />
-                                  </NotificationsProvider>
-                                </TasksProvider>
-                              </TaskStateProvider>
-                            </DeadlinesProvider>
-                          </ObligationsProvider>
-                        </LegalDocsProvider>
-                      </ProjectsProvider>
-                    </AuditLogProvider>
+                    <BrandingProvider>
+                      <AuditLogProvider>
+                        <ProjectsProvider>
+                          <LegalDocsProvider>
+                            <ObligationsProvider>
+                              <DeadlinesProvider>
+                                <TaskStateProvider>
+                                  <TasksProvider>
+                                    <NotificationsProvider>
+                                      <AppRouter />
+                                    </NotificationsProvider>
+                                  </TasksProvider>
+                                </TaskStateProvider>
+                              </DeadlinesProvider>
+                            </ObligationsProvider>
+                          </LegalDocsProvider>
+                        </ProjectsProvider>
+                      </AuditLogProvider>
+                    </BrandingProvider>
                   </AuthorizationProvider>
                 </HelpHintsProvider>
               </UsersProvider>

@@ -13,6 +13,8 @@ export type AuthorizationPermissions = {
   canViewNotificationsAdmin: boolean;
   canRetryNotificationsAdmin: boolean;
   canManageNotificationSettingsAdmin: boolean;
+  canViewDesignAdmin: boolean;
+  canManageDesignAdmin: boolean;
   canViewAuthoritiesAdmin: boolean;
   canManageAuthoritiesAdmin: boolean;
   canViewExternalOrgsAdmin: boolean;
@@ -75,6 +77,8 @@ export function AuthorizationProvider({ children }: { children: React.ReactNode 
     const canRetryNotificationsAdmin = hasAdminAccess && hasPermission("notifications.retry");
     const canManageNotificationSettingsAdmin =
       hasAdminAccess && hasPermission("notifications.settings.manage");
+    const canViewDesignAdmin = hasAdminAccess && hasPermission("masterData.manage");
+    const canManageDesignAdmin = canViewDesignAdmin;
     const canViewAuthoritiesAdmin =
       hasAdminAccess && (hasPermission("authorities.view") || hasPermission("authorities.manage"));
     const canManageAuthoritiesAdmin = hasAdminAccess && hasPermission("authorities.manage");
@@ -100,6 +104,7 @@ export function AuthorizationProvider({ children }: { children: React.ReactNode 
           canViewRolesAdmin ||
           canViewSecurityAdmin ||
           canViewNotificationsAdmin ||
+          canViewDesignAdmin ||
           canViewAuthoritiesAdmin ||
           canViewExternalOrgsAdmin,
         canViewUsersAdmin,
@@ -111,6 +116,8 @@ export function AuthorizationProvider({ children }: { children: React.ReactNode 
         canViewNotificationsAdmin,
         canRetryNotificationsAdmin,
         canManageNotificationSettingsAdmin,
+        canViewDesignAdmin,
+        canManageDesignAdmin,
         canViewAuthoritiesAdmin,
         canManageAuthoritiesAdmin,
         canViewExternalOrgsAdmin,

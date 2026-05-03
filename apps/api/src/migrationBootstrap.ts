@@ -14,6 +14,7 @@ export type BootstrapMode =
   | "baseline-20260422120000_project_status_submission_type"
   | "baseline-20260429103000_obligation_recurrence_external_execution"
   | "baseline-20260502120000_project_access_legacy_decisions"
+  | "baseline-20260503143000_branding_assets"
   | "partial";
 
 type TableRow = {
@@ -414,6 +415,38 @@ const documentsRequirements = {
   primaryKeys: [primaryKey("Document_pkey", "Document", ["id"])],
   foreignKeys: [
     foreignKey("Document_createdByUserId_fkey", "Document", ["createdByUserId"], "User", ["id"], {
+      onDelete: "SET NULL",
+      onUpdate: "CASCADE"
+    })
+  ]
+} satisfies SchemaRequirements;
+
+const brandingAssetRequirements = {
+  tables: ["BrandingAsset"],
+  columns: [
+    "BrandingAsset.id",
+    "BrandingAsset.type",
+    "BrandingAsset.fileName",
+    "BrandingAsset.mimeType",
+    "BrandingAsset.sizeBytes",
+    "BrandingAsset.content",
+    "BrandingAsset.sha256",
+    "BrandingAsset.updatedById",
+    "BrandingAsset.createdAt",
+    "BrandingAsset.updatedAt"
+  ],
+  enumValues: [
+    "BrandingAssetType.SIDEBAR_LOGO",
+    "BrandingAssetType.SIDEBAR_ICON"
+  ],
+  indexes: [
+    index("BrandingAsset_type_key", "BrandingAsset", ["type"], { unique: true }),
+    index("BrandingAsset_updatedById_idx", "BrandingAsset", ["updatedById"]),
+    index("BrandingAsset_updatedAt_idx", "BrandingAsset", ["updatedAt"])
+  ],
+  primaryKeys: [primaryKey("BrandingAsset_pkey", "BrandingAsset", ["id"])],
+  foreignKeys: [
+    foreignKey("BrandingAsset_updatedById_fkey", "BrandingAsset", ["updatedById"], "User", ["id"], {
       onDelete: "SET NULL",
       onUpdate: "CASCADE"
     })
@@ -1300,6 +1333,16 @@ const projectStatusSubmissionTypeBaselineRequirements = mergeRequirements(
 );
 
 export const baselineStages = [
+  {
+    mode: "baseline-20260503143000_branding_assets",
+    introduced: brandingAssetRequirements,
+    requirements: mergeRequirements(
+      projectStatusSubmissionTypeBaselineRequirements,
+      obligationExternalRecurrenceRequirements,
+      projectAccessLegacyDecisionsRequirements,
+      brandingAssetRequirements
+    )
+  },
   {
     mode: "baseline-20260502120000_project_access_legacy_decisions",
     introduced: projectAccessLegacyDecisionsRequirements,

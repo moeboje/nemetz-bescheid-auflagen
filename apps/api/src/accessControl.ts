@@ -609,13 +609,13 @@ export function mapRequestToPermission(input: { method: string; path: string }) 
     if (isRead) {
       return "deadlines.view" as PermissionKey;
     }
-    if (/^\/deadlines\/[^/]+\/complete$/.test(path)) {
+    if (/^\/deadlines\/[^/]+\/complete\/?$/.test(path)) {
       return "tasks.complete" as PermissionKey;
     }
-    if (/^\/deadlines\/[^/]+\/reopen$/.test(path)) {
+    if (/^\/deadlines\/[^/]+\/reopen\/?$/.test(path)) {
       return "tasks.edit" as PermissionKey;
     }
-    if (/^\/deadlines\/[^/]+\/status$/.test(path)) {
+    if (/^\/deadlines\/[^/]+\/status\/?$/.test(path)) {
       return null;
     }
     if (isArchiveAction) {

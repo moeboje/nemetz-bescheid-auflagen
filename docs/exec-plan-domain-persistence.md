@@ -111,6 +111,15 @@
 - Nicht-Ziele:
 - keine Prisma-Schema-/Migration-Aenderungen, keine Azure-, Notification-/PowerAutomate-, Import-/Export-/Recovery-Aenderungen, keine neuen Dependencies, keine UI-Neugestaltung.
 
+## 2ai. Portal-Design-Feature 2026-05-03: optionales Sidebar-Logo und Icon
+- Ziel ist ein optionales Admin-verwaltetes Portal-Logo oberhalb der linken Navigation und ein separates Icon fuer den eingeklappten Sidebar-Zustand.
+- Fallback-Regel: Ohne hochgeladenes Logo/Icon wird kein Wrapper, kein Platzhalter und kein zusaetzlicher Abstand gerendert; die Sidebar bleibt visuell und funktional unveraendert.
+- Persistenz erfolgt ueber eine kleine PostgreSQL-Tabelle `BrandingAsset` mit je einem aktuellen Asset pro Typ `SIDEBAR_LOGO` und `SIDEBAR_ICON`.
+- Admin-Routen liegen unter `/api/admin/design`; lesende Branding-Routen unter `/api/branding*` sind fuer eingeloggte Nutzer verfuegbar.
+- Uploads sind auf kleine Bilddateien begrenzt: Logo PNG/JPEG/WebP bis 1 MB, Icon PNG/ICO/WebP bis 256 KB; SVG wird in dieser Umsetzung nicht zugelassen.
+- Design-Verwaltung nutzt `admin.access + masterData.manage`; es wird keine neue Permission und keine neue externe Storage-Infrastruktur eingefuehrt.
+- Nicht-Ziele: kein Theme-System, keine Farbverwaltung, keine Mandantenfaehigkeit, kein Azure Blob Storage, kein Browser-Tab-Favicon und keine Aenderung bestehender Navigation ausser optionalem Logo/Icon sowie Admin-Design-Link.
+
 ## 2a. Verifizierter Stand 2026-04-15
 - Phase 1 ist im aktuellen Code bereits serverseitig umgesetzt:
 - `apps/api/src/routes/scopes.ts`

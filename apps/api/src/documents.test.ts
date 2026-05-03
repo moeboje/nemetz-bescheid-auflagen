@@ -583,6 +583,51 @@ describe("Documents API", () => {
     assert.equal(unsupportedUpload.status, 400);
   });
 
+  it("keeps direct task evidence document writes on tasks.edit", async () => {
+    await createRole("TASK_EVIDENCE_EDIT_ONLY", [
+      "projects.view",
+      "projects.edit",
+      "tasks.view",
+      "tasks.edit"
+    ]);
+    await createRole("TASK_EVIDENCE_COMPLETE", ["tasks.view", "tasks.complete"]);
+
+    const editOnlyUser = await createUser("docs-task-evidence-edit-only@example.com", "ValidPassword1!", {
+      role: "TASK_EVIDENCE_EDIT_ONLY"
+    });
+    const completeUser = await createUser("docs-task-evidence-complete@example.com", "ValidPassword1!", {
+      role: "TASK_EVIDENCE_COMPLETE"
+    });
+    const editOnlyBundle = await seedOwnerBundle(editOnlyUser.id, "PROJECT_EDITOR");
+    const completeBundle = await seedOwnerBundle(completeUser.id, "PROJECT_EDITOR");
+    const editOnlyCookie = await login(editOnlyUser.email, "ValidPassword1!");
+    const completeCookie = await login(completeUser.email, "ValidPassword1!");
+
+    const projectUpload = await uploadDocument(
+      editOnlyCookie,
+      "PROJECT",
+      editOnlyBundle.project.id,
+      "project-allowed.pdf"
+    );
+    assert.equal(projectUpload.status, 201);
+
+    const editOnlyTaskEvidenceUpload = await uploadDocument(
+      editOnlyCookie,
+      "TASK_EVIDENCE",
+      editOnlyBundle.taskOwnerId,
+      "task-allowed.pdf"
+    );
+    assert.equal(editOnlyTaskEvidenceUpload.status, 201);
+
+    const completeOnlyTaskEvidenceUpload = await uploadDocument(
+      completeCookie,
+      "TASK_EVIDENCE",
+      completeBundle.taskOwnerId,
+      "task-blocked.pdf"
+    );
+    assert.equal(completeOnlyTaskEvidenceUpload.status, 403);
+  });
+
   it("admin can access all supported document owner domains", async () => {
     const admin = await createUser("docs-admin-all@example.com", "ValidPassword1!", {
       role: "ADMIN"

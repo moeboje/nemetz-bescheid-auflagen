@@ -53,6 +53,11 @@ enum LegacyDecisionReviewStatus {
   REVIEWED
 }
 
+enum BrandingAssetType {
+  SIDEBAR_LOGO
+  SIDEBAR_ICON
+}
+
 model User {
   id                            String                        @id @default(cuid())
   firstName                     String
@@ -91,6 +96,7 @@ model User {
   auditLogsAsActor              AuditLog[]                    @relation("AuditActor")
   auditLogsAsTarget             AuditLog[]                    @relation("AuditTarget")
   documentsCreated              Document[]
+  brandingAssetsUpdated         BrandingAsset[]              @relation("BrandingAssetUpdatedBy")
   externalOrg                   ExternalOrganization?         @relation(fields: [externalOrgId], references: [id], onDelete: SetNull)
   ownedProjects                 Project[]                     @relation("ProjectOwner")
   deputyProjects                Project[]                     @relation("ProjectDeputy")
@@ -109,6 +115,23 @@ model User {
   @@index([role])
   @@index([type])
   @@index([externalOrgId])
+}
+
+model BrandingAsset {
+  id          String            @id @default(cuid())
+  type        BrandingAssetType @unique
+  fileName    String
+  mimeType    String
+  sizeBytes   Int
+  content     Bytes
+  sha256      String
+  updatedById String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  updatedBy   User?             @relation("BrandingAssetUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([updatedById])
+  @@index([updatedAt])
 }
 
 model Document {

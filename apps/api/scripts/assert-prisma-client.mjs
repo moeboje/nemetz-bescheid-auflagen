@@ -12,7 +12,8 @@ const REQUIRED_OBLIGATION_FIELDS = [
 const REQUIRED_MODEL_FIELDS = {
   Obligation: REQUIRED_OBLIGATION_FIELDS,
   ProjectAccess: ["projectId", "userId", "accessRole", "grantedByUserId"],
-  LegacyDecision: ["projectId", "title", "legacyStatus", "reviewStatus", "linkedLegalDocId"]
+  LegacyDecision: ["projectId", "title", "legacyStatus", "reviewStatus", "linkedLegalDocId"],
+  BrandingAsset: ["type", "fileName", "mimeType", "sizeBytes", "content", "sha256", "updatedById"]
 };
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
