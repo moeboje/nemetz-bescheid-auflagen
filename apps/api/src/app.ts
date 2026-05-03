@@ -2635,7 +2635,7 @@ export function createApp(config: AppConfig = loadConfig()) {
         return;
       }
 
-      const content = new Uint8Array(validation.content);
+      const content = Buffer.from(validation.content);
       const updated = await prisma.brandingAsset.upsert({
         where: {
           type: BRANDING_ASSET_CONFIG[kind].type
