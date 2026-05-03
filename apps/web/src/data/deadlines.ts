@@ -10,6 +10,9 @@ export type Deadline = {
   dueDate: string;
   status: DeadlineStoredStatus;
   projectId?: string;
+  resolvedProjectId?: string;
+  projectTitle?: string;
+  currentUserCanWriteProject?: boolean;
   legalDocId?: string;
   authorityId?: string;
   ownerUserId?: string;

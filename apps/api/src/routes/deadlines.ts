@@ -15,8 +15,10 @@ import {
 import { hasPermission, type PermissionKey } from "../accessControl.js";
 import { enqueueDeadlineAssignmentNotificationsForChange } from "../notifications.js";
 import {
+  getProjectWriteAccessMap,
   getReadableProjectIdsForDomain,
   hasGlobalProjectReadAccess,
+  listWritableProjectOptionsForDomain,
   requireProjectDomainRead,
   requireProjectDomainReadPermission,
   requireProjectDomainWrite,
@@ -55,6 +57,9 @@ type DeadlineDto = {
   dueDate: string;
   status: DeadlineStoredStatusDto;
   projectId?: string;
+  resolvedProjectId?: string;
+  projectTitle?: string;
+  currentUserCanWriteProject?: boolean;
   legalDocId?: string;
   authorityId?: string;
   ownerUserId?: string;
@@ -436,6 +441,82 @@ async function listDeadlinesFromDb(db: DbClient, where?: Prisma.DeadlineWhereInp
   return deadlines.map((deadline) => toDeadlineDto(deadline));
 }
 
+async function enrichDeadlineDtosWithProjectAccess(
+  db: DbClient,
+  user: RouteUser,
+  deadlines: DeadlineDto[]
+): Promise<DeadlineDto[]> {
+  if (deadlines.length === 0) {
+    return deadlines;
+  }
+
+  const legalDocIds = Array.from(
+    new Set(deadlines.map((deadline) => deadline.legalDocId).filter((id): id is string => Boolean(id)))
+  );
+  const legalDocs = legalDocIds.length
+    ? await db.legalDocument.findMany({
+        where: {
+          id: {
+            in: legalDocIds
+          }
+        },
+        select: {
+          id: true,
+          projectId: true
+        }
+      })
+    : [];
+  const projectIdByLegalDocId = new Map(
+    legalDocs.map((legalDoc) => [legalDoc.id, legalDoc.projectId] as const)
+  );
+  const resolvedProjectIds = Array.from(
+    new Set(
+      deadlines
+        .map((deadline) => deadline.projectId ?? (deadline.legalDocId ? projectIdByLegalDocId.get(deadline.legalDocId) : undefined))
+        .filter((id): id is string => Boolean(id))
+    )
+  );
+  const [projects, writeAccessMap] = await Promise.all([
+    resolvedProjectIds.length
+      ? db.project.findMany({
+          where: {
+            id: {
+              in: resolvedProjectIds
+            }
+          },
+          select: {
+            id: true,
+            title: true
+          }
+        })
+      : Promise.resolve([]),
+    getProjectWriteAccessMap(db, user, resolvedProjectIds)
+  ]);
+  const projectTitleById = new Map(projects.map((project) => [project.id, project.title] as const));
+
+  return deadlines.map((deadline) => {
+    const resolvedProjectId =
+      deadline.projectId ?? (deadline.legalDocId ? projectIdByLegalDocId.get(deadline.legalDocId) : undefined);
+    return {
+      ...deadline,
+      resolvedProjectId,
+      projectTitle: resolvedProjectId ? projectTitleById.get(resolvedProjectId) : undefined,
+      currentUserCanWriteProject: resolvedProjectId
+        ? Boolean(writeAccessMap.get(resolvedProjectId))
+        : false
+    };
+  });
+}
+
+async function toDeadlineDtoForUser(
+  db: DbClient,
+  user: RouteUser,
+  deadline: DbDeadline
+) {
+  const [dto] = await enrichDeadlineDtosWithProjectAccess(db, user, [toDeadlineDto(deadline)]);
+  return dto;
+}
+
 async function findDeadlineById(db: DbClient, id: string) {
   return db.deadline.findUnique({
     where: {
@@ -793,7 +874,29 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
             })
           : [];
 
-      res.json(deadlines);
+      res.json(await enrichDeadlineDtosWithProjectAccess(prisma, user, deadlines));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/deadlines/project-options", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      applyNoStoreHeaders(res);
+
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
+      if (!user) {
+        return;
+      }
+
+      const projects = await listWritableProjectOptionsForDomain({
+        db: prisma,
+        user,
+        domain: "deadlines",
+        permission: "deadlines.create"
+      });
+
+      res.json(projects);
     } catch (error) {
       next(error);
     }
@@ -823,7 +926,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        deadline: toDeadlineDto(deadline)
+        deadline: await toDeadlineDtoForUser(prisma, user, deadline)
       });
     } catch (error) {
       next(error);
@@ -922,7 +1025,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
 
       res.status(201).json({
         ok: true,
-        deadline: toDeadlineDto(deadline)
+        deadline: await toDeadlineDtoForUser(prisma, user, deadline)
       });
     } catch (error) {
       next(error);
@@ -1068,7 +1171,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        deadline: toDeadlineDto(updated)
+        deadline: await toDeadlineDtoForUser(prisma, user, updated)
       });
     } catch (error) {
       next(error);
@@ -1118,7 +1221,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        deadline: toDeadlineDto(updated)
+        deadline: await toDeadlineDtoForUser(prisma, user, updated)
       });
     } catch (error) {
       next(error);
@@ -1184,7 +1287,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        deadline: toDeadlineDto(updated)
+        deadline: await toDeadlineDtoForUser(prisma, user, updated)
       });
     } catch (error) {
       next(error);
@@ -1232,7 +1335,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        deadline: toDeadlineDto(updated)
+        deadline: await toDeadlineDtoForUser(prisma, user, updated)
       });
     } catch (error) {
       next(error);
@@ -1295,7 +1398,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
 
         res.json({
           ok: true,
-          deadline: toDeadlineDto(updated)
+          deadline: await toDeadlineDtoForUser(prisma, user, updated)
         });
       } catch (error) {
         next(error);
@@ -1341,7 +1444,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        deadline: toDeadlineDto(updated)
+        deadline: await toDeadlineDtoForUser(prisma, user, updated)
       });
     } catch (error) {
       next(error);
@@ -1386,7 +1489,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        deadline: toDeadlineDto(updated)
+        deadline: await toDeadlineDtoForUser(prisma, user, updated)
       });
     } catch (error) {
       next(error);

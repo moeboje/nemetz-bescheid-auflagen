@@ -67,10 +67,38 @@ export default function ObligationsPage() {
     showArchived: false
   });
 
-  const projectOptions = useMemo(
-    () => projects.map((project) => ({ value: project.id, label: project.title })),
-    [projects]
-  );
+  const projectTitleById = useMemo(() => {
+    const entries = new Map(projects.map((project) => [project.id, project.title] as const));
+    legalDocs.forEach((doc) => {
+      if (doc.projectTitle) {
+        entries.set(doc.projectId, doc.projectTitle);
+      }
+    });
+    obligations.forEach((obligation) => {
+      if (obligation.projectId && obligation.projectTitle) {
+        entries.set(obligation.projectId, obligation.projectTitle);
+      }
+    });
+    return entries;
+  }, [legalDocs, obligations, projects]);
+
+  const projectOptions = useMemo(() => {
+    const seen = new Set<string>();
+    return obligations
+      .map((obligation) => obligation.projectId ?? legalDocs.find((doc) => doc.id === obligation.legalDocId)?.projectId)
+      .filter((projectId): projectId is string => Boolean(projectId))
+      .filter((projectId) => {
+        if (seen.has(projectId)) {
+          return false;
+        }
+        seen.add(projectId);
+        return true;
+      })
+      .map((projectId) => ({
+        value: projectId,
+        label: projectTitleById.get(projectId) ?? projectId
+      }));
+  }, [legalDocs, obligations, projectTitleById]);
 
   const legalDocOptions = useMemo(
     () => legalDocs.map((doc) => ({ value: doc.id, label: doc.title })),
@@ -131,13 +159,27 @@ export default function ObligationsPage() {
 
   const canWriteObligationProject = (target: (typeof obligations)[number]) => {
     const doc = legalDocs.find((item) => item.id === target.legalDocId);
-    const project = projects.find((item) => item.id === doc?.projectId);
-    return Boolean(project?.currentUserCanWrite);
+    return Boolean(target.currentUserCanWriteProject ?? doc?.currentUserCanWriteProject);
   };
-  const hasWritableLegalDocProject = legalDocs.some((doc) =>
-    Boolean(projects.find((project) => project.id === doc.projectId)?.currentUserCanWrite)
+  const writableLegalDocs = useMemo(
+    () =>
+      legalDocs.filter((doc) =>
+        Boolean(doc.currentUserCanWriteProject && !doc.isArchived && !doc.archivedAt)
+      ),
+    [legalDocs]
   );
-  const canCreateObligation = permissions.canCreateObligations && hasWritableLegalDocProject;
+  const editingObligation = obligations.find((item) => item.id === editingObligationId);
+  const availableLegalDocs = useMemo(() => {
+    if (
+      !editingObligation ||
+      writableLegalDocs.some((doc) => doc.id === editingObligation.legalDocId)
+    ) {
+      return writableLegalDocs;
+    }
+    const currentDoc = legalDocs.find((doc) => doc.id === editingObligation.legalDocId);
+    return currentDoc ? [...writableLegalDocs, currentDoc] : writableLegalDocs;
+  }, [editingObligation, legalDocs, writableLegalDocs]);
+  const canCreateObligation = permissions.canCreateObligations && writableLegalDocs.length > 0;
   const canEditObligation = (target: (typeof obligations)[number]) =>
     permissions.canEditObligations && canWriteObligationProject(target);
   const canDeleteObligation = (target: (typeof obligations)[number]) =>
@@ -186,7 +228,7 @@ export default function ObligationsPage() {
         return false;
       }
       const doc = legalDocs.find((item) => item.id === obligation.legalDocId);
-      const projectId = doc?.projectId;
+      const projectId = obligation.projectId ?? doc?.projectId;
       const matchesSearch = filters.search
         ? obligation.title.toLowerCase().includes(filters.search.toLowerCase())
         : true;
@@ -228,8 +270,8 @@ export default function ObligationsPage() {
       header: t("obligations.table.project"),
       render: (row: (typeof obligations)[number]) => {
         const doc = legalDocs.find((item) => item.id === row.legalDocId);
-        const project = projects.find((projectItem) => projectItem.id === doc?.projectId);
-        return project?.title ?? t("common.notAvailable");
+        const projectId = row.projectId ?? doc?.projectId;
+        return projectId ? projectTitleById.get(projectId) ?? t("common.notAvailable") : t("common.notAvailable");
       }
     },
     {
@@ -417,7 +459,8 @@ export default function ObligationsPage() {
           setModalOpen(false);
           setEditingObligationId(null);
         }}
-        obligation={obligations.find((item) => item.id === editingObligationId)}
+        obligation={editingObligation}
+        availableLegalDocs={availableLegalDocs}
       />
 
       <Modal

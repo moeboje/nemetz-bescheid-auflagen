@@ -43,6 +43,7 @@ type LegalDocModalProps = {
   legalDoc?: LegalDoc;
   initialProjectId?: string;
   lockProject?: boolean;
+  projectOptions?: Array<{ value: string; label: string }>;
 };
 
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
@@ -141,7 +142,8 @@ export default function LegalDocModal({
   onClose,
   legalDoc,
   initialProjectId,
-  lockProject
+  lockProject,
+  projectOptions: providedProjectOptions
 }: LegalDocModalProps) {
   const runtimeConfig = useRuntimeConfig();
   const { projects } = useProjects();
@@ -198,10 +200,23 @@ export default function LegalDocModal({
     setReviewOpen(false);
   }, [initialProjectId, legalDoc, open]);
 
-  const projectOptions = useMemo(
+  const fallbackProjectOptions = useMemo(
     () => projects.map((project) => ({ value: project.id, label: project.title })),
     [projects]
   );
+
+  const projectOptions = useMemo(() => {
+    const options = providedProjectOptions ?? fallbackProjectOptions;
+    const currentProjectId = legalDoc?.projectId ?? initialProjectId;
+    if (!currentProjectId || options.some((option) => option.value === currentProjectId)) {
+      return options;
+    }
+    const fallbackLabel =
+      legalDoc?.projectTitle ??
+      projects.find((project) => project.id === currentProjectId)?.title ??
+      currentProjectId;
+    return [...options, { value: currentProjectId, label: fallbackLabel }];
+  }, [fallbackProjectOptions, initialProjectId, legalDoc, projects, providedProjectOptions]);
 
   const activeCompanies = useMemo(
     () => companies.filter((company) => !company.isArchived),
@@ -798,6 +813,7 @@ export default function LegalDocModal({
           open={reviewOpen}
           result={analysisResult}
           onCancel={() => setReviewOpen(false)}
+          projectOptions={projectOptions}
           onApply={(accepted) => {
             setReviewOpen(false);
             void persistLegalDoc(accepted, analysisResult);

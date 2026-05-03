@@ -41,6 +41,7 @@ export type Task = {
   scopeLabel: string;
   projectId?: string;
   legalDocId?: string;
+  projectCanWrite?: boolean;
   completedAt?: string;
   completedByUserId?: string;
   evidence?: Evidence[];
@@ -175,7 +176,7 @@ export function generateTasksFromDeadlines(deadlines: Deadline[]): TaskSeed[] {
       dueDate: deadline.dueDate,
       assignedToUserId: deadline.ownerUserId,
       deputyUserId: deadline.deputyUserId,
-      projectId: deadline.projectId,
+      projectId: deadline.resolvedProjectId ?? deadline.projectId,
       legalDocId: deadline.legalDocId
     }));
 }
@@ -280,12 +281,16 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
         let completedByUserId: string | undefined;
         let evidence: Evidence[] | undefined;
         let requiredEvidence: Obligation["evidenceRequirements"] | undefined;
+        let projectCanWrite = false;
 
         if (seed.type === "OBLIGATION") {
           const doc = legalDocs.find((item) => item.id === seed.legalDocId);
           const obligation = obligations.find((item) => item.id === seed.obligationId);
           legalDocId = doc?.id;
-          projectId = doc?.projectId;
+          projectId = obligation?.projectId ?? doc?.projectId;
+          projectCanWrite = Boolean(
+            obligation?.currentUserCanWriteProject ?? doc?.currentUserCanWriteProject
+          );
           if (doc) {
             const scope = getEffectiveScopeForLegalDoc(doc);
             if (scope) {
@@ -307,11 +312,14 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
           completedAt = deadline?.status === "DONE" ? deadline.completedAt ?? deadline.updatedAt : undefined;
           completedByUserId = deadline?.completedByUserId;
           evidence = deadline?.evidence ?? [];
+          projectId = deadline?.resolvedProjectId ?? deadline?.projectId ?? projectId;
+          projectCanWrite = Boolean(deadline?.currentUserCanWriteProject);
 
           if (legalDocId) {
             const doc = legalDocs.find((item) => item.id === legalDocId);
             if (doc) {
               projectId = projectId ?? doc.projectId;
+              projectCanWrite = projectCanWrite || Boolean(doc.currentUserCanWriteProject);
               const scope = getEffectiveScopeForLegalDoc(doc);
               if (scope) {
                 scopeLabel = getScopeLabel(scope.companyId, scope.siteId, scope.facilityId);
@@ -382,7 +390,8 @@ export function TasksProvider({ children }: { children: React.ReactNode }) {
             : t("tasks.unassigned"),
           scopeLabel,
           projectId,
-          legalDocId
+          legalDocId,
+          projectCanWrite
         };
       })
       .sort((a, b) => a.dueDate.localeCompare(b.dueDate));

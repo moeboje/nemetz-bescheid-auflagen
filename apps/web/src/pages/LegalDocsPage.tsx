@@ -24,7 +24,7 @@ import LegalDocModal from "../components/LegalDocModal";
 export default function LegalDocsPage() {
   const navigate = useNavigate();
   const runtimeConfig = useRuntimeConfig();
-  const { legalDocs, getEffectiveScopeLabel } = useLegalDocs();
+  const { legalDocs, getEffectiveScopeLabel, writableProjectOptions } = useLegalDocs();
   const { projects } = useProjects();
   const { companies, sites, facilities, getScopeLabel } = useScopes();
   const { obligations } = useObligations();
@@ -38,15 +38,54 @@ export default function LegalDocsPage() {
     scopeLabel: "",
     showArchived: false
   });
-  const hasWritableProject = projects.some((project) => project.currentUserCanWrite);
-  const canCreateLegalDoc = permissions.canEditLegalDocs && hasWritableProject;
-  const canEditLegalDoc = (projectId?: string) =>
-    Boolean(permissions.canEditLegalDocs && projects.find((project) => project.id === projectId)?.currentUserCanWrite);
+  const editingDoc = legalDocs.find((doc) => doc.id === editingDocId);
+  const canCreateLegalDoc = permissions.canCreateLegalDocs && writableProjectOptions.length > 0;
+  const canEditLegalDoc = (doc: (typeof legalDocs)[number]) =>
+    permissions.canEditLegalDocs && Boolean(doc.currentUserCanWriteProject);
 
-  const projectOptions = useMemo(
-    () => projects.map((project) => ({ value: project.id, label: project.title })),
-    [projects]
+  const projectTitleById = useMemo(() => {
+    const entries = new Map(projects.map((project) => [project.id, project.title] as const));
+    legalDocs.forEach((doc) => {
+      if (doc.projectTitle) {
+        entries.set(doc.projectId, doc.projectTitle);
+      }
+    });
+    return entries;
+  }, [legalDocs, projects]);
+
+  const projectOptions = useMemo(() => {
+    const seen = new Set<string>();
+    return legalDocs
+      .filter((doc) => {
+        if (seen.has(doc.projectId)) {
+          return false;
+        }
+        seen.add(doc.projectId);
+        return true;
+      })
+      .map((doc) => ({
+        value: doc.projectId,
+        label: projectTitleById.get(doc.projectId) ?? doc.projectId
+      }));
+  }, [legalDocs, projectTitleById]);
+
+  const writableProjectSelectOptions = useMemo(
+    () => writableProjectOptions.map((project) => ({ value: project.id, label: project.title })),
+    [writableProjectOptions]
   );
+
+  const modalProjectOptions = useMemo(() => {
+    if (!editingDoc || writableProjectSelectOptions.some((option) => option.value === editingDoc.projectId)) {
+      return writableProjectSelectOptions;
+    }
+    return [
+      ...writableProjectSelectOptions,
+      {
+        value: editingDoc.projectId,
+        label: projectTitleById.get(editingDoc.projectId) ?? editingDoc.projectId
+      }
+    ];
+  }, [editingDoc, projectTitleById, writableProjectSelectOptions]);
 
   const scopeOptions = useMemo(() => {
     const activeCompanies = companies.filter((company) => !company.isArchived);
@@ -78,7 +117,6 @@ export default function LegalDocsPage() {
       if ((doc.isArchived || doc.archivedAt) && !filters.showArchived) {
         return false;
       }
-      const project = projects.find((item) => item.id === doc.projectId);
       const matchesSearch = filters.search
         ? doc.title.toLowerCase().includes(filters.search.toLowerCase())
         : true;
@@ -86,9 +124,9 @@ export default function LegalDocsPage() {
       const matchesProject = filters.projectId ? doc.projectId === filters.projectId : true;
       const scopeLabel = getEffectiveScopeLabel(doc);
       const matchesScope = filters.scopeLabel ? scopeLabel === filters.scopeLabel : true;
-      return matchesSearch && matchesType && matchesProject && matchesScope && !!project;
+      return matchesSearch && matchesType && matchesProject && matchesScope;
     });
-  }, [filters, getEffectiveScopeLabel, legalDocs, projects]);
+  }, [filters, getEffectiveScopeLabel, legalDocs]);
 
   const columns = [
     {
@@ -112,8 +150,7 @@ export default function LegalDocsPage() {
       key: "project",
       header: t("legalDocs.table.project"),
       render: (doc: (typeof legalDocs)[number]) =>
-        projects.find((project) => project.id === doc.projectId)?.title ??
-        t("common.notAvailable")
+        projectTitleById.get(doc.projectId) ?? t("common.notAvailable")
     },
     {
       key: "reference",
@@ -238,7 +275,7 @@ export default function LegalDocsPage() {
             </IconButton>
             <IconButton
               ariaLabel={t("legalDocs.action.edit")}
-              disabled={!canEditLegalDoc(doc.projectId)}
+              disabled={!canEditLegalDoc(doc)}
               onClick={() => {
                 setEditingDocId(doc.id);
                 setModalOpen(true);
@@ -256,7 +293,8 @@ export default function LegalDocsPage() {
           setModalOpen(false);
           setEditingDocId(null);
         }}
-        legalDoc={legalDocs.find((doc) => doc.id === editingDocId)}
+        legalDoc={editingDoc}
+        projectOptions={modalProjectOptions}
       />
     </div>
   );

@@ -333,7 +333,7 @@ export default function ProjectDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const runtimeConfig = useRuntimeConfig();
-  const { actor, permissions } = useAuthorization();
+  const { actor, permissions, hasPermission } = useAuthorization();
   const { entries } = useAuditLog();
   const {
     projects,
@@ -390,6 +390,20 @@ export default function ProjectDetailPage() {
   const checklistTabEnabled = runtimeConfig.features.enableProjectChecklists;
 
   const project = useMemo(() => projects.find((item) => item.id === id), [id, projects]);
+  const canView = project ? ProjectPolicy.view(actor, project) : false;
+  const canWriteProject = project ? ProjectPolicy.write(actor, project) : false;
+  const canUpdate = project ? ProjectPolicy.update(actor, project) : false;
+  const canArchive = project ? ProjectPolicy.archive(actor, project) : false;
+  const canViewObligationsTab =
+    permissions.canViewProjects && permissions.canViewObligations && !actor.isExternal;
+  const canReadLegacyDecisions =
+    !actor.isExternal &&
+    (permissions.canViewLegalDocs ||
+      permissions.canEditLegalDocs ||
+      permissions.canArchiveLegalDocs ||
+      hasPermission("legalDocs.export"));
+  const canViewLegacyDecisionsTab = Boolean(project && canView && canReadLegacyDecisions);
+  const canArchiveLegacyDecisions = canWriteProject && permissions.canArchiveLegalDocs;
   const scopeLabel = project
     ? getScopeLabel(project.companyId, project.siteId, project.facilityId)
     : "";
@@ -422,7 +436,7 @@ export default function ProjectDetailPage() {
         if (deadline.isArchived || deadline.archivedAt) {
           return false;
         }
-        if (deadline.projectId === project?.id) {
+        if ((deadline.resolvedProjectId ?? deadline.projectId) === project?.id) {
           return true;
         }
         if (deadline.legalDocId && projectDocIds.has(deadline.legalDocId)) {
@@ -521,10 +535,15 @@ export default function ProjectDetailPage() {
     }
   }, [checklistTabEnabled, tab]);
   React.useEffect(() => {
-    if (tab === "obligations" && !(permissions.canViewProjects && permissions.canViewObligations && !actor.isExternal)) {
+    if (tab === "obligations" && !canViewObligationsTab) {
       setTab("overview");
     }
-  }, [actor.isExternal, permissions.canViewObligations, permissions.canViewProjects, tab]);
+  }, [canViewObligationsTab, tab]);
+  React.useEffect(() => {
+    if (tab === "legacyDecisions" && !canViewLegacyDecisionsTab) {
+      setTab("overview");
+    }
+  }, [canViewLegacyDecisionsTab, tab]);
   const canManageProjectAccessUi =
     !actor.isExternal &&
     actor.isAdmin &&
@@ -551,7 +570,7 @@ export default function ProjectDetailPage() {
   }, [canManageProjectAccessUi, project, tab]);
 
   React.useEffect(() => {
-    if (!project || tab !== "legacyDecisions") {
+    if (!project || tab !== "legacyDecisions" || !canViewLegacyDecisionsTab) {
       return;
     }
     void listProjectLegacyDecisions(project.id)
@@ -562,7 +581,7 @@ export default function ProjectDetailPage() {
       .catch(() => {
         setLegacyError(t("legacyDecisions.loadError"));
       });
-  }, [project, tab]);
+  }, [canViewLegacyDecisionsTab, project, tab]);
 
   if (!project) {
     return (
@@ -574,12 +593,6 @@ export default function ProjectDetailPage() {
     );
   }
 
-  const canView = ProjectPolicy.view(actor, project);
-  const canWriteProject = ProjectPolicy.write(actor, project);
-  const canUpdate = ProjectPolicy.update(actor, project);
-  const canArchive = ProjectPolicy.archive(actor, project);
-  const canViewObligationsTab =
-    permissions.canViewProjects && permissions.canViewObligations && !actor.isExternal;
   const canCreateLegalDocFromProject = canWriteProject && permissions.canCreateLegalDocs;
   const canCreateObligationFromProject =
     canViewObligationsTab && canWriteProject && permissions.canCreateObligations && projectDocs.length > 0;
@@ -1081,13 +1094,15 @@ export default function ProjectDetailPage() {
         >
           {t("projects.detail.tabs.attachments")}
         </button>
-        <button
-          type="button"
-          className={`tabButton ${tab === "legacyDecisions" ? "tabButtonActive" : ""}`}
-          onClick={() => setTab("legacyDecisions")}
-        >
-          {t("projects.detail.tabs.legacyDecisions")}
-        </button>
+        {canViewLegacyDecisionsTab ? (
+          <button
+            type="button"
+            className={`tabButton ${tab === "legacyDecisions" ? "tabButtonActive" : ""}`}
+            onClick={() => setTab("legacyDecisions")}
+          >
+            {t("projects.detail.tabs.legacyDecisions")}
+          </button>
+        ) : null}
         {canViewObligationsTab ? (
           <button
             type="button"
@@ -1350,7 +1365,7 @@ export default function ProjectDetailPage() {
         </Card>
       ) : null}
 
-      {tab === "legacyDecisions" ? (
+      {canViewLegacyDecisionsTab && tab === "legacyDecisions" ? (
         <div className="tableSection">
           <div className="sectionHeader">
             <h2 className="sectionTitle">{t("legacyDecisions.title")}</h2>
@@ -1398,11 +1413,10 @@ export default function ProjectDetailPage() {
                   >
                     <EditIcon />
                   </IconButton>
-                  {!legacyDecision.isArchived && !legacyDecision.archivedAt ? (
+                  {canArchiveLegacyDecisions && !legacyDecision.isArchived && !legacyDecision.archivedAt ? (
                     <Button
                       size="sm"
                       variant="secondary"
-                      disabled={!permissions.canEditLegalDocs || !canWriteProject}
                       onClick={async () => {
                         await archiveLegacyDecision(legacyDecision.id);
                         setLegacyDecisions(await listProjectLegacyDecisions(project.id));
@@ -1410,11 +1424,10 @@ export default function ProjectDetailPage() {
                     >
                       {t("common.archive")}
                     </Button>
-                  ) : (
+                  ) : canArchiveLegacyDecisions ? (
                     <Button
                       size="sm"
                       variant="ghost"
-                      disabled={!permissions.canEditLegalDocs || !canWriteProject}
                       onClick={async () => {
                         await restoreLegacyDecision(legacyDecision.id);
                         setLegacyDecisions(await listProjectLegacyDecisions(project.id));
@@ -1422,7 +1435,7 @@ export default function ProjectDetailPage() {
                     >
                       {t("common.restore")}
                     </Button>
-                  )}
+                  ) : null}
                 </div>
               )}
             />

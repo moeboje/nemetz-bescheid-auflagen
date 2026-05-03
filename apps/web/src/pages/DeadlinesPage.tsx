@@ -64,6 +64,7 @@ export default function DeadlinesPage() {
   const runtimeConfig = useRuntimeConfig();
   const {
     deadlines,
+    writableProjectOptions,
     getDeadlineStatus,
     markDeadlineDone,
     markDeadlineDoneWithEvidence,
@@ -94,14 +95,49 @@ export default function DeadlinesPage() {
       baseUrl: typeof window !== "undefined" ? window.location.origin : ""
     });
   };
-  const hasWritableProject = projects.some((project) => project.currentUserCanWrite);
 
-  const projectOptions = useMemo(
-    () =>
-      projects
-        .filter((project) => !project.archivedAt && !project.isArchived)
-        .map((project) => ({ value: project.id, label: project.title })),
-    [projects]
+  const projectTitleById = useMemo(() => {
+    const entries = new Map(projects.map((project) => [project.id, project.title] as const));
+    legalDocs.forEach((doc) => {
+      if (doc.projectTitle) {
+        entries.set(doc.projectId, doc.projectTitle);
+      }
+    });
+    deadlines.forEach((deadline) => {
+      const projectId = deadline.resolvedProjectId ?? deadline.projectId;
+      if (projectId && deadline.projectTitle) {
+        entries.set(projectId, deadline.projectTitle);
+      }
+    });
+    return entries;
+  }, [deadlines, legalDocs, projects]);
+
+  const projectOptions = useMemo(() => {
+    const seen = new Set<string>();
+    return deadlines
+      .map((deadline) => deadline.resolvedProjectId ?? deadline.projectId)
+      .filter((projectId): projectId is string => Boolean(projectId))
+      .filter((projectId) => {
+        if (seen.has(projectId)) {
+          return false;
+        }
+        seen.add(projectId);
+        return true;
+      })
+      .map((projectId) => ({
+        value: projectId,
+        label: projectTitleById.get(projectId) ?? projectId
+      }));
+  }, [deadlines, projectTitleById]);
+
+  const writableProjectSelectOptions = useMemo(
+    () => writableProjectOptions.map((project) => ({ value: project.id, label: project.title })),
+    [writableProjectOptions]
+  );
+
+  const writableLegalDocs = useMemo(
+    () => legalDocs.filter((doc) => doc.currentUserCanWriteProject && !doc.isArchived && !doc.archivedAt),
+    [legalDocs]
   );
 
   const legalDocOptions = useMemo(() => {
@@ -140,8 +176,10 @@ export default function DeadlinesPage() {
       .map((deadline) => {
         const legalDoc = legalDocs.find((doc) => doc.id === deadline.legalDocId);
         const project = projects.find(
-          (item) => item.id === (deadline.projectId ?? legalDoc?.projectId)
+          (item) => item.id === (deadline.resolvedProjectId ?? deadline.projectId ?? legalDoc?.projectId)
         );
+        const resolvedProjectId =
+          deadline.resolvedProjectId ?? deadline.projectId ?? legalDoc?.projectId ?? "";
         let scopeLabel = "";
         if (legalDoc) {
           const scope = getEffectiveScopeForLegalDoc(legalDoc);
@@ -156,9 +194,9 @@ export default function DeadlinesPage() {
         return {
           ...deadline,
           status: getDeadlineStatus(deadline),
-          resolvedProjectId: project?.id ?? deadline.projectId ?? legalDoc?.projectId ?? "",
-          projectCanWrite: Boolean(project?.currentUserCanWrite),
-          projectTitle: project?.title ?? "",
+          resolvedProjectId,
+          projectCanWrite: Boolean(deadline.currentUserCanWriteProject),
+          projectTitle: deadline.projectTitle ?? projectTitleById.get(resolvedProjectId) ?? project?.title ?? "",
           legalDocTitle: legalDoc?.title ?? "",
           ownerLabel: getUserLabel(deadline.ownerUserId),
           scopeLabel
@@ -203,8 +241,35 @@ export default function DeadlinesPage() {
     getScopeLabel,
     getUserLabel,
     legalDocs,
+    projectTitleById,
     projects
   ]);
+
+  const editingDeadline = deadlines.find((item) => item.id === editingDeadlineId);
+  const deadlineModalProjectOptions = useMemo(() => {
+    const editingProjectId = editingDeadline?.resolvedProjectId ?? editingDeadline?.projectId;
+    if (!editingProjectId || writableProjectSelectOptions.some((option) => option.value === editingProjectId)) {
+      return writableProjectSelectOptions;
+    }
+    return [
+      ...writableProjectSelectOptions,
+      {
+        value: editingProjectId,
+        label: projectTitleById.get(editingProjectId) ?? editingProjectId
+      }
+    ];
+  }, [editingDeadline, projectTitleById, writableProjectSelectOptions]);
+
+  const deadlineModalLegalDocs = useMemo(() => {
+    if (
+      !editingDeadline?.legalDocId ||
+      writableLegalDocs.some((doc) => doc.id === editingDeadline.legalDocId)
+    ) {
+      return writableLegalDocs;
+    }
+    const currentDoc = legalDocs.find((doc) => doc.id === editingDeadline.legalDocId);
+    return currentDoc ? [...writableLegalDocs, currentDoc] : writableLegalDocs;
+  }, [editingDeadline, legalDocs, writableLegalDocs]);
 
   const columns = [
     {
@@ -288,7 +353,7 @@ export default function DeadlinesPage() {
             </Button>
           ) : null}
           <Button
-            disabled={!permissions.canEditDeadlines || !hasWritableProject}
+            disabled={!permissions.canCreateDeadlines || writableProjectOptions.length === 0}
             onClick={() => setModalOpen(true)}
           >
             {t("deadlines.new")}
@@ -450,7 +515,9 @@ export default function DeadlinesPage() {
           setModalOpen(false);
           setEditingDeadlineId(null);
         }}
-        deadline={deadlines.find((item) => item.id === editingDeadlineId)}
+        deadline={editingDeadline}
+        projectOptions={deadlineModalProjectOptions}
+        availableLegalDocs={deadlineModalLegalDocs}
       />
 
       {runtimeConfig.features.enableEvidence ? (

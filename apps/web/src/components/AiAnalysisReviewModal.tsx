@@ -74,6 +74,7 @@ type AiAnalysisReviewModalProps = {
   result: AiAnalysisResult;
   onCancel: () => void;
   onApply: (accepted: AiReviewAcceptedPayload) => void;
+  projectOptions?: Array<{ value: string; label: string }>;
 };
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -167,7 +168,8 @@ export default function AiAnalysisReviewModal({
   open,
   result,
   onCancel,
-  onApply
+  onApply,
+  projectOptions: providedProjectOptions
 }: AiAnalysisReviewModalProps) {
   const { authorities, contacts, getContacts } = useAuthorities();
   const { projects } = useProjects();
@@ -304,13 +306,14 @@ export default function AiAnalysisReviewModal({
     [activeFacilities, meta.scopeCompanyId, meta.scopeSiteId]
   );
 
-  const projectOptions = useMemo(
+  const fallbackProjectOptions = useMemo(
     () =>
       projects
         .filter((project) => !project.isArchived && !project.archivedAt)
         .map((project) => ({ value: project.id, label: project.title })),
     [projects]
   );
+  const projectOptions = providedProjectOptions ?? fallbackProjectOptions;
 
   const invalidObligationIds = useMemo(() => {
     return new Set(

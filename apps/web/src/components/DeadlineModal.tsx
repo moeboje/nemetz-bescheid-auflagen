@@ -6,6 +6,7 @@ import { useDeadlines } from "../state/DeadlinesStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useProjects } from "../state/ProjectsStore";
 import type { Deadline } from "../state/DeadlinesStore";
+import type { LegalDoc } from "../data/legalDocs";
 import UserSelect from "./UserSelect";
 
 const emptyForm = {
@@ -29,6 +30,8 @@ type DeadlineModalProps = {
   initialLegalDocId?: string;
   lockProject?: boolean;
   lockLegalDoc?: boolean;
+  projectOptions?: Array<{ value: string; label: string }>;
+  availableLegalDocs?: Pick<LegalDoc, "id" | "title" | "projectId">[];
 };
 
 export default function DeadlineModal({
@@ -38,7 +41,9 @@ export default function DeadlineModal({
   initialProjectId,
   initialLegalDocId,
   lockProject,
-  lockLegalDoc
+  lockLegalDoc,
+  projectOptions: providedProjectOptions,
+  availableLegalDocs
 }: DeadlineModalProps) {
   const { addDeadline, updateDeadline } = useDeadlines();
   const { projects } = useProjects();
@@ -84,7 +89,7 @@ export default function DeadlineModal({
     });
   }, [deadline, initialLegalDocId, initialProjectId, legalDocs, open]);
 
-  const projectOptions = useMemo(
+  const fallbackProjectOptions = useMemo(
     () =>
       projects
         .filter((project) => !project.archivedAt && !project.isArchived)
@@ -92,12 +97,26 @@ export default function DeadlineModal({
     [projects]
   );
 
+  const projectOptions = useMemo(() => {
+    const options = providedProjectOptions ?? fallbackProjectOptions;
+    const currentProjectId = deadline?.resolvedProjectId ?? deadline?.projectId ?? initialProjectId;
+    if (!currentProjectId || options.some((option) => option.value === currentProjectId)) {
+      return options;
+    }
+    const fallbackLabel =
+      deadline?.projectTitle ??
+      projects.find((project) => project.id === currentProjectId)?.title ??
+      currentProjectId;
+    return [...options, { value: currentProjectId, label: fallbackLabel }];
+  }, [deadline, fallbackProjectOptions, initialProjectId, projects, providedProjectOptions]);
+
   const legalDocOptions = useMemo(() => {
+    const sourceLegalDocs = availableLegalDocs ?? legalDocs;
     const scoped = form.projectId
-      ? legalDocs.filter((doc) => doc.projectId === form.projectId)
-      : legalDocs;
+      ? sourceLegalDocs.filter((doc) => doc.projectId === form.projectId)
+      : sourceLegalDocs;
     return scoped.map((doc) => ({ value: doc.id, label: doc.title }));
-  }, [form.projectId, legalDocs]);
+  }, [availableLegalDocs, form.projectId, legalDocs]);
 
   const authorityOptions = useMemo(
     () =>

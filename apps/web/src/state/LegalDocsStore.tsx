@@ -16,14 +16,23 @@ import {
   bulkDeleteLegalDocs,
   bulkReplaceLegalDocs,
   createLegalDoc as apiCreateLegalDoc,
+  listLegalDocProjectOptions,
   listLegalDocs,
   restoreLegalDoc as apiRestoreLegalDoc,
   updateLegalDoc as apiUpdateLegalDoc
 } from "../api/legalDocs";
+import type { DomainProjectOption } from "../data/projects";
 
 type LegalDocCreateInput = Omit<
   LegalDoc,
-  "id" | "createdAt" | "updatedAt" | "isArchived" | "archivedAt" | "attachments"
+  | "id"
+  | "createdAt"
+  | "updatedAt"
+  | "isArchived"
+  | "archivedAt"
+  | "attachments"
+  | "projectTitle"
+  | "currentUserCanWriteProject"
 > & {
   id?: string;
   attachments?: LegalDocAttachment[];
@@ -31,6 +40,7 @@ type LegalDocCreateInput = Omit<
 
 export type LegalDocsContextValue = {
   legalDocs: LegalDoc[];
+  writableProjectOptions: DomainProjectOption[];
   addLegalDoc: (input: LegalDocCreateInput) => Promise<LegalDoc | null>;
   updateLegalDoc: (id: string, input: Partial<LegalDoc>) => Promise<LegalDoc | null>;
   archiveLegalDoc: (id: string) => Promise<LegalDoc | null>;
@@ -129,6 +139,8 @@ function normalizeLegalDoc(value: Partial<LegalDoc>, index: number): LegalDoc | 
     attachments,
     aiExtraction: normalizeAiExtraction(value.aiExtraction),
     scopeOverride,
+    projectTitle: value.projectTitle ?? undefined,
+    currentUserCanWriteProject: Boolean(value.currentUserCanWriteProject),
     archivedAt: value.archivedAt ?? undefined,
     isArchived: Boolean(value.isArchived || value.archivedAt),
     createdAt,
@@ -157,7 +169,10 @@ function mergeLegalDoc(existing: LegalDoc, incoming: LegalDoc) {
     issuedAt: incoming.issuedAt ?? existing.issuedAt ?? "",
     attachments: incoming.attachments ?? existing.attachments,
     aiExtraction: incoming.aiExtraction ?? existing.aiExtraction,
-    scopeOverride: incoming.scopeOverride ?? existing.scopeOverride
+    scopeOverride: incoming.scopeOverride ?? existing.scopeOverride,
+    projectTitle: incoming.projectTitle ?? existing.projectTitle,
+    currentUserCanWriteProject:
+      incoming.currentUserCanWriteProject ?? existing.currentUserCanWriteProject
   };
 }
 
@@ -167,16 +182,23 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
   const { projects } = useProjects();
   const { getScopeLabel } = useScopes();
   const [legalDocs, setLegalDocs] = useState<LegalDoc[]>([]);
+  const [writableProjectOptions, setWritableProjectOptions] = useState<DomainProjectOption[]>([]);
 
   const reloadLegalDocs = useCallback(async () => {
     if (!authUser || authUser.type === "EXTERNAL") {
       setLegalDocs([]);
+      setWritableProjectOptions([]);
       clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
       return [];
     }
 
-    const next = normalizeLegalDocs(await listLegalDocs());
+    const [nextLegalDocs, nextProjectOptions] = await Promise.all([
+      listLegalDocs(),
+      listLegalDocProjectOptions()
+    ]);
+    const next = normalizeLegalDocs(nextLegalDocs);
     setLegalDocs(next);
+    setWritableProjectOptions(nextProjectOptions);
     clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
     return next;
   }, [authUser]);
@@ -184,12 +206,14 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!authUser || authUser.type === "EXTERNAL") {
       setLegalDocs([]);
+      setWritableProjectOptions([]);
       clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
       return;
     }
 
     void reloadLegalDocs().catch(() => {
       setLegalDocs([]);
+      setWritableProjectOptions([]);
       clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
     });
   }, [authUser, reloadLegalDocs]);
@@ -454,6 +478,7 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo(
     () => ({
       legalDocs,
+      writableProjectOptions,
       addLegalDoc,
       updateLegalDoc,
       archiveLegalDoc,
@@ -470,6 +495,7 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
     }),
     [
       legalDocs,
+      writableProjectOptions,
       addLegalDoc,
       updateLegalDoc,
       archiveLegalDoc,

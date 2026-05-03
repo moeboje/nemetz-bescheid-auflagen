@@ -56,6 +56,11 @@ export type ProjectAccessEntryDto = {
   };
 };
 
+export type DomainProjectOptionDto = {
+  id: string;
+  title: string;
+};
+
 const INTERNAL_PROJECT_ACCESS_ROLES = new Set<ProjectAccessRole>([
   "PROJECT_VIEWER",
   "PROJECT_EDITOR"
@@ -518,6 +523,62 @@ export async function requireProjectDomainWrite(input: {
   }
 
   return true;
+}
+
+export async function getProjectWriteAccessMap(
+  db: DbClient,
+  user: RouteUser,
+  projectIds: string[]
+) {
+  const uniqueProjectIds = Array.from(new Set(projectIds.filter(Boolean)));
+  const entries = await Promise.all(
+    uniqueProjectIds.map(async (projectId) => {
+      const facts = await getProjectAccessFacts(db, user, projectId);
+      return [projectId, facts.exists && facts.canWrite] as const;
+    })
+  );
+
+  return new Map(entries);
+}
+
+export async function listWritableProjectOptionsForDomain(input: {
+  db: DbClient;
+  user: RouteUser;
+  domain: ProjectDomain;
+  permission: PermissionKey;
+}) {
+  if (isExternalUser(input.user)) {
+    return [] satisfies DomainProjectOptionDto[];
+  }
+
+  if (!hasPermission(input.user.permissionKeys, input.permission)) {
+    return [] satisfies DomainProjectOptionDto[];
+  }
+
+  const projects = await input.db.project.findMany({
+    where: {
+      archivedAt: null,
+      isArchived: false
+    },
+    select: {
+      id: true,
+      title: true
+    },
+    orderBy: [{ title: "asc" }, { id: "asc" }]
+  });
+
+  const accessMap = await getProjectWriteAccessMap(
+    input.db,
+    input.user,
+    projects.map((project) => project.id)
+  );
+
+  return projects
+    .filter((project) => accessMap.get(project.id))
+    .map((project) => ({
+      id: project.id,
+      title: project.title
+    })) satisfies DomainProjectOptionDto[];
 }
 
 function parseObligationTaskInstanceId(taskInstanceId: string) {

@@ -9,10 +9,13 @@ import {
   applyNoStoreHeaders,
   requireAdminRoutePermissions,
   requireAuthenticatedRouteUser,
-  requireInternalRouteUser
+  requireInternalRouteUser,
+  type RouteUser
 } from "./routeAuth.js";
 import {
+  getProjectWriteAccessMap,
   getReadableProjectIdsForDomain,
+  listWritableProjectOptionsForDomain,
   requireProjectDomainRead,
   requireProjectDomainReadPermission,
   requireProjectDomainWrite
@@ -48,6 +51,8 @@ type LegalDocDto = {
   attachments: LegalDocAttachmentDto[];
   aiExtraction?: LegalDocAiExtractionDto;
   scopeOverride?: LegalDocScopeOverrideDto;
+  projectTitle?: string;
+  currentUserCanWriteProject?: boolean;
   archivedAt?: string;
   isArchived: boolean;
   createdAt: string;
@@ -309,6 +314,48 @@ async function listLegalDocsFromDb(db: DbClient, where?: Prisma.LegalDocumentWhe
   });
 
   return legalDocs.map((legalDoc) => toLegalDocDto(legalDoc));
+}
+
+async function enrichLegalDocDtosWithProjectAccess(
+  db: DbClient,
+  user: RouteUser,
+  legalDocs: LegalDocDto[]
+): Promise<LegalDocDto[]> {
+  if (legalDocs.length === 0) {
+    return legalDocs;
+  }
+
+  const projectIds = Array.from(new Set(legalDocs.map((legalDoc) => legalDoc.projectId)));
+  const [projects, writeAccessMap] = await Promise.all([
+    db.project.findMany({
+      where: {
+        id: {
+          in: projectIds
+        }
+      },
+      select: {
+        id: true,
+        title: true
+      }
+    }),
+    getProjectWriteAccessMap(db, user, projectIds)
+  ]);
+  const projectTitleById = new Map(projects.map((project) => [project.id, project.title] as const));
+
+  return legalDocs.map((legalDoc) => ({
+    ...legalDoc,
+    projectTitle: projectTitleById.get(legalDoc.projectId),
+    currentUserCanWriteProject: Boolean(writeAccessMap.get(legalDoc.projectId))
+  }));
+}
+
+async function toLegalDocDtoForUser(
+  db: DbClient,
+  user: RouteUser,
+  legalDoc: DbLegalDocument
+) {
+  const [dto] = await enrichLegalDocDtosWithProjectAccess(db, user, [toLegalDocDto(legalDoc)]);
+  return dto;
 }
 
 async function findLegalDocById(db: DbClient, id: string) {
@@ -670,10 +717,32 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
               projectId: {
                 in: readableProjectIds
               }
-            })
+          })
           : [];
 
-      res.json(legalDocs);
+      res.json(await enrichLegalDocDtosWithProjectAccess(prisma, user, legalDocs));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/legal-docs/project-options", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      applyNoStoreHeaders(res);
+
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
+      if (!user) {
+        return;
+      }
+
+      const projects = await listWritableProjectOptionsForDomain({
+        db: prisma,
+        user,
+        domain: "legalDocs",
+        permission: "legalDocs.create"
+      });
+
+      res.json(projects);
     } catch (error) {
       next(error);
     }
@@ -712,7 +781,7 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        legalDoc: toLegalDocDto(legalDoc)
+        legalDoc: await toLegalDocDtoForUser(prisma, user, legalDoc)
       });
     } catch (error) {
       next(error);
@@ -794,7 +863,7 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
 
       res.status(201).json({
         ok: true,
-        legalDoc: toLegalDocDto(legalDoc)
+        legalDoc: await toLegalDocDtoForUser(prisma, user, legalDoc)
       });
     } catch (error) {
       next(error);
@@ -909,7 +978,7 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        legalDoc: toLegalDocDto(updated)
+        legalDoc: await toLegalDocDtoForUser(prisma, user, updated)
       });
     } catch (error) {
       next(error);
@@ -958,7 +1027,7 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        legalDoc: toLegalDocDto(updated)
+        legalDoc: await toLegalDocDtoForUser(prisma, user, updated)
       });
     } catch (error) {
       next(error);
@@ -1007,7 +1076,7 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        legalDoc: toLegalDocDto(updated)
+        legalDoc: await toLegalDocDtoForUser(prisma, user, updated)
       });
     } catch (error) {
       next(error);

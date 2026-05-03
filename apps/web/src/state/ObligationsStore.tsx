@@ -22,7 +22,14 @@ import {
 
 type ObligationCreateInput = Omit<
   Obligation,
-  "id" | "createdAt" | "updatedAt" | "isArchived" | "archivedAt"
+  | "id"
+  | "createdAt"
+  | "updatedAt"
+  | "isArchived"
+  | "archivedAt"
+  | "projectId"
+  | "projectTitle"
+  | "currentUserCanWriteProject"
 > & {
   id?: string;
   projectId?: string;
@@ -118,6 +125,9 @@ function normalizeObligation(value: Partial<Obligation>, index: number): Obligat
   return {
     id: value.id || `ob-seed-${index}`,
     legalDocId: value.legalDocId,
+    projectId: value.projectId ?? undefined,
+    projectTitle: value.projectTitle ?? undefined,
+    currentUserCanWriteProject: Boolean(value.currentUserCanWriteProject),
     title: value.title,
     infoTextLong: value.infoTextLong ?? "",
     level: value.level ?? "MANDATORY",
@@ -168,7 +178,11 @@ function mergeObligation(existing: Obligation, incoming: Obligation) {
     ...existing,
     ...incoming,
     infoTextLong: incoming.infoTextLong ?? existing.infoTextLong ?? "",
-    evidenceRequirements: incoming.evidenceRequirements ?? existing.evidenceRequirements
+    evidenceRequirements: incoming.evidenceRequirements ?? existing.evidenceRequirements,
+    projectId: incoming.projectId ?? existing.projectId,
+    projectTitle: incoming.projectTitle ?? existing.projectTitle,
+    currentUserCanWriteProject:
+      incoming.currentUserCanWriteProject ?? existing.currentUserCanWriteProject
   };
 }
 

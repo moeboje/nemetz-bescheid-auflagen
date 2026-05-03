@@ -15,6 +15,7 @@ import {
   bulkReplaceDeadlines,
   completeDeadline as apiCompleteDeadline,
   createDeadline as apiCreateDeadline,
+  listDeadlineProjectOptions,
   listDeadlines,
   markDeadlineAttachmentUnavailable as apiMarkDeadlineAttachmentUnavailable,
   reopenDeadline as apiReopenDeadline,
@@ -29,6 +30,7 @@ import {
   type AttachmentMeta
 } from "../types/attachments";
 import type { Evidence, EvidenceOutcome } from "../types/evidence";
+import type { DomainProjectOption } from "../data/projects";
 
 type DeadlineStatusInput = DeadlineStoredStatus;
 
@@ -49,6 +51,9 @@ type DeadlineCreateInput = Omit<
   | "completedAt"
   | "completedByUserId"
   | "evidence"
+  | "resolvedProjectId"
+  | "projectTitle"
+  | "currentUserCanWriteProject"
 > & {
   id?: string;
   status?: DeadlineStatusInput;
@@ -56,6 +61,7 @@ type DeadlineCreateInput = Omit<
 
 export type DeadlinesContextValue = {
   deadlines: Deadline[];
+  writableProjectOptions: DomainProjectOption[];
   addDeadline: (
     input: DeadlineCreateInput
   ) => Promise<Deadline | null>;
@@ -198,6 +204,9 @@ function normalizeDeadline(value: Partial<Deadline>, index: number): Deadline | 
     dueDate: value.dueDate,
     status: normalizeStatus(value.status),
     projectId: value.projectId ?? undefined,
+    resolvedProjectId: value.resolvedProjectId ?? value.projectId ?? undefined,
+    projectTitle: value.projectTitle ?? undefined,
+    currentUserCanWriteProject: Boolean(value.currentUserCanWriteProject),
     legalDocId: value.legalDocId ?? undefined,
     authorityId: value.authorityId ?? undefined,
     ownerUserId: value.ownerUserId ?? undefined,
@@ -252,7 +261,11 @@ function mergeDeadline(existing: Deadline, incoming: Deadline) {
     ...existing,
     ...incoming,
     description: incoming.description ?? existing.description ?? "",
-    evidence: incoming.evidence ?? existing.evidence ?? []
+    evidence: incoming.evidence ?? existing.evidence ?? [],
+    resolvedProjectId: incoming.resolvedProjectId ?? existing.resolvedProjectId,
+    projectTitle: incoming.projectTitle ?? existing.projectTitle,
+    currentUserCanWriteProject:
+      incoming.currentUserCanWriteProject ?? existing.currentUserCanWriteProject
   };
 }
 
@@ -261,16 +274,23 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
   const { logEvent } = useAuditLog();
   const { currentUser, getUserLabel } = useUsers();
   const [deadlines, setDeadlines] = useState<Deadline[]>([]);
+  const [writableProjectOptions, setWritableProjectOptions] = useState<DomainProjectOption[]>([]);
 
   const reloadDeadlines = useCallback(async () => {
     if (!authUser || authUser.type === "EXTERNAL") {
       setDeadlines([]);
+      setWritableProjectOptions([]);
       clearPersistedValue(DEADLINES_STORAGE_KEY);
       return [];
     }
 
-    const next = normalizeDeadlines(await listDeadlines());
+    const [nextDeadlines, nextProjectOptions] = await Promise.all([
+      listDeadlines(),
+      listDeadlineProjectOptions()
+    ]);
+    const next = normalizeDeadlines(nextDeadlines);
     setDeadlines(next);
+    setWritableProjectOptions(nextProjectOptions);
     clearPersistedValue(DEADLINES_STORAGE_KEY);
     return next;
   }, [authUser]);
@@ -278,12 +298,14 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!authUser || authUser.type === "EXTERNAL") {
       setDeadlines([]);
+      setWritableProjectOptions([]);
       clearPersistedValue(DEADLINES_STORAGE_KEY);
       return;
     }
 
     void reloadDeadlines().catch(() => {
       setDeadlines([]);
+      setWritableProjectOptions([]);
       clearPersistedValue(DEADLINES_STORAGE_KEY);
     });
   }, [authUser, reloadDeadlines]);
@@ -614,7 +636,8 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
   );
 
   const getDeadlinesForProject = useCallback(
-    (projectId: string) => deadlines.filter((deadline) => deadline.projectId === projectId),
+    (projectId: string) =>
+      deadlines.filter((deadline) => (deadline.resolvedProjectId ?? deadline.projectId) === projectId),
     [deadlines]
   );
 
@@ -642,6 +665,7 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo(
     () => ({
       deadlines,
+      writableProjectOptions,
       addDeadline,
       updateDeadline,
       setDeadlineStatus,
@@ -662,6 +686,7 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
       addDeadline,
       archiveDeadline,
       deadlines,
+      writableProjectOptions,
       getDeadlineStatus,
       getDeadlinesForLegalDoc,
       getDeadlinesForProject,

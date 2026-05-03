@@ -80,8 +80,11 @@ export default function ObligationDetailPage() {
     [id, obligations]
   );
   const legalDoc = legalDocs.find((doc) => doc.id === obligation?.legalDocId);
-  const project = projects.find((item) => item.id === legalDoc?.projectId);
-  const canWriteProject = Boolean(project?.currentUserCanWrite);
+  const projectId = obligation?.projectId ?? legalDoc?.projectId;
+  const project = projects.find((item) => item.id === projectId);
+  const canWriteProject = Boolean(
+    obligation?.currentUserCanWriteProject ?? legalDoc?.currentUserCanWriteProject
+  );
   const canEditObligation = permissions.canEditObligations && canWriteProject;
   const canDeleteObligation = permissions.canDeleteObligations && canWriteProject;
 
@@ -240,7 +243,7 @@ export default function ObligationDetailPage() {
           </div>
           <div>
             <div className="metaLabel">{t("obligations.detail.project")}</div>
-            <div className="metaValue">{project?.title ?? t("common.notAvailable")}</div>
+            <div className="metaValue">{obligation.projectTitle ?? legalDoc?.projectTitle ?? project?.title ?? t("common.notAvailable")}</div>
           </div>
           <div>
             <div className="metaLabel">{t("obligations.detail.scope")}</div>

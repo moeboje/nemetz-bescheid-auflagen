@@ -76,8 +76,9 @@ export default function LegalDocPage() {
 
   const legalDoc = useMemo(() => legalDocs.find((doc) => doc.id === id), [id, legalDocs]);
   const docProject = projects.find((project) => project.id === legalDoc?.projectId);
-  const canWriteInProject = Boolean(docProject?.currentUserCanWrite);
+  const canWriteInProject = Boolean(legalDoc?.currentUserCanWriteProject);
   const canEditLegalDoc = canWriteInProject && permissions.canEditLegalDocs;
+  const canArchiveLegalDoc = canWriteInProject && permissions.canArchiveLegalDocs;
   const canEditObligationsInProject = canWriteInProject && permissions.canEditObligations;
   const canEditDeadlinesInProject = canWriteInProject && permissions.canEditDeadlines;
   const referencingProjects = useMemo(
@@ -261,19 +262,19 @@ export default function LegalDocPage() {
         </div>
         <div className="inlineMeta">
           {!legalDoc.isArchived ? (
-            <Button
-              variant="secondary"
-              disabled={!canEditLegalDoc}
-              onClick={() => setArchiveModalOpen(true)}
-            >
+              <Button
+                variant="secondary"
+                disabled={!canArchiveLegalDoc}
+                onClick={() => setArchiveModalOpen(true)}
+              >
               {t("common.archive")}
             </Button>
           ) : (
-            <Button
-              variant="secondary"
-              disabled={!canEditLegalDoc}
-              onClick={() => void restoreLegalDoc(legalDoc.id)}
-            >
+              <Button
+                variant="secondary"
+                disabled={!canArchiveLegalDoc}
+                onClick={() => void restoreLegalDoc(legalDoc.id)}
+              >
               {t("common.restore")}
             </Button>
           )}
@@ -347,7 +348,7 @@ export default function LegalDocPage() {
             <div className="detailGrid">
               <div>
                 <div className="metaLabel">{t("legalDoc.section.project")}</div>
-                <div className="metaValue">{docProject?.title ?? t("common.notAvailable")}</div>
+                <div className="metaValue">{legalDoc.projectTitle ?? docProject?.title ?? t("common.notAvailable")}</div>
               </div>
               <div>
                 <div className="metaLabel">{t("legalDoc.section.ref")}</div>

@@ -1,5 +1,6 @@
 import { apiRequest } from "./client";
 import type { Deadline } from "../data/deadlines";
+import type { DomainProjectOption } from "../data/projects";
 import type { AttachmentMeta } from "../types/attachments";
 import type { EvidenceOutcome } from "../types/evidence";
 
@@ -25,6 +26,10 @@ type DeadlineInput = {
 
 export async function listDeadlines() {
   return apiRequest<Deadline[]>("/deadlines");
+}
+
+export async function listDeadlineProjectOptions() {
+  return apiRequest<DomainProjectOption[]>("/deadlines/project-options");
 }
 
 export async function getDeadline(id: string) {

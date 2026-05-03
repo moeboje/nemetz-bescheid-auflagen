@@ -101,6 +101,16 @@
 - Nicht-Ziele:
 - keine Azure-, Notification-/PowerAutomate-, MigrationBootstrap-, Import-/Export-/Recovery-Aenderungen, keine neuen Dependencies, keine UI-Neugestaltung.
 
+## 2ah. Gezielter UI-/RBAC-Fixlauf 2026-05-03 fuer Domain-Write und Altbescheide
+- Dies ist keine neue Feature-Phase, keine Azure-Arbeit und keine Rollenarchitektur.
+- Ziel dieses Laufs ist ausschliesslich die Behebung der P2-Review-Findings zu Domain-Write-Gating, Altbescheid-Tab-Sichtbarkeit und Altbescheid-Archive-/Restore-Permissions.
+- Domain-Seiten duerfen Schreibaktionen nicht aus dem globalen `ProjectsStore` ableiten, weil scoped Domain-Listen auch ohne `projects.view` serverseitig korrekt gefuellt sein koennen.
+- API-DTOs duerfen minimal berechnete Projekt-Titel und ProjectWrite-Flags liefern; Create-Selectoren duerfen nur domain-scoped writable Projektoptionen erhalten, keine breite Projektliste.
+- Altbescheide werden im Projektdetail nur geladen und angezeigt, wenn das API-konforme LegalDoc-/Legacy-Read-Recht vorhanden ist.
+- Archive-/Restore-Aktionen fuer Altbescheide verwenden `legalDocs.archive`; `legalDocs.edit` reicht dafuer nicht.
+- Nicht-Ziele:
+- keine Prisma-Schema-/Migration-Aenderungen, keine Azure-, Notification-/PowerAutomate-, Import-/Export-/Recovery-Aenderungen, keine neuen Dependencies, keine UI-Neugestaltung.
+
 ## 2a. Verifizierter Stand 2026-04-15
 - Phase 1 ist im aktuellen Code bereits serverseitig umgesetzt:
 - `apps/api/src/routes/scopes.ts`

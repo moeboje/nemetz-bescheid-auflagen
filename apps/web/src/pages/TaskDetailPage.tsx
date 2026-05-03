@@ -3,7 +3,6 @@ import { useParams } from "react-router-dom";
 import { Badge, Breadcrumbs, Button, Card, Modal, StatusDot } from "@nemetz/ui";
 import { t } from "../i18n";
 import { useTasks } from "../state/TasksStore";
-import { useProjects } from "../state/ProjectsStore";
 import EvidenceListModal from "../components/EvidenceListModal";
 import { useAuthorization } from "../state/AuthorizationStore";
 import TaskCompleteModal from "../components/TaskCompleteModal";
@@ -23,16 +22,13 @@ const levelVariant = {
 export default function TaskDetailPage() {
   const { id } = useParams();
   const { tasks, setTaskStatus, markTaskDoneWithEvidence } = useTasks();
-  const { projects } = useProjects();
   const { permissions } = useAuthorization();
   const [modalOpen, setModalOpen] = useState(false);
   const [completionModalOpen, setCompletionModalOpen] = useState(false);
   const [evidenceModalOpen, setEvidenceModalOpen] = useState(false);
 
   const task = useMemo(() => tasks.find((t) => t.id === id), [id, tasks]);
-  const canWriteTaskProject = Boolean(
-    projects.find((project) => project.id === task?.projectId)?.currentUserCanWrite
-  );
+  const canWriteTaskProject = Boolean(task?.projectCanWrite);
   const canEditTaskStatus = permissions.canEditTasks && canWriteTaskProject;
   const canCompleteTask = permissions.canCompleteTasks && canWriteTaskProject;
 

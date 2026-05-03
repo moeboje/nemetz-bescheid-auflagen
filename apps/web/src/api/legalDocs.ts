@@ -1,5 +1,6 @@
 import { apiRequest } from "./client";
 import type { LegalDoc } from "../data/legalDocs";
+import type { DomainProjectOption } from "../data/projects";
 
 type LegalDocInput = {
   id?: string;
@@ -20,6 +21,10 @@ type LegalDocInput = {
 
 export async function listLegalDocs() {
   return apiRequest<LegalDoc[]>("/legal-docs");
+}
+
+export async function listLegalDocProjectOptions() {
+  return apiRequest<DomainProjectOption[]>("/legal-docs/project-options");
 }
 
 export async function getLegalDoc(id: string) {

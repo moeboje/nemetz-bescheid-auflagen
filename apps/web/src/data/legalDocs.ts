@@ -24,6 +24,8 @@ export type LegalDoc = {
     siteId?: string;
     facilityId?: string;
   };
+  projectTitle?: string;
+  currentUserCanWriteProject?: boolean;
   archivedAt?: string;
   isArchived: boolean;
   createdAt: string;

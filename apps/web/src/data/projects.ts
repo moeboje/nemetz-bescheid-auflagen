@@ -84,6 +84,11 @@ export type ProjectAccessSource =
   | "IMPLICIT_PARTICIPANT"
   | "EXPLICIT";
 
+export type DomainProjectOption = {
+  id: string;
+  title: string;
+};
+
 export type ProjectAccessEntry = {
   id?: string;
   projectId: string;

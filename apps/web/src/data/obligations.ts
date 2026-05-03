@@ -17,6 +17,9 @@ export function cloneDefaultObligationEvidenceRequirements(): ObligationEvidence
 export type Obligation = {
   id: string;
   legalDocId: string;
+  projectId?: string;
+  projectTitle?: string;
+  currentUserCanWriteProject?: boolean;
   title: string;
   infoTextLong?: string;
   level: "MANDATORY" | "RECOMMENDED";

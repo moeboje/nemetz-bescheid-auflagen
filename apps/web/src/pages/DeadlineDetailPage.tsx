@@ -58,9 +58,11 @@ export default function DeadlineDetailPage() {
   const status = deadline ? getDeadlineStatus(deadline) : "OPEN";
   const legalDoc = legalDocs.find((doc) => doc.id === deadline?.legalDocId);
   const project = projects.find(
-    (item) => item.id === (deadline?.projectId ?? legalDoc?.projectId)
+    (item) => item.id === (deadline?.resolvedProjectId ?? deadline?.projectId ?? legalDoc?.projectId)
   );
-  const canWriteProject = Boolean(project?.currentUserCanWrite);
+  const canWriteProject = Boolean(
+    deadline?.currentUserCanWriteProject ?? legalDoc?.currentUserCanWriteProject
+  );
   const canCompleteDeadline = permissions.canCompleteTasks && canWriteProject;
   const canEditDeadlineStatus = permissions.canEditTasks && canWriteProject;
   const canEditDeadline = permissions.canEditDeadlines && canWriteProject;
@@ -183,7 +185,7 @@ export default function DeadlineDetailPage() {
         <div className="detailGrid">
           <div>
             <div className="metaLabel">{t("deadlines.form.project")}</div>
-            <div className="metaValue">{project?.title || t("common.notAvailable")}</div>
+            <div className="metaValue">{deadline.projectTitle || legalDoc?.projectTitle || project?.title || t("common.notAvailable")}</div>
           </div>
           <div>
             <div className="metaLabel">{t("deadlines.form.legalDoc")}</div>

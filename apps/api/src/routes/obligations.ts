@@ -11,9 +11,11 @@ import {
   applyNoStoreHeaders,
   requireAdminRoutePermissions,
   requireAuthenticatedRouteUser,
-  requireInternalRouteUser
+  requireInternalRouteUser,
+  type RouteUser
 } from "./routeAuth.js";
 import {
+  getProjectWriteAccessMap,
   getReadableProjectIdsForDomain,
   requireProjectDomainRead,
   requireProjectDomainReadPermission,
@@ -52,6 +54,9 @@ type ObligationDto = {
   isArchived: boolean;
   createdAt: string;
   updatedAt: string;
+  projectId?: string;
+  projectTitle?: string;
+  currentUserCanWriteProject?: boolean;
 };
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
@@ -475,6 +480,64 @@ async function listObligationsFromDb(db: DbClient, where?: Prisma.ObligationWher
   });
 
   return obligations.map((obligation) => toObligationDto(obligation));
+}
+
+async function enrichObligationDtosWithProjectAccess(
+  db: DbClient,
+  user: RouteUser,
+  obligations: ObligationDto[]
+): Promise<ObligationDto[]> {
+  if (obligations.length === 0) {
+    return obligations;
+  }
+
+  const legalDocIds = Array.from(new Set(obligations.map((obligation) => obligation.legalDocId)));
+  const legalDocs = await db.legalDocument.findMany({
+    where: {
+      id: {
+        in: legalDocIds
+      }
+    },
+    select: {
+      id: true,
+      projectId: true,
+      project: {
+        select: {
+          title: true
+        }
+      }
+    }
+  });
+  const projectByLegalDocId = new Map(
+    legalDocs.map((legalDoc) => [
+      legalDoc.id,
+      {
+        projectId: legalDoc.projectId,
+        projectTitle: legalDoc.project.title
+      }
+    ] as const)
+  );
+  const projectIds = Array.from(new Set(legalDocs.map((legalDoc) => legalDoc.projectId)));
+  const writeAccessMap = await getProjectWriteAccessMap(db, user, projectIds);
+
+  return obligations.map((obligation) => {
+    const project = projectByLegalDocId.get(obligation.legalDocId);
+    return {
+      ...obligation,
+      projectId: project?.projectId,
+      projectTitle: project?.projectTitle,
+      currentUserCanWriteProject: project ? Boolean(writeAccessMap.get(project.projectId)) : false
+    };
+  });
+}
+
+async function toObligationDtoForUser(
+  db: DbClient,
+  user: RouteUser,
+  obligation: DbObligation
+) {
+  const [dto] = await enrichObligationDtosWithProjectAccess(db, user, [toObligationDto(obligation)]);
+  return dto;
 }
 
 async function findObligationById(db: DbClient, id: string) {
@@ -955,10 +1018,10 @@ export function createObligationsRouter(
                   in: readableProjectIds
                 }
               }
-            })
+          })
           : [];
 
-      res.json(obligations);
+      res.json(await enrichObligationDtosWithProjectAccess(prisma, user, obligations));
     } catch (error) {
       next(error);
     }
@@ -1002,7 +1065,7 @@ export function createObligationsRouter(
 
       res.json({
         ok: true,
-        obligation: toObligationDto(obligation)
+        obligation: await toObligationDtoForUser(prisma, user, obligation)
       });
     } catch (error) {
       next(error);
@@ -1104,7 +1167,7 @@ export function createObligationsRouter(
 
       res.status(201).json({
         ok: true,
-        obligation: toObligationDto(obligation)
+        obligation: await toObligationDtoForUser(prisma, user, obligation)
       });
     } catch (error) {
       next(error);
@@ -1267,7 +1330,7 @@ export function createObligationsRouter(
 
       res.json({
         ok: true,
-        obligation: toObligationDto(updated)
+        obligation: await toObligationDtoForUser(prisma, user, updated)
       });
     } catch (error) {
       next(error);
@@ -1326,7 +1389,7 @@ export function createObligationsRouter(
 
       res.json({
         ok: true,
-        obligation: toObligationDto(updated)
+        obligation: await toObligationDtoForUser(prisma, user, updated)
       });
     } catch (error) {
       next(error);
@@ -1388,7 +1451,7 @@ export function createObligationsRouter(
 
       res.json({
         ok: true,
-        obligation: toObligationDto(updated)
+        obligation: await toObligationDtoForUser(prisma, user, updated)
       });
     } catch (error) {
       next(error);

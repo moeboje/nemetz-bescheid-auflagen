@@ -148,8 +148,7 @@ export default function TasksPage() {
     () => new Map(projects.map((project) => [project.id, project.title] as const)),
     [projects]
   );
-  const canWriteTaskProject = (task: (typeof tasks)[number]) =>
-    Boolean(projects.find((project) => project.id === task.projectId)?.currentUserCanWrite);
+  const canWriteTaskProject = (task: (typeof tasks)[number]) => Boolean(task.projectCanWrite);
 
   const completionTask = useMemo(
     () => tasks.find((task) => task.id === completionTaskId),
