@@ -4,6 +4,7 @@ export const PERMISSION_KEYS = [
   "masterData.view",
   "masterData.manage",
   "projects.view",
+  "projects.viewAll",
   "projects.create",
   "projects.edit",
   "projects.archive",
@@ -112,6 +113,7 @@ const editorPermissions: PermissionKey[] = [
 
 const managerPermissions: PermissionKey[] = [
   ...editorPermissions,
+  "projects.viewAll",
   "projects.archive",
   "legalDocs.archive",
   "obligations.archive",
@@ -132,6 +134,10 @@ const documentOwnerPermissions = {
   PROJECT: {
     read: "projects.view",
     write: "projects.edit"
+  },
+  LEGACY_DECISION: {
+    read: "legalDocs.view",
+    write: "legalDocs.edit"
   },
   LEGAL_DOC: {
     read: "legalDocs.view",
@@ -310,6 +316,10 @@ export function hasPermission(permissionKeys: Iterable<string>, key: PermissionK
     return true;
   }
 
+  if (key === "projects.view" && normalized.has("projects.viewAll")) {
+    return true;
+  }
+
   if (key === "authorities.view" && normalized.has("authorities.manage")) {
     return true;
   }
@@ -333,6 +343,10 @@ export function normalizeRolePermissionKeys(permissionKeys: PermissionKey[]) {
 
   if (normalized.has("masterData.manage")) {
     normalized.add("masterData.view");
+  }
+
+  if (normalized.has("projects.viewAll")) {
+    normalized.add("projects.view");
   }
 
   if (normalized.has("authorities.manage")) {
@@ -388,7 +402,9 @@ export function describePermission(permissionKey: PermissionKey) {
     case "masterData.manage":
       return "Stammdaten bearbeiten";
     case "projects.view":
-      return "Projekte ansehen";
+      return "Zugewiesene Projekte ansehen";
+    case "projects.viewAll":
+      return "Alle Projekte ansehen";
     case "projects.create":
       return "Projekte anlegen";
     case "projects.edit":
@@ -557,6 +573,16 @@ export function mapRequestToPermission(input: { method: string; path: string }) 
   }
 
   if (path.startsWith("/legal-docs")) {
+    if (isRead) {
+      return "legalDocs.view" as PermissionKey;
+    }
+    if (isArchiveAction) {
+      return "legalDocs.archive" as PermissionKey;
+    }
+    return method === "POST" ? ("legalDocs.create" as PermissionKey) : ("legalDocs.edit" as PermissionKey);
+  }
+
+  if (path.startsWith("/legacy-decisions")) {
     if (isRead) {
       return "legalDocs.view" as PermissionKey;
     }

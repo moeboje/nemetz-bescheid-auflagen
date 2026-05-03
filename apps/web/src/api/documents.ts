@@ -1,6 +1,12 @@
 import { ApiError, apiRequest, resolveApiUrl } from "./client";
 
-export type DocumentOwnerType = "PROJECT" | "LEGAL_DOC" | "OBLIGATION" | "DEADLINE" | "TASK_EVIDENCE";
+export type DocumentOwnerType =
+  | "PROJECT"
+  | "LEGAL_DOC"
+  | "OBLIGATION"
+  | "DEADLINE"
+  | "TASK_EVIDENCE"
+  | "LEGACY_DECISION";
 
 export type DocumentDto = {
   id: string;

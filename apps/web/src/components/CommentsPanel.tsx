@@ -18,6 +18,7 @@ type CommentsPanelProps = {
   entityType: CommentEntityType;
   entityId: string;
   titleKey?: I18nKey;
+  canWrite?: boolean;
 };
 
 type BrowserWindow = Window & {
@@ -72,7 +73,8 @@ function formatTimestamp(value: string) {
 export default function CommentsPanel({
   entityType,
   entityId,
-  titleKey = "comments.title"
+  titleKey = "comments.title",
+  canWrite = true
 }: CommentsPanelProps) {
   const { user } = useAuth();
   const isAdmin = Array.isArray(user?.effectivePermissions) && user.effectivePermissions.includes("admin.access");
@@ -144,7 +146,7 @@ export default function CommentsPanel({
 
   const handleSave = async () => {
     const body = draftBody.trim();
-    if (!body || saving || !entityId) {
+    if (!canWrite || !body || saving || !entityId) {
       return;
     }
 
@@ -167,6 +169,9 @@ export default function CommentsPanel({
   };
 
   const handleStartEdit = (item: CommentItem) => {
+    if (!canWrite) {
+      return;
+    }
     setActionError("");
     setEditingCommentId(item.id);
     setEditingBody(item.body);
@@ -180,7 +185,7 @@ export default function CommentsPanel({
   const handleSaveEdit = async () => {
     const commentId = editingCommentId;
     const body = editingBody.trim();
-    if (!commentId || !body || savingEdit) {
+    if (!canWrite || !commentId || !body || savingEdit) {
       return;
     }
 
@@ -199,7 +204,7 @@ export default function CommentsPanel({
   };
 
   const handleConfirmDelete = async () => {
-    if (!deleteTarget || deleting) {
+    if (!canWrite || !deleteTarget || deleting) {
       return;
     }
 
@@ -289,34 +294,36 @@ export default function CommentsPanel({
     <div className="commentsPanel">
       <h2 className="sectionTitle">{t(titleKey)}</h2>
 
-      <div className="formField">
-        <textarea
-          className="textarea"
-          rows={4}
-          value={draftBody}
-          placeholder={t("comments.add.placeholder")}
-          disabled={loading || saving}
-          onChange={(event) => setDraftBody(event.target.value)}
-        />
-        <div className="commentsComposerActions">
-          <div className="inlineMeta">
-            <Button
-              size="sm"
-              variant="secondary"
-              disabled={loading || saving || !voiceSupported}
-              onClick={handleVoiceInput}
-            >
-              {isListening ? t("comments.voice.listening") : t("comments.voice.start")}
+      {canWrite ? (
+        <div className="formField">
+          <textarea
+            className="textarea"
+            rows={4}
+            value={draftBody}
+            placeholder={t("comments.add.placeholder")}
+            disabled={loading || saving}
+            onChange={(event) => setDraftBody(event.target.value)}
+          />
+          <div className="commentsComposerActions">
+            <div className="inlineMeta">
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={loading || saving || !voiceSupported}
+                onClick={handleVoiceInput}
+              >
+                {isListening ? t("comments.voice.listening") : t("comments.voice.start")}
+              </Button>
+              {!voiceSupported ? (
+                <span className="placeholderText">{t("comments.voice.notSupported")}</span>
+              ) : null}
+            </div>
+            <Button onClick={() => void handleSave()} disabled={loading || saving || !draftBody.trim()}>
+              {saving ? t("comments.add.saving") : t("comments.add.save")}
             </Button>
-            {!voiceSupported ? (
-              <span className="placeholderText">{t("comments.voice.notSupported")}</span>
-            ) : null}
           </div>
-          <Button onClick={() => void handleSave()} disabled={loading || saving || !draftBody.trim()}>
-            {saving ? t("comments.add.saving") : t("comments.add.save")}
-          </Button>
         </div>
-      </div>
+      ) : null}
 
       {loadError ? <p className="validationText">{loadError}</p> : null}
       {actionError ? <p className="validationText">{actionError}</p> : null}
@@ -330,7 +337,7 @@ export default function CommentsPanel({
           {items.map((item) => {
             const authorName = `${item.author.firstName} ${item.author.lastName}`.trim() || t("users.unknown");
             const roleAndType = `${getRoleLabel(item.author.role)} / ${getTypeLabel(item.author.type)}`;
-            const canManage = Boolean(user && (isAdmin || item.author.id === user.id));
+            const canManage = Boolean(canWrite && user && (isAdmin || item.author.id === user.id));
             const isEditing = editingCommentId === item.id;
 
             return (

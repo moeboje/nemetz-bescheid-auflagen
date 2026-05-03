@@ -88,7 +88,10 @@ export function AuthorizationProvider({ children }: { children: React.ReactNode 
       actor: {
         userId: currentUser?.id,
         isAdmin: hasAdminAccess,
-        isExternal
+        isExternal,
+        canCreateProject: !isExternal && hasPermission("projects.create"),
+        canEditProject: !isExternal && hasPermission("projects.edit"),
+        canArchiveProject: !isExternal && hasPermission("projects.archive")
       },
       permissions: {
         canViewAdmin:
@@ -123,7 +126,7 @@ export function AuthorizationProvider({ children }: { children: React.ReactNode 
         canEditDeadlines: hasPermission("deadlines.edit"),
         canCompleteTasks,
         canEditTasks,
-        canViewProjects: hasPermission("projects.view"),
+        canViewProjects: hasPermission("projects.view") || isExternal,
         canViewLegalDocs: hasPermission("legalDocs.view"),
         canViewObligations: hasPermission("obligations.view"),
         canViewDeadlines: hasPermission("deadlines.view"),

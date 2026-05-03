@@ -80,19 +80,56 @@ async function login(email: string, password: string) {
   return cookie;
 }
 
+async function seedProject(accessUserId?: string) {
+  const company = await prisma.company.create({
+    data: {
+      name: `Deadline Company ${randomUUID()}`
+    }
+  });
+  const project = await prisma.project.create({
+    data: {
+      id: `deadline-project-${randomUUID()}`,
+      title: "Deadline Project",
+      companyId: company.id,
+      participantUserIds: [],
+      internalParticipants: [],
+      externalParticipants: [],
+      attachments: [],
+      dependsOnProjectIds: [],
+      referenceLegalDocIds: []
+    }
+  });
+
+  if (accessUserId) {
+    await prisma.projectAccess.create({
+      data: {
+        projectId: project.id,
+        userId: accessUserId,
+        accessRole: "PROJECT_EDITOR"
+      }
+    });
+  }
+
+  return project;
+}
+
 async function seedDeadline(args: {
   id?: string;
   status?: "OPEN" | "DONE";
   emailReminderEnabled?: boolean;
   emailReminderDaysBefore?: number | null;
+  accessUserId?: string;
+  projectId?: string;
 } = {}) {
   const status = args.status ?? "OPEN";
+  const project = args.projectId ? null : args.accessUserId ? await seedProject(args.accessUserId) : null;
   return prisma.deadline.create({
     data: {
       id: args.id ?? `deadline-${randomUUID()}`,
       title: "Deadline permission test",
       dueDate: "2026-05-01",
       status,
+      projectId: args.projectId ?? project?.id,
       emailReminderEnabled: args.emailReminderEnabled ?? false,
       emailReminderDaysBefore: args.emailReminderDaysBefore ?? null,
       completedAt: status === "DONE" ? new Date("2026-04-29T10:00:00.000Z") : null,
@@ -173,6 +210,74 @@ describe("Deadlines API", () => {
     await prisma.role.deleteMany();
   });
 
+  it("requires deadlines.view in addition to project access for reads", async () => {
+    await createRole("DEADLINE_PROJECT_ONLY", ["projects.view"]);
+    await createRole("DEADLINE_READER_ONLY", ["deadlines.view"]);
+
+    const projectOnlyUser = await createUser(
+      "deadline-project-only@example.com",
+      "ValidPassword1!",
+      "DEADLINE_PROJECT_ONLY"
+    );
+    const deadlineReader = await createUser(
+      "deadline-reader-only@example.com",
+      "ValidPassword1!",
+      "DEADLINE_READER_ONLY"
+    );
+    const domainNoAccessUser = await createUser(
+      "deadline-reader-no-access@example.com",
+      "ValidPassword1!",
+      "DEADLINE_READER_ONLY"
+    );
+    const firstProject = await seedProject();
+    const secondProject = await seedProject();
+    const firstDeadline = await seedDeadline({
+      id: "deadline-domain-first",
+      projectId: firstProject.id
+    });
+    const secondDeadline = await seedDeadline({
+      id: "deadline-domain-second",
+      projectId: secondProject.id
+    });
+    await prisma.projectAccess.createMany({
+      data: [
+        {
+          projectId: firstProject.id,
+          userId: projectOnlyUser.id,
+          accessRole: "PROJECT_VIEWER"
+        },
+        {
+          projectId: firstProject.id,
+          userId: deadlineReader.id,
+          accessRole: "PROJECT_VIEWER"
+        }
+      ]
+    });
+
+    const projectOnlyCookie = await login(projectOnlyUser.email, "ValidPassword1!");
+    const deadlineReaderCookie = await login(deadlineReader.email, "ValidPassword1!");
+    const domainNoAccessCookie = await login(domainNoAccessUser.email, "ValidPassword1!");
+
+    const projectOnlyList = await request("/deadlines", { cookie: projectOnlyCookie });
+    assert.equal(projectOnlyList.status, 200);
+    assert.deepEqual(await projectOnlyList.json(), []);
+    const projectOnlyDetail = await request(`/deadlines/${firstDeadline.id}`, { cookie: projectOnlyCookie });
+    assert.equal(projectOnlyDetail.status, 403);
+    const projectOnlyMissingDetail = await request("/deadlines/does-not-exist", { cookie: projectOnlyCookie });
+    assert.equal(projectOnlyMissingDetail.status, 403);
+
+    const scopedList = await request("/deadlines", { cookie: deadlineReaderCookie });
+    assert.equal(scopedList.status, 200);
+    const scopedPayload = (await scopedList.json()) as Array<{ id: string }>;
+    assert.deepEqual(scopedPayload.map((entry) => entry.id), [firstDeadline.id]);
+    const hiddenDetail = await request(`/deadlines/${secondDeadline.id}`, { cookie: deadlineReaderCookie });
+    assert.equal(hiddenDetail.status, 403);
+
+    const domainNoAccessList = await request("/deadlines", { cookie: domainNoAccessCookie });
+    assert.equal(domainNoAccessList.status, 200);
+    assert.deepEqual(await domainNoAccessList.json(), []);
+  });
+
   it("rejects deadline completion for deadlines.create without tasks.complete", async () => {
     await createRole("DEADLINE_CREATE_ONLY", ["deadlines.view", "deadlines.create"]);
     const user = await createUser(
@@ -180,7 +285,7 @@ describe("Deadlines API", () => {
       "ValidPassword1!",
       "DEADLINE_CREATE_ONLY"
     );
-    const deadline = await seedDeadline();
+    const deadline = await seedDeadline({ accessUserId: user.id });
     const cookie = await login(user.email, "ValidPassword1!");
 
     const completeResponse = await request(`/deadlines/${deadline.id}/complete`, {
@@ -213,8 +318,8 @@ describe("Deadlines API", () => {
       "ValidPassword1!",
       "DEADLINE_TASK_COMPLETE"
     );
-    const completeDeadline = await seedDeadline();
-    const statusDeadline = await seedDeadline();
+    const completeDeadline = await seedDeadline({ accessUserId: user.id });
+    const statusDeadline = await seedDeadline({ accessUserId: user.id });
     const cookie = await login(user.email, "ValidPassword1!");
 
     const completeResponse = await request(`/deadlines/${completeDeadline.id}/complete`, {
@@ -243,8 +348,8 @@ describe("Deadlines API", () => {
   it("uses tasks.edit for deadline reopen and non-DONE status changes", async () => {
     await createRole("DEADLINE_TASK_EDIT", ["deadlines.view", "tasks.edit"]);
     const user = await createUser("deadline-task-edit@example.com", "ValidPassword1!", "DEADLINE_TASK_EDIT");
-    const reopenDeadline = await seedDeadline({ status: "DONE" });
-    const statusDeadline = await seedDeadline({ status: "DONE" });
+    const reopenDeadline = await seedDeadline({ status: "DONE", accessUserId: user.id });
+    const statusDeadline = await seedDeadline({ status: "DONE", accessUserId: user.id });
     const cookie = await login(user.email, "ValidPassword1!");
 
     const reopenResponse = await request(`/deadlines/${reopenDeadline.id}/reopen`, {
@@ -274,8 +379,8 @@ describe("Deadlines API", () => {
       "ValidPassword1!",
       "DEADLINE_TASK_COMPLETE_ONLY"
     );
-    const reopenDeadline = await seedDeadline({ status: "DONE" });
-    const statusDeadline = await seedDeadline({ status: "DONE" });
+    const reopenDeadline = await seedDeadline({ status: "DONE", accessUserId: user.id });
+    const statusDeadline = await seedDeadline({ status: "DONE", accessUserId: user.id });
     const cookie = await login(user.email, "ValidPassword1!");
 
     const reopenResponse = await request(`/deadlines/${reopenDeadline.id}/reopen`, {
@@ -304,7 +409,7 @@ describe("Deadlines API", () => {
       "ValidPassword1!",
       "DEADLINE_PATCH_EDIT_ONLY"
     );
-    const deadline = await seedDeadline();
+    const deadline = await seedDeadline({ accessUserId: user.id });
     const cookie = await login(user.email, "ValidPassword1!");
 
     const response = await request(`/deadlines/${deadline.id}`, {
@@ -328,7 +433,7 @@ describe("Deadlines API", () => {
       "ValidPassword1!",
       "DEADLINE_PATCH_EDIT_NO_REOPEN"
     );
-    const deadline = await seedDeadline({ status: "DONE" });
+    const deadline = await seedDeadline({ status: "DONE", accessUserId: user.id });
     const cookie = await login(user.email, "ValidPassword1!");
 
     const response = await request(`/deadlines/${deadline.id}`, {
@@ -356,7 +461,7 @@ describe("Deadlines API", () => {
       "ValidPassword1!",
       "DEADLINE_PATCH_COMPLETE"
     );
-    const deadline = await seedDeadline();
+    const deadline = await seedDeadline({ accessUserId: user.id });
     const cookie = await login(user.email, "ValidPassword1!");
 
     const response = await request(`/deadlines/${deadline.id}`, {
@@ -379,7 +484,7 @@ describe("Deadlines API", () => {
       "ValidPassword1!",
       "DEADLINE_PATCH_REOPEN"
     );
-    const deadline = await seedDeadline({ status: "DONE" });
+    const deadline = await seedDeadline({ status: "DONE", accessUserId: user.id });
     const cookie = await login(user.email, "ValidPassword1!");
 
     const response = await request(`/deadlines/${deadline.id}`, {
@@ -405,7 +510,7 @@ describe("Deadlines API", () => {
       "ValidPassword1!",
       "DEADLINE_PATCH_NON_STATUS_EDIT"
     );
-    const deadline = await seedDeadline();
+    const deadline = await seedDeadline({ accessUserId: user.id });
     const cookie = await login(user.email, "ValidPassword1!");
 
     const response = await request(`/deadlines/${deadline.id}`, {
@@ -428,7 +533,7 @@ describe("Deadlines API", () => {
       "ValidPassword1!",
       "DEADLINE_PATCH_SAME_STATUS"
     );
-    const deadline = await seedDeadline({ status: "DONE" });
+    const deadline = await seedDeadline({ status: "DONE", accessUserId: user.id });
     const cookie = await login(user.email, "ValidPassword1!");
 
     const response = await request(`/deadlines/${deadline.id}`, {
@@ -448,7 +553,7 @@ describe("Deadlines API", () => {
   it("keeps deadline archive and restore protected by deadlines.archive", async () => {
     await createRole("DEADLINE_ARCHIVER", ["deadlines.view", "deadlines.archive"]);
     const user = await createUser("deadline-archive@example.com", "ValidPassword1!", "DEADLINE_ARCHIVER");
-    const deadline = await seedDeadline();
+    const deadline = await seedDeadline({ accessUserId: user.id });
     const cookie = await login(user.email, "ValidPassword1!");
 
     const archiveResponse = await request(`/deadlines/${deadline.id}/archive`, {
@@ -467,12 +572,16 @@ describe("Deadlines API", () => {
   it("keeps normal deadline create and edit permissions unchanged", async () => {
     await createRole("DEADLINE_WRITER", ["deadlines.view", "deadlines.create", "deadlines.edit"]);
     const user = await createUser("deadline-writer@example.com", "ValidPassword1!", "DEADLINE_WRITER");
+    const project = await seedProject(user.id);
     const cookie = await login(user.email, "ValidPassword1!");
 
     const createResponse = await request("/deadlines", {
       method: "POST",
       cookie,
-      body: deadlinePayload()
+      body: {
+        ...deadlinePayload(),
+        projectId: project.id
+      }
     });
     assert.equal(createResponse.status, 201);
     const createPayload = (await createResponse.json()) as { deadline: { id: string; title: string } };

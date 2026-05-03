@@ -43,6 +43,52 @@
 - Nicht-Ziele:
 - keine neue RBAC-Architektur, keine breitere ExternalOrg-Verzeichnisfreigabe, keine Import-/Export-/Migration-/PowerAutomate-Aenderungen, keine UI-Neugestaltung.
 
+## 2ad. Erweiterungslauf 2026-05-02: Projektzugriff und Altbescheide
+- Ziel dieses Laufs ist die serverseitige Begrenzung projektbezogener Fachdomänen sowie eine getrennte historische Ablage fuer Altbescheide.
+- Neues Datenmodell:
+- `ProjectAccess` verwaltet explizite Projektfreigaben pro Benutzer mit Rollen `PROJECT_VIEWER`, `PROJECT_EDITOR`, `EXTERNAL_PROJECT_VIEWER`, `EXTERNAL_EXECUTOR`.
+- `LegacyDecision` verwaltet historische Bescheide getrennt von aktiven `LegalDocument`-Eintraegen.
+- Altbescheide sind projektbezogen, dokumentierbar, archivierbar und optional mit aktiven Rechtsdokumenten verknuepfbar, erzeugen aber keine Auflagen, Fristen oder Tasks automatisch.
+- Serverseitiges Scoping gilt fuer Projekte, Rechtsdokumente, Auflagen, Fristen, Task-State, Dokumente, Kommentare, Projektchecklisten und Altbescheide.
+- Globale Admin-/Compliance-Manager-Rollen koennen weiterhin alle Projekte lesen; normale interne Benutzer brauchen impliziten oder expliziten Projektzugriff.
+- Externe Benutzer erhalten keine breiten Fachdomänenlisten. Projektlisten liefern nur explizit freigegebene Projekt-Shells; abhängige Domänen bleiben fuer externe Benutzer fail-closed.
+- Dokumentzugriff prueft `ownerType`, `ownerId` und den darunterliegenden Projektkontext; `LEGACY_DECISION` ist ein eigener Dokument-Owner.
+- Frontend:
+- Im Projektdetail gibt es Tabs fuer `Altbescheide` und, fuer berechtigte Admins, `Zugriff`.
+- Listen verlassen sich auf serverseitige Scopes und zeigen bei fehlenden Zuweisungen leere Zustände statt lokaler Ersatzdaten.
+- Import/Export/Recovery:
+- Der generische Teil-Export liest Altbescheide ueber die API in den aktuellen Zugriffsscope ein.
+- ProjectAccess, Benutzer, Rollen und Security-Konfiguration bleiben server-managed und werden nicht generisch importiert.
+- Import/Reset und alte Recovery-/Snapshot-Pfade bleiben gesperrt; keine Azure-Arbeit in diesem Lauf.
+
+## 2ae. Gezielter Review-Fixlauf 2026-05-02 fuer ProjectAccess und Altbescheide
+- Dies ist keine neue Feature-Phase, keine Azure-Arbeit und keine Rollenarchitektur.
+- Ziel dieses Laufs ist ausschliesslich die Behebung der aktuellen P1/P2/P3-Review-Findings aus Merge-/Rollout-Review.
+- Zulaessiger Umfang:
+- Neue ProjectAccess-/Altbescheid-Module und Migration muessen review-sichtbar sein und im finalen Commit enthalten sein.
+- Projektzugriff ist nur Scope und ersetzt keine Fach-Leserechte fuer LegalDocs, Auflagen, Fristen, Tasks, Dokumente, Kommentare, Checklisten oder Altbescheide.
+- Single Hard-Delete fuer Auflagen nutzt dieselben Sperren vor dem Dependency-Check wie die Bulk-/Safe-Delete-Pfade.
+- `POST /projects/:projectId/legacy-decisions` darf nicht generisch `projects.create` verlangen, sondern braucht das fachliche LegalDoc-/Altbescheid-Schreibrecht plus Projekt-Schreibzugriff.
+- ProjectAccess-Mutationen respektieren `admin.access + users.manage` und werden nicht vorab durch das generische Project-Edit-Gate blockiert.
+- Projekt-Auflagen-Schreibaktionen im UI sind an Projekt-Schreibzugriff gekoppelt.
+- Nicht-Ziele:
+- keine Notification-/PowerAutomate-/Azure-Aenderungen, keine Import-/Export-/Recovery-Aenderungen ausser zwingenden Compile-/Review-Sichtbarkeitskorrekturen, keine neuen Dependencies.
+
+## 2af. Gezielter Access-Control-Fixlauf 2026-05-03 fuer Project Read/Write Scope
+- Dies ist keine neue Feature-Phase, keine Azure-Arbeit und keine Rollenarchitektur.
+- Ziel dieses Laufs ist ausschliesslich die Behebung der zwei Review-Findings zu `projects.viewAll` und `currentUserAccessSource: "GLOBAL"`.
+- Backend-Regel:
+- `projects.viewAll` ist globaler Projekt-Lesescope und darf allein niemals `canWrite=true` erzeugen.
+- Echte Projekt-Schreibberechtigung kommt aus explizitem ProjectAccess `PROJECT_EDITOR`, implizitem Owner/Deputy oder aus dem bewusst vorhandenen globalen Schreibscope `projects.viewAll + projects.edit`.
+- `PROJECT_VIEWER`, `EXTERNAL_PROJECT_VIEWER`, interne Teilnehmer und `GLOBAL` durch reines `projects.viewAll` bleiben read-only.
+- Domain-Mutationen und Kommentar-Mutationen brauchen weiterhin Domain-Write-Permission plus echten Project-Write-Scope.
+- ProjectAccess-Verwaltung bleibt getrennt auf `admin.access + users.manage`.
+- Frontend-Regel:
+- `GLOBAL` wird nicht mehr als Edit-/Write-Quelle interpretiert.
+- UI-Schreibaktionen verwenden serverseitige Flags wie `currentUserCanWrite`, `canUpdate` und `canArchive` oder die daraus abgeleitete Projekt-Policy.
+- Nicht-Ziele:
+- keine Azure-, Notification-/PowerAutomate-, MigrationBootstrap-, Import-/Export-/Recovery-Aenderungen, keine neuen Dependencies, keine UI-Neugestaltung.
+
 ## 2a. Verifizierter Stand 2026-04-15
 - Phase 1 ist im aktuellen Code bereits serverseitig umgesetzt:
 - `apps/api/src/routes/scopes.ts`

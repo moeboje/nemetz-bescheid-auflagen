@@ -8,11 +8,20 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import {
   applyNoStoreHeaders,
   requireAdminRoutePermissions,
+  requireAuthenticatedRouteUser,
   requireInternalRouteUser,
   type RouteUser
 } from "./routeAuth.js";
 import { hasPermission, type PermissionKey } from "../accessControl.js";
 import { enqueueDeadlineAssignmentNotificationsForChange } from "../notifications.js";
+import {
+  getReadableProjectIdsForDomain,
+  hasGlobalProjectReadAccess,
+  requireProjectDomainRead,
+  requireProjectDomainReadPermission,
+  requireProjectDomainWrite,
+  resolveDeadlineProjectId
+} from "../projectAccess.js";
 
 type AttachmentKindDto = "PHOTO" | "DOCUMENT" | "REPORT";
 type AttachmentStorageDto = "indexeddb" | "none";
@@ -418,8 +427,9 @@ function toDeadlineUpdateInput(input: DeadlineDto): Prisma.DeadlineUncheckedUpda
   };
 }
 
-async function listDeadlinesFromDb(db: DbClient): Promise<DeadlineDto[]> {
+async function listDeadlinesFromDb(db: DbClient, where?: Prisma.DeadlineWhereInput): Promise<DeadlineDto[]> {
   const deadlines = await db.deadline.findMany({
+    where,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }]
   });
 
@@ -536,10 +546,13 @@ async function validateDeadlineRelations(
   if (legalDocId) {
     const legalDoc = await prisma.legalDocument.findUnique({
       where: { id: legalDocId },
-      select: { id: true }
+      select: { id: true, projectId: true }
     });
     if (!legalDoc) {
       return { ok: false, status: 404, message: "Legal document not found." };
+    }
+    if (projectId && legalDoc.projectId !== projectId) {
+      return { ok: false, status: 400, message: "legalDocId does not belong to projectId." };
     }
   }
 
@@ -684,6 +697,67 @@ function requireDeadlineStatusTransitionPermission(
   return permissionKey ? requireDeadlineActionPermission(user, res, permissionKey) : true;
 }
 
+async function requireDeadlineReadAccess(
+  prisma: PrismaClient,
+  user: RouteUser,
+  res: Response,
+  deadlineId: string
+) {
+  const context = await resolveDeadlineProjectId(prisma, deadlineId);
+  if (!context.exists) {
+    res.status(404).json({ ok: false, message: "Deadline not found." });
+    return false;
+  }
+
+  if (!context.projectId) {
+    if (hasGlobalProjectReadAccess(user) && hasPermission(user.permissionKeys, "deadlines.view")) {
+      return true;
+    }
+    res.status(403).json({ ok: false, message: "Forbidden." });
+    return false;
+  }
+
+  return requireProjectDomainRead({
+    db: prisma,
+    user,
+    projectId: context.projectId,
+    domain: "deadlines",
+    res,
+    notFoundMessage: "Deadline not found."
+  });
+}
+
+async function requireDeadlineWriteAccess(input: {
+  prisma: PrismaClient;
+  user: RouteUser;
+  res: Response;
+  deadlineId?: string;
+  projectId?: string;
+  permission: PermissionKey;
+}) {
+  const projectId = input.deadlineId
+    ? (await resolveDeadlineProjectId(input.prisma, input.deadlineId)).projectId
+    : input.projectId ?? null;
+
+  if (!projectId) {
+    if (hasGlobalProjectReadAccess(input.user) && hasPermission(input.user.permissionKeys, input.permission)) {
+      return true;
+    }
+    input.res.status(403).json({ ok: false, message: "Forbidden." });
+    return false;
+  }
+
+  return requireProjectDomainWrite({
+    db: input.prisma,
+    user: input.user,
+    projectId,
+    domain: "deadlines",
+    permission: input.permission,
+    res: input.res,
+    notFoundMessage: "Deadline not found."
+  });
+}
+
 export function createDeadlinesRouter(prisma: PrismaClient) {
   const router = Router();
 
@@ -691,12 +765,35 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireInternalRouteUser(req, res, prisma);
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
       if (!user) {
         return;
       }
 
-      res.json(await listDeadlinesFromDb(prisma));
+      const readableProjectIds = await getReadableProjectIdsForDomain(prisma, user, "deadlines");
+      const deadlines =
+        readableProjectIds === null
+          ? await listDeadlinesFromDb(prisma)
+          : readableProjectIds.length > 0
+          ? await listDeadlinesFromDb(prisma, {
+              OR: [
+                {
+                  projectId: {
+                    in: readableProjectIds
+                  }
+                },
+                {
+                  legalDocument: {
+                    projectId: {
+                      in: readableProjectIds
+                    }
+                  }
+                }
+              ]
+            })
+          : [];
+
+      res.json(deadlines);
     } catch (error) {
       next(error);
     }
@@ -706,14 +803,21 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireInternalRouteUser(req, res, prisma);
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
       if (!user) {
+        return;
+      }
+
+      if (!requireProjectDomainReadPermission({ user, domain: "deadlines", res })) {
         return;
       }
 
       const deadline = await findDeadlineById(prisma, req.params.id);
       if (!deadline) {
         res.status(404).json({ ok: false, message: "Deadline not found." });
+        return;
+      }
+      if (!(await requireDeadlineReadAccess(prisma, user, res, deadline.id))) {
         return;
       }
 
@@ -783,6 +887,25 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
         res.status(normalized.status).json({ ok: false, message: normalized.message });
         return;
       }
+      let targetProjectId = normalized.deadline.projectId;
+      if (!targetProjectId && normalized.deadline.legalDocId) {
+        const legalDoc = await prisma.legalDocument.findUnique({
+          where: { id: normalized.deadline.legalDocId },
+          select: { projectId: true }
+        });
+        targetProjectId = legalDoc?.projectId;
+      }
+      if (
+        !(await requireDeadlineWriteAccess({
+          prisma,
+          user,
+          res,
+          projectId: targetProjectId,
+          permission: "deadlines.create"
+        }))
+      ) {
+        return;
+      }
 
       const deadline = await prisma.$transaction(async (tx) => {
         const created = await tx.deadline.create({
@@ -818,6 +941,17 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
       const existingRecord = await findDeadlineById(prisma, req.params.id);
       if (!existingRecord) {
         res.status(404).json({ ok: false, message: "Deadline not found." });
+        return;
+      }
+      if (
+        !(await requireDeadlineWriteAccess({
+          prisma,
+          user,
+          res,
+          deadlineId: existingRecord.id,
+          permission: "deadlines.edit"
+        }))
+      ) {
         return;
       }
 
@@ -896,6 +1030,25 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
         res.status(normalized.status).json({ ok: false, message: normalized.message });
         return;
       }
+      let targetProjectId = normalized.deadline.projectId;
+      if (!targetProjectId && normalized.deadline.legalDocId) {
+        const legalDoc = await prisma.legalDocument.findUnique({
+          where: { id: normalized.deadline.legalDocId },
+          select: { projectId: true }
+        });
+        targetProjectId = legalDoc?.projectId;
+      }
+      if (
+        !(await requireDeadlineWriteAccess({
+          prisma,
+          user,
+          res,
+          projectId: targetProjectId,
+          permission: "deadlines.edit"
+        }))
+      ) {
+        return;
+      }
 
       const updated = await prisma.$transaction(async (tx) => {
         const next = await tx.deadline.update({
@@ -936,9 +1089,20 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
         res.status(404).json({ ok: false, message: "Deadline not found." });
         return;
       }
-
       const status = normalizeStoredStatus(req.body?.status);
       const requiredPermission = status === "DONE" ? "tasks.complete" : "tasks.edit";
+      if (
+        !(await requireDeadlineWriteAccess({
+          prisma,
+          user,
+          res,
+          deadlineId: existing.id,
+          permission: requiredPermission
+        }))
+      ) {
+        return;
+      }
+
       if (!requireDeadlineActionPermission(user, res, requiredPermission)) {
         return;
       }
@@ -977,6 +1141,17 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
       const existingRecord = await findDeadlineById(prisma, req.params.id);
       if (!existingRecord) {
         res.status(404).json({ ok: false, message: "Deadline not found." });
+        return;
+      }
+      if (
+        !(await requireDeadlineWriteAccess({
+          prisma,
+          user,
+          res,
+          deadlineId: existingRecord.id,
+          permission: "tasks.complete"
+        }))
+      ) {
         return;
       }
 
@@ -1034,6 +1209,17 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
         res.status(404).json({ ok: false, message: "Deadline not found." });
         return;
       }
+      if (
+        !(await requireDeadlineWriteAccess({
+          prisma,
+          user,
+          res,
+          deadlineId: existing.id,
+          permission: "tasks.edit"
+        }))
+      ) {
+        return;
+      }
 
       const updated = await prisma.deadline.update({
         where: { id: existing.id },
@@ -1067,6 +1253,17 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
         const existingRecord = await findDeadlineById(prisma, req.params.id);
         if (!existingRecord) {
           res.status(404).json({ ok: false, message: "Deadline not found." });
+          return;
+        }
+        if (
+          !(await requireDeadlineWriteAccess({
+            prisma,
+            user,
+            res,
+            deadlineId: existingRecord.id,
+            permission: "tasks.edit"
+          }))
+        ) {
           return;
         }
 
@@ -1120,6 +1317,17 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
         res.status(404).json({ ok: false, message: "Deadline not found." });
         return;
       }
+      if (
+        !(await requireDeadlineWriteAccess({
+          prisma,
+          user,
+          res,
+          deadlineId: existing.id,
+          permission: "deadlines.archive"
+        }))
+      ) {
+        return;
+      }
 
       const updated = existing.isArchived
         ? existing
@@ -1152,6 +1360,17 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
       const existing = await findDeadlineById(prisma, req.params.id);
       if (!existing) {
         res.status(404).json({ ok: false, message: "Deadline not found." });
+        return;
+      }
+      if (
+        !(await requireDeadlineWriteAccess({
+          prisma,
+          user,
+          res,
+          deadlineId: existing.id,
+          permission: "deadlines.archive"
+        }))
+      ) {
         return;
       }
 

@@ -81,6 +81,9 @@ export default function ObligationDetailPage() {
   );
   const legalDoc = legalDocs.find((doc) => doc.id === obligation?.legalDocId);
   const project = projects.find((item) => item.id === legalDoc?.projectId);
+  const canWriteProject = Boolean(project?.currentUserCanWrite);
+  const canEditObligation = permissions.canEditObligations && canWriteProject;
+  const canDeleteObligation = permissions.canDeleteObligations && canWriteProject;
 
   const taskPreview = useMemo(() => {
     if (!obligation) {
@@ -148,7 +151,7 @@ export default function ObligationDetailPage() {
   };
 
   const openDeleteModal = () => {
-    if (!permissions.canDeleteObligations) {
+    if (!canDeleteObligation) {
       return;
     }
     clearMutationError();
@@ -165,7 +168,7 @@ export default function ObligationDetailPage() {
   };
 
   const handleDelete = async () => {
-    if (!obligation || !permissions.canDeleteObligations) {
+    if (!obligation || !canDeleteObligation) {
       return;
     }
 
@@ -208,13 +211,13 @@ export default function ObligationDetailPage() {
         </div>
         <div className="tableActions">
           <Button
-            disabled={!permissions.canEditObligations}
+            disabled={!canEditObligation}
             onClick={() => setModalOpen(true)}
           >
             {t("obligations.action.edit")}
           </Button>
           {permissions.canDeleteObligations ? (
-            <Button variant="secondary" onClick={openDeleteModal}>
+            <Button variant="secondary" disabled={!canDeleteObligation} onClick={openDeleteModal}>
               {t("obligations.action.delete")}
             </Button>
           ) : null}
@@ -384,7 +387,7 @@ export default function ObligationDetailPage() {
             <Button variant="secondary" onClick={closeDeleteModal} disabled={isDeleteSubmitting}>
               {t("common.cancel")}
             </Button>
-            <Button onClick={() => void handleDelete()} disabled={isDeleteSubmitting}>
+            <Button onClick={() => void handleDelete()} disabled={isDeleteSubmitting || !canDeleteObligation}>
               {isDeleteSubmitting ? t("obligations.delete.pending") : t("obligations.action.delete")}
             </Button>
           </div>

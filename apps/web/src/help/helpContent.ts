@@ -330,7 +330,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
         heading: "Worauf achten?",
         lines: [
           "Status, Einreichtyp und Archivierung sind drei verschiedene Dinge.",
-          "Teilnehmer und externe Beteiligte sollten nur gepflegt werden, wenn sie fuer das Projekt wirklich relevant sind."
+          "Teilnehmer und externe Beteiligte sollten nur gepflegt werden, wenn sie fuer das Projekt wirklich relevant sind.",
+          "Projektzugriff wird serverseitig gesteuert. Wenn ein Benutzer kein Projekt sieht, sind auch die zugehoerigen Rechtsdokumente, Auflagen, Fristen, Aufgaben und Dokumente nicht verfuegbar."
         ]
       },
       {
@@ -432,7 +433,9 @@ export const HELP_ARTICLES: HelpArticle[] = [
         heading: "Worauf achten?",
         lines: [
           "Abhaengige Projekte und Referenzdokumente sind bewusst getrennte Konzepte.",
-          "Die Projektcheckliste ist generisch und ersetzt keine fachliche AWG- oder UVP-Bewertung."
+          "Die Projektcheckliste ist generisch und ersetzt keine fachliche AWG- oder UVP-Bewertung.",
+          "Der Zugriff-Tab ist fuer berechtigte Admins die explizite Projektfreigabe; Owner, Stellvertretung und interne Teilnehmer koennen zusaetzlich impliziten Zugriff haben.",
+          "Altbescheide sind historische Projektunterlagen. Sie sind auffindbar und dokumentiert, erzeugen aber keine aktiven Auflagen, Fristen oder Aufgaben automatisch."
         ]
       }
     ]
@@ -681,7 +684,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
         heading: "Worauf achten?",
         lines: [
           "Ein JSON-Export enthaelt keine binaeren Datei-Inhalte aus lokaler Evidence-Speicherung.",
-          "Wenn nach einem Import `content missing` oder `storage: none` erscheint, muessen Nachweise neu hochgeladen werden."
+          "Wenn nach einem Import `content missing` oder `storage: none` erscheint, muessen Nachweise neu hochgeladen werden.",
+          "Downloads werden serverseitig ueber das verknuepfte Objekt und dessen Projektzugriff geprueft, auch fuer Altbescheide."
         ]
       },
       {

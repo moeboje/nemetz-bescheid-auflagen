@@ -129,8 +129,22 @@ export default function ObligationsPage() {
       ? t("common.notAvailable")
       : row.recurrenceEndDate ?? t("obligations.recurrence.unlimited");
 
+  const canWriteObligationProject = (target: (typeof obligations)[number]) => {
+    const doc = legalDocs.find((item) => item.id === target.legalDocId);
+    const project = projects.find((item) => item.id === doc?.projectId);
+    return Boolean(project?.currentUserCanWrite);
+  };
+  const hasWritableLegalDocProject = legalDocs.some((doc) =>
+    Boolean(projects.find((project) => project.id === doc.projectId)?.currentUserCanWrite)
+  );
+  const canCreateObligation = permissions.canCreateObligations && hasWritableLegalDocProject;
+  const canEditObligation = (target: (typeof obligations)[number]) =>
+    permissions.canEditObligations && canWriteObligationProject(target);
+  const canDeleteObligation = (target: (typeof obligations)[number]) =>
+    permissions.canDeleteObligations && canWriteObligationProject(target);
+
   const openDeleteModal = (target: (typeof obligations)[number]) => {
-    if (!permissions.canDeleteObligations) {
+    if (!canDeleteObligation(target)) {
       return;
     }
     clearMutationError();
@@ -148,7 +162,7 @@ export default function ObligationsPage() {
   };
 
   const handleDelete = async () => {
-    if (!deleteTarget || !permissions.canDeleteObligations) {
+    if (!deleteTarget || !canDeleteObligation(deleteTarget)) {
       return;
     }
 
@@ -273,7 +287,7 @@ export default function ObligationsPage() {
           <h1 className="pageTitle">{t("obligations.title")}</h1>
         </div>
         <Button
-          disabled={!permissions.canCreateObligations}
+          disabled={!canCreateObligation}
           onClick={() => setModalOpen(true)}
         >
           {t("obligations.action.new")}
@@ -375,7 +389,7 @@ export default function ObligationsPage() {
             </IconButton>
             <IconButton
               ariaLabel={t("obligations.action.edit")}
-              disabled={!permissions.canEditObligations}
+              disabled={!canEditObligation(row)}
               onClick={() => {
                 setEditingObligationId(row.id);
                 setModalOpen(true);
@@ -387,6 +401,7 @@ export default function ObligationsPage() {
               <Button
                 size="sm"
                 variant="ghost"
+                disabled={!canDeleteObligation(row)}
                 onClick={() => openDeleteModal(row)}
               >
                 {t("obligations.action.delete")}
@@ -415,7 +430,10 @@ export default function ObligationsPage() {
             <Button variant="secondary" onClick={closeDeleteModal} disabled={isDeleteSubmitting}>
               {t("common.cancel")}
             </Button>
-            <Button onClick={() => void handleDelete()} disabled={isDeleteSubmitting}>
+            <Button
+              onClick={() => void handleDelete()}
+              disabled={isDeleteSubmitting || !deleteTarget || !canDeleteObligation(deleteTarget)}
+            >
               {isDeleteSubmitting ? t("obligations.delete.pending") : t("obligations.action.delete")}
             </Button>
           </div>

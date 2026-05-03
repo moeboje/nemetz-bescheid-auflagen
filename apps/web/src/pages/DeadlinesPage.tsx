@@ -94,6 +94,7 @@ export default function DeadlinesPage() {
       baseUrl: typeof window !== "undefined" ? window.location.origin : ""
     });
   };
+  const hasWritableProject = projects.some((project) => project.currentUserCanWrite);
 
   const projectOptions = useMemo(
     () =>
@@ -156,6 +157,7 @@ export default function DeadlinesPage() {
           ...deadline,
           status: getDeadlineStatus(deadline),
           resolvedProjectId: project?.id ?? deadline.projectId ?? legalDoc?.projectId ?? "",
+          projectCanWrite: Boolean(project?.currentUserCanWrite),
           projectTitle: project?.title ?? "",
           legalDocTitle: legalDoc?.title ?? "",
           ownerLabel: getUserLabel(deadline.ownerUserId),
@@ -286,7 +288,7 @@ export default function DeadlinesPage() {
             </Button>
           ) : null}
           <Button
-            disabled={!permissions.canEditDeadlines}
+            disabled={!permissions.canEditDeadlines || !hasWritableProject}
             onClick={() => setModalOpen(true)}
           >
             {t("deadlines.new")}
@@ -391,7 +393,7 @@ export default function DeadlinesPage() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  disabled={!permissions.canEditTasks}
+                  disabled={!permissions.canEditTasks || !row.projectCanWrite}
                   onClick={() => reopenDeadline(row.id)}
                 >
                   {t("deadlines.action.reopen")}
@@ -410,7 +412,7 @@ export default function DeadlinesPage() {
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={!permissions.canCompleteTasks}
+                disabled={!permissions.canCompleteTasks || !row.projectCanWrite}
                 onClick={() => {
                   if (!runtimeConfig.features.enableEvidence) {
                     markDeadlineDone(row.id);
@@ -430,7 +432,7 @@ export default function DeadlinesPage() {
             </IconButton>
             <IconButton
               ariaLabel={t("common.edit")}
-              disabled={!permissions.canEditDeadlines}
+              disabled={!permissions.canEditDeadlines || !row.projectCanWrite}
               onClick={() => {
                 setEditingDeadlineId(row.id);
                 setModalOpen(true);

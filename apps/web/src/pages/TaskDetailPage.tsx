@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { Badge, Breadcrumbs, Button, Card, Modal, StatusDot } from "@nemetz/ui";
 import { t } from "../i18n";
 import { useTasks } from "../state/TasksStore";
+import { useProjects } from "../state/ProjectsStore";
 import EvidenceListModal from "../components/EvidenceListModal";
 import { useAuthorization } from "../state/AuthorizationStore";
 import TaskCompleteModal from "../components/TaskCompleteModal";
@@ -22,12 +23,18 @@ const levelVariant = {
 export default function TaskDetailPage() {
   const { id } = useParams();
   const { tasks, setTaskStatus, markTaskDoneWithEvidence } = useTasks();
+  const { projects } = useProjects();
   const { permissions } = useAuthorization();
   const [modalOpen, setModalOpen] = useState(false);
   const [completionModalOpen, setCompletionModalOpen] = useState(false);
   const [evidenceModalOpen, setEvidenceModalOpen] = useState(false);
 
   const task = useMemo(() => tasks.find((t) => t.id === id), [id, tasks]);
+  const canWriteTaskProject = Boolean(
+    projects.find((project) => project.id === task?.projectId)?.currentUserCanWrite
+  );
+  const canEditTaskStatus = permissions.canEditTasks && canWriteTaskProject;
+  const canCompleteTask = permissions.canCompleteTasks && canWriteTaskProject;
 
   if (!task) {
     return (
@@ -66,7 +73,9 @@ export default function TaskDetailPage() {
                 : "tasks.status.overdue"
             )}
           </Badge>
-          <Button onClick={() => setModalOpen(true)}>{t("tasks.detail.changeStatus")}</Button>
+          <Button disabled={!canEditTaskStatus && !canCompleteTask} onClick={() => setModalOpen(true)}>
+            {t("tasks.detail.changeStatus")}
+          </Button>
           {task.status === "DONE" ? (
             <Button variant="secondary" onClick={() => setEvidenceModalOpen(true)}>
               {t("tasks.actions.viewEvidence")}
@@ -126,17 +135,25 @@ export default function TaskDetailPage() {
         }
       >
         <div className="detailGrid">
-          <Button variant="secondary" onClick={() => setTaskStatus(task.id, "OPEN")}>
+          <Button
+            variant="secondary"
+            disabled={!canEditTaskStatus}
+            onClick={() => setTaskStatus(task.id, "OPEN")}
+          >
             {t("tasks.status.open")}
           </Button>
           {task.type === "OBLIGATION" ? (
-            <Button variant="secondary" onClick={() => setTaskStatus(task.id, "IN_PROGRESS")}>
+            <Button
+              variant="secondary"
+              disabled={!canEditTaskStatus}
+              onClick={() => setTaskStatus(task.id, "IN_PROGRESS")}
+            >
               {t("tasks.status.inProgress")}
             </Button>
           ) : null}
           <Button
             variant="secondary"
-            disabled={!permissions.canCompleteTasks}
+            disabled={!canCompleteTask}
             onClick={() => {
               setModalOpen(false);
               setCompletionModalOpen(true);
@@ -152,6 +169,9 @@ export default function TaskDetailPage() {
         task={task}
         onClose={() => setCompletionModalOpen(false)}
         onSaved={(input) => {
+          if (!canCompleteTask) {
+            return;
+          }
           return markTaskDoneWithEvidence(task.id, input);
         }}
       />

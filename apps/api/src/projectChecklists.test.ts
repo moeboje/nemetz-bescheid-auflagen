@@ -57,6 +57,17 @@ async function createUser(args: { email: string; password: string; role?: string
   });
 }
 
+async function createRole(key: string, permissionKeys: string[]) {
+  return prisma.role.create({
+    data: {
+      key,
+      labelDe: key,
+      isSystem: false,
+      permissionsJson: permissionKeys
+    }
+  });
+}
+
 async function login(email: string, password: string) {
   const response = await request("/auth/login", {
     method: "POST",
@@ -92,6 +103,20 @@ async function createProject(companyId: string, title = "Checklist Project") {
       attachments: [],
       dependsOnProjectIds: [],
       referenceLegalDocIds: []
+    }
+  });
+}
+
+async function grantProjectAccess(
+  projectId: string,
+  userId: string,
+  accessRole: "PROJECT_VIEWER" | "PROJECT_EDITOR" = "PROJECT_EDITOR"
+) {
+  return prisma.projectAccess.create({
+    data: {
+      projectId,
+      userId,
+      accessRole
     }
   });
 }
@@ -162,6 +187,7 @@ describe("Project checklists", () => {
     await prisma.site.deleteMany();
     await prisma.company.deleteMany();
     await prisma.user.deleteMany();
+    await prisma.role.deleteMany();
   });
 
   it("returns null when a project has no checklist", async () => {
@@ -171,6 +197,7 @@ describe("Project checklists", () => {
     });
     const company = await createCompany("Checklist Company");
     const project = await createProject(company.id);
+    await grantProjectAccess(project.id, user.id, "PROJECT_VIEWER");
     const cookie = await login(user.email, "ValidPassword1!");
 
     const response = await request(`/projects/${project.id}/checklist`, {
@@ -182,6 +209,29 @@ describe("Project checklists", () => {
     assert.equal(payload.checklist, null);
   });
 
+  it("requires project checklist read permission before project lookup", async () => {
+    await createRole("CHECKLIST_NO_PROJECTS_VIEW", []);
+    const user = await createUser({
+      email: "project-checklist-no-domain@example.com",
+      password: "ValidPassword1!",
+      role: "CHECKLIST_NO_PROJECTS_VIEW"
+    });
+    const company = await createCompany("Checklist Domain Company");
+    const project = await createProject(company.id);
+    await grantProjectAccess(project.id, user.id, "PROJECT_VIEWER");
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const existingResponse = await request(`/projects/${project.id}/checklist`, {
+      cookie
+    });
+    assert.equal(existingResponse.status, 403);
+
+    const missingResponse = await request("/projects/does-not-exist/checklist", {
+      cookie
+    });
+    assert.equal(missingResponse.status, 403);
+  });
+
   it("creates and returns a project checklist snapshot", async () => {
     const user = await createUser({
       email: "project-checklist-save@example.com",
@@ -189,6 +239,7 @@ describe("Project checklists", () => {
     });
     const company = await createCompany("Checklist Company");
     const project = await createProject(company.id);
+    await grantProjectAccess(project.id, user.id, "PROJECT_EDITOR");
     const cookie = await login(user.email, "ValidPassword1!");
 
     const response = await request(`/projects/${project.id}/checklist`, {
@@ -267,6 +318,7 @@ describe("Project checklists", () => {
     });
     const company = await createCompany("Checklist Company");
     const project = await createProject(company.id);
+    await grantProjectAccess(project.id, user.id, "PROJECT_EDITOR");
     const cookie = await login(user.email, "ValidPassword1!");
 
     await request(`/projects/${project.id}/checklist`, {

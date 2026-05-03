@@ -8,8 +8,22 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import {
   applyNoStoreHeaders,
   requireAdminRoutePermissions,
-  requireInternalRouteUser
+  requireAuthenticatedRouteUser,
+  requireInternalRouteUser,
+  type RouteUser
 } from "./routeAuth.js";
+import {
+  canManageProjectAccess,
+  getAccessibleProjectIds,
+  getProjectAccessFacts,
+  hasGlobalProjectReadAccess,
+  isInternalUser,
+  requireProjectAccess,
+  requireProjectDomainWrite,
+  toProjectAccessEntryDto,
+  type ProjectAccessSource
+} from "../projectAccess.js";
+import { hasPermission } from "../accessControl.js";
 
 const PROJECT_STATUS_VALUES = [
   "DRAFT",
@@ -87,6 +101,11 @@ type ProjectDto = {
   isArchived: boolean;
   createdAt: string;
   updatedAt: string;
+  currentUserAccessRole?: string;
+  currentUserAccessSource?: ProjectAccessSource;
+  currentUserCanWrite?: boolean;
+  canUpdate?: boolean;
+  canArchive?: boolean;
 };
 
 type ProjectDependencyValidationReason =
@@ -822,8 +841,9 @@ async function updateProjectStatus(
   );
 }
 
-async function listProjectsSnapshot(db: DbClient): Promise<ProjectDto[]> {
+async function listProjectsSnapshot(db: DbClient, where?: Prisma.ProjectWhereInput): Promise<ProjectDto[]> {
   const projects = await db.project.findMany({
+    where,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }]
   });
 
@@ -835,6 +855,31 @@ async function listProjectsSnapshot(db: DbClient): Promise<ProjectDto[]> {
   return sanitizeProjectRelations(
     projects.map((project) => toProjectDto(project, statusByProjectId.get(project.id)))
   ).projects;
+}
+
+async function annotateProjectForUser(
+  db: DbClient,
+  user: RouteUser,
+  project: ProjectDto
+) {
+  const facts = await getProjectAccessFacts(db, user, project.id);
+  const canWriteProject = isInternalUser(user) && facts.canWrite;
+  return {
+    ...project,
+    currentUserAccessRole: facts.role,
+    currentUserAccessSource: facts.source,
+    currentUserCanWrite: canWriteProject,
+    canUpdate: canWriteProject && hasPermission(user.permissionKeys, "projects.edit"),
+    canArchive: canWriteProject && hasPermission(user.permissionKeys, "projects.archive")
+  };
+}
+
+async function annotateProjectsForUser(
+  db: DbClient,
+  user: RouteUser,
+  projects: ProjectDto[]
+) {
+  return Promise.all(projects.map((project) => annotateProjectForUser(db, user, project)));
 }
 
 async function findProjectById(db: DbClient, id: string) {
@@ -1294,6 +1339,183 @@ async function normalizeProjectForWrite(
   };
 }
 
+const PROJECT_ACCESS_ROLE_VALUES = [
+  "PROJECT_VIEWER",
+  "PROJECT_EDITOR",
+  "EXTERNAL_PROJECT_VIEWER",
+  "EXTERNAL_EXECUTOR"
+] as const;
+
+type ProjectAccessRoleValue = (typeof PROJECT_ACCESS_ROLE_VALUES)[number];
+
+function normalizeProjectAccessRole(value: unknown): ProjectAccessRoleValue | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim().toUpperCase();
+  return PROJECT_ACCESS_ROLE_VALUES.includes(trimmed as ProjectAccessRoleValue)
+    ? (trimmed as ProjectAccessRoleValue)
+    : null;
+}
+
+function roleMatchesTargetUserType(role: ProjectAccessRoleValue, userType: string) {
+  const normalizedType = userType.trim().toUpperCase();
+  if (normalizedType === "EXTERNAL") {
+    return role === "EXTERNAL_PROJECT_VIEWER" || role === "EXTERNAL_EXECUTOR";
+  }
+  return role === "PROJECT_VIEWER" || role === "PROJECT_EDITOR";
+}
+
+async function requireInternalAuthenticatedUser(req: Request, res: Response, prisma: PrismaClient) {
+  const user = await requireAuthenticatedRouteUser(req, res, prisma);
+  if (!user) {
+    return null;
+  }
+
+  if (String(user.type).toUpperCase() === "EXTERNAL") {
+    res.status(403).json({ ok: false, message: "Forbidden." });
+    return null;
+  }
+
+  return user;
+}
+
+async function listProjectAccessEntries(prisma: PrismaClient, projectId: string) {
+  const [project, explicitEntries] = await Promise.all([
+    prisma.project.findUnique({
+      where: { id: projectId },
+      select: {
+        id: true,
+        ownerUserId: true,
+        deputyUserId: true,
+        participantUserIds: true,
+        internalParticipants: true
+      }
+    }),
+    prisma.projectAccess.findMany({
+      where: {
+        projectId
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            role: true,
+            type: true,
+            externalOrgId: true,
+            isArchived: true,
+            externalOrg: {
+              select: {
+                id: true,
+                name: true
+              }
+            }
+          }
+        }
+      },
+      orderBy: [{ createdAt: "asc" }, { userId: "asc" }]
+    })
+  ]);
+
+  if (!project) {
+    return null;
+  }
+
+  const implicitUserRoles = new Map<string, { role: ProjectAccessRoleValue; source: ProjectAccessSource }>();
+  if (project.ownerUserId) {
+    implicitUserRoles.set(project.ownerUserId, {
+      role: "PROJECT_EDITOR",
+      source: "IMPLICIT_OWNER"
+    });
+  }
+  if (project.deputyUserId) {
+    implicitUserRoles.set(project.deputyUserId, {
+      role: "PROJECT_EDITOR",
+      source: "IMPLICIT_DEPUTY"
+    });
+  }
+
+  const participantIds = [
+    ...new Set(
+      [
+        ...(Array.isArray(project.participantUserIds) ? project.participantUserIds : []),
+        ...(Array.isArray(project.internalParticipants)
+          ? project.internalParticipants.map((entry) =>
+              entry &&
+              typeof entry === "object" &&
+              typeof (entry as { userId?: unknown }).userId === "string"
+                ? (entry as { userId: string }).userId
+                : ""
+            )
+          : [])
+      ].filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim()))
+    )
+  ];
+  participantIds.forEach((userId) => {
+    if (!implicitUserRoles.has(userId)) {
+      implicitUserRoles.set(userId, {
+        role: "PROJECT_VIEWER",
+        source: "IMPLICIT_PARTICIPANT"
+      });
+    }
+  });
+
+  const implicitUserIds = [...implicitUserRoles.keys()];
+  const implicitUsers = implicitUserIds.length
+    ? await prisma.user.findMany({
+        where: {
+          id: {
+            in: implicitUserIds
+          }
+        },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          role: true,
+          type: true,
+          externalOrgId: true,
+          isArchived: true,
+          externalOrg: {
+            select: {
+              id: true,
+              name: true
+            }
+          }
+        }
+      })
+    : [];
+  const implicitUserById = new Map(implicitUsers.map((user) => [user.id, user] as const));
+
+  const implicitDtos = implicitUserIds
+    .map((userId) => {
+      const role = implicitUserRoles.get(userId);
+      const user = implicitUserById.get(userId);
+      if (!role || !user) {
+        return null;
+      }
+      return toProjectAccessEntryDto({
+        source: role.source,
+        entry: {
+          projectId,
+          userId,
+          accessRole: role.role,
+          user
+        }
+      });
+    })
+    .filter((entry): entry is ReturnType<typeof toProjectAccessEntryDto> => Boolean(entry));
+  const explicitDtos = explicitEntries.map((entry) =>
+    toProjectAccessEntryDto({ source: "EXPLICIT", entry })
+  );
+
+  return [...implicitDtos, ...explicitDtos];
+}
+
 export function createProjectsRouter(prisma: PrismaClient) {
   const router = Router();
 
@@ -1301,12 +1523,24 @@ export function createProjectsRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireInternalRouteUser(req, res, prisma);
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
       if (!user) {
         return;
       }
 
-      res.json(await listProjectsSnapshot(prisma));
+      const accessibleProjectIds = await getAccessibleProjectIds(prisma, user);
+      const projects =
+        accessibleProjectIds === null
+          ? await listProjectsSnapshot(prisma)
+          : accessibleProjectIds.length > 0
+          ? await listProjectsSnapshot(prisma, {
+              id: {
+                in: accessibleProjectIds
+              }
+            })
+          : [];
+
+      res.json(await annotateProjectsForUser(prisma, user, projects));
     } catch (error) {
       if (
         error instanceof Error &&
@@ -1325,8 +1559,18 @@ export function createProjectsRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireInternalRouteUser(req, res, prisma);
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
       if (!user) {
+        return;
+      }
+
+      const access = await requireProjectAccess({
+        db: prisma,
+        user,
+        projectId: req.params.id,
+        res
+      });
+      if (!access) {
         return;
       }
 
@@ -1338,7 +1582,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        project
+        project: await annotateProjectForUser(prisma, user, project)
       });
     } catch (error) {
       if (
@@ -1350,6 +1594,175 @@ export function createProjectsRouter(prisma: PrismaClient) {
         res.status(400).json({ ok: false, message: error.message });
         return;
       }
+      next(error);
+    }
+  });
+
+  router.get("/projects/:id/access", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      applyNoStoreHeaders(res);
+
+      const user = await requireInternalAuthenticatedUser(req, res, prisma);
+      if (!user) {
+        return;
+      }
+
+      if (!canManageProjectAccess(user)) {
+        res.status(403).json({ ok: false, message: "Forbidden." });
+        return;
+      }
+
+      const entries = await listProjectAccessEntries(prisma, req.params.id);
+      if (!entries) {
+        res.status(404).json({ ok: false, message: "Project not found." });
+        return;
+      }
+
+      res.json({
+        ok: true,
+        items: entries
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put("/projects/:id/access/:userId", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      applyNoStoreHeaders(res);
+
+      const user = await requireInternalAuthenticatedUser(req, res, prisma);
+      if (!user) {
+        return;
+      }
+
+      if (!canManageProjectAccess(user)) {
+        res.status(403).json({ ok: false, message: "Forbidden." });
+        return;
+      }
+
+      const projectExists = await prisma.project.count({
+        where: {
+          id: req.params.id
+        }
+      });
+      if (!projectExists) {
+        res.status(404).json({ ok: false, message: "Project not found." });
+        return;
+      }
+
+      const accessRole = normalizeProjectAccessRole(req.body?.accessRole);
+      if (!accessRole) {
+        res.status(400).json({ ok: false, message: "Invalid project access role." });
+        return;
+      }
+
+      const targetUser = await prisma.user.findUnique({
+        where: {
+          id: req.params.userId
+        },
+        select: {
+          id: true,
+          type: true,
+          isArchived: true
+        }
+      });
+      if (!targetUser || targetUser.isArchived) {
+        res.status(404).json({ ok: false, message: "User not found." });
+        return;
+      }
+      if (!roleMatchesTargetUserType(accessRole, targetUser.type)) {
+        res.status(400).json({ ok: false, message: "Project access role does not match user type." });
+        return;
+      }
+
+      const note = toOptionalTrimmedString(req.body?.note);
+      const entry = await prisma.projectAccess.upsert({
+        where: {
+          projectId_userId: {
+            projectId: req.params.id,
+            userId: targetUser.id
+          }
+        },
+        create: {
+          projectId: req.params.id,
+          userId: targetUser.id,
+          accessRole,
+          note,
+          grantedByUserId: user.id
+        },
+        update: {
+          accessRole,
+          note,
+          grantedByUserId: user.id
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+              role: true,
+              type: true,
+              externalOrgId: true,
+              isArchived: true,
+              externalOrg: {
+                select: {
+                  id: true,
+                  name: true
+                }
+              }
+            }
+          }
+        }
+      });
+
+      res.json({
+        ok: true,
+        access: toProjectAccessEntryDto({
+          source: "EXPLICIT",
+          entry
+        })
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete("/projects/:id/access/:userId", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      applyNoStoreHeaders(res);
+
+      const user = await requireInternalAuthenticatedUser(req, res, prisma);
+      if (!user) {
+        return;
+      }
+
+      if (!canManageProjectAccess(user)) {
+        res.status(403).json({ ok: false, message: "Forbidden." });
+        return;
+      }
+
+      const projectExists = await prisma.project.count({
+        where: {
+          id: req.params.id
+        }
+      });
+      if (!projectExists) {
+        res.status(404).json({ ok: false, message: "Project not found." });
+        return;
+      }
+
+      await prisma.projectAccess.deleteMany({
+        where: {
+          projectId: req.params.id,
+          userId: req.params.userId
+        }
+      });
+
+      res.json({ ok: true });
+    } catch (error) {
       next(error);
     }
   });
@@ -1443,12 +1856,33 @@ export function createProjectsRouter(prisma: PrismaClient) {
           data: toProjectCreateInput(normalized.project)
         });
         await updateProjectStatus(tx, created.id, normalized.project.status);
+        if (!hasGlobalProjectReadAccess(user)) {
+          await tx.projectAccess.upsert({
+            where: {
+              projectId_userId: {
+                projectId: created.id,
+                userId: user.id
+              }
+            },
+            create: {
+              projectId: created.id,
+              userId: user.id,
+              accessRole: "PROJECT_EDITOR",
+              grantedByUserId: user.id,
+              note: "Automatisch beim Anlegen des Projekts vergeben."
+            },
+            update: {
+              accessRole: "PROJECT_EDITOR",
+              grantedByUserId: user.id
+            }
+          });
+        }
         return created;
       });
 
       res.status(201).json({
         ok: true,
-        project: toProjectDto(project, normalized.project.status)
+        project: await annotateProjectForUser(prisma, user, toProjectDto(project, normalized.project.status))
       });
     } catch (error) {
       if (
@@ -1476,6 +1910,18 @@ export function createProjectsRouter(prisma: PrismaClient) {
       const existing = await findProjectSnapshotById(prisma, req.params.id);
       if (!existing) {
         res.status(404).json({ ok: false, message: "Project not found." });
+        return;
+      }
+      if (
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId: existing.id,
+          domain: "projects",
+          permission: "projects.edit",
+          res
+        }))
+      ) {
         return;
       }
       const participantUserIds = hasOwn(req.body, "internalParticipants") || hasOwn(req.body, "participantUserIds")
@@ -1586,7 +2032,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        project: toProjectDto(updated, normalized.project.status)
+        project: await annotateProjectForUser(prisma, user, toProjectDto(updated, normalized.project.status))
       });
     } catch (error) {
       if (
@@ -1616,6 +2062,18 @@ export function createProjectsRouter(prisma: PrismaClient) {
         res.status(404).json({ ok: false, message: "Project not found." });
         return;
       }
+      if (
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId: existing.id,
+          domain: "projects",
+          permission: "projects.archive",
+          res
+        }))
+      ) {
+        return;
+      }
       const status = await readProjectStatus(prisma, existing.id);
 
       const updated = existing.isArchived
@@ -1632,7 +2090,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        project: toProjectDto(updated, status)
+        project: await annotateProjectForUser(prisma, user, toProjectDto(updated, status))
       });
     } catch (error) {
       next(error);
@@ -1653,6 +2111,18 @@ export function createProjectsRouter(prisma: PrismaClient) {
         res.status(404).json({ ok: false, message: "Project not found." });
         return;
       }
+      if (
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId: existing.id,
+          domain: "projects",
+          permission: "projects.archive",
+          res
+        }))
+      ) {
+        return;
+      }
       const status = await readProjectStatus(prisma, existing.id);
 
       const updated = !existing.isArchived && !existing.archivedAt
@@ -1669,7 +2139,7 @@ export function createProjectsRouter(prisma: PrismaClient) {
 
       res.json({
         ok: true,
-        project: toProjectDto(updated, status)
+        project: await annotateProjectForUser(prisma, user, toProjectDto(updated, status))
       });
     } catch (error) {
       next(error);

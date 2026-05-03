@@ -10,8 +10,15 @@ import { LEGACY_RECOVERY_BLOCK_MESSAGE } from "../legacyRecovery.js";
 import {
   applyNoStoreHeaders,
   requireAdminRoutePermissions,
+  requireAuthenticatedRouteUser,
   requireInternalRouteUser
 } from "./routeAuth.js";
+import {
+  getReadableProjectIdsForDomain,
+  requireProjectDomainRead,
+  requireProjectDomainReadPermission,
+  requireProjectDomainWrite
+} from "../projectAccess.js";
 
 type ObligationEvidenceRequirementsDto = {
   requirePhoto: boolean;
@@ -461,8 +468,9 @@ function toObligationUpdateInput(input: ObligationDto): Prisma.ObligationUncheck
   };
 }
 
-async function listObligationsFromDb(db: DbClient): Promise<ObligationDto[]> {
+async function listObligationsFromDb(db: DbClient, where?: Prisma.ObligationWhereInput): Promise<ObligationDto[]> {
   const obligations = await db.obligation.findMany({
+    where,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }]
   });
 
@@ -475,6 +483,23 @@ async function findObligationById(db: DbClient, id: string) {
       id
     }
   });
+}
+
+async function findObligationProjectId(db: DbClient, id: string) {
+  const obligation = await db.obligation.findUnique({
+    where: {
+      id
+    },
+    select: {
+      legalDocument: {
+        select: {
+          projectId: true
+        }
+      }
+    }
+  });
+
+  return obligation?.legalDocument.projectId ?? null;
 }
 
 async function listObligationIdsFromDb(db: DbClient) {
@@ -914,12 +939,26 @@ export function createObligationsRouter(
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireInternalRouteUser(req, res, prisma);
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
       if (!user) {
         return;
       }
 
-      res.json(await listObligationsFromDb(prisma));
+      const readableProjectIds = await getReadableProjectIdsForDomain(prisma, user, "obligations");
+      const obligations =
+        readableProjectIds === null
+          ? await listObligationsFromDb(prisma)
+          : readableProjectIds.length > 0
+          ? await listObligationsFromDb(prisma, {
+              legalDocument: {
+                projectId: {
+                  in: readableProjectIds
+                }
+              }
+            })
+          : [];
+
+      res.json(obligations);
     } catch (error) {
       next(error);
     }
@@ -929,14 +968,35 @@ export function createObligationsRouter(
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireInternalRouteUser(req, res, prisma);
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
       if (!user) {
+        return;
+      }
+
+      if (!requireProjectDomainReadPermission({ user, domain: "obligations", res })) {
         return;
       }
 
       const obligation = await findObligationById(prisma, req.params.id);
       if (!obligation) {
         res.status(404).json({ ok: false, message: "Obligation not found." });
+        return;
+      }
+      const projectId = await findObligationProjectId(prisma, obligation.id);
+      if (
+        !projectId ||
+        !(await requireProjectDomainRead({
+          db: prisma,
+          user,
+          projectId,
+          domain: "obligations",
+          res,
+          notFoundMessage: "Obligation not found."
+        }))
+      ) {
+        if (!projectId) {
+          res.status(404).json({ ok: false, message: "Obligation not found." });
+        }
         return;
       }
 
@@ -1013,6 +1073,30 @@ export function createObligationsRouter(
         res.status(normalized.status).json({ ok: false, message: normalized.message });
         return;
       }
+      const targetLegalDoc = await prisma.legalDocument.findUnique({
+        where: {
+          id: normalized.obligation.legalDocId
+        },
+        select: {
+          projectId: true
+        }
+      });
+      if (!targetLegalDoc) {
+        res.status(404).json({ ok: false, message: "Legal document not found." });
+        return;
+      }
+      if (
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId: targetLegalDoc.projectId,
+          domain: "obligations",
+          permission: "obligations.create",
+          res
+        }))
+      ) {
+        return;
+      }
 
       const obligation = await prisma.obligation.create({
         data: toObligationCreateInput(normalized.obligation)
@@ -1039,6 +1123,24 @@ export function createObligationsRouter(
       const existingRecord = await findObligationById(prisma, req.params.id);
       if (!existingRecord) {
         res.status(404).json({ ok: false, message: "Obligation not found." });
+        return;
+      }
+      const existingProjectId = await findObligationProjectId(prisma, existingRecord.id);
+      if (
+        !existingProjectId ||
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId: existingProjectId,
+          domain: "obligations",
+          permission: "obligations.edit",
+          res,
+          notFoundMessage: "Obligation not found."
+        }))
+      ) {
+        if (!existingProjectId) {
+          res.status(404).json({ ok: false, message: "Obligation not found." });
+        }
         return;
       }
 
@@ -1130,6 +1232,31 @@ export function createObligationsRouter(
         res.status(normalized.status).json({ ok: false, message: normalized.message });
         return;
       }
+      const targetLegalDoc = await prisma.legalDocument.findUnique({
+        where: {
+          id: normalized.obligation.legalDocId
+        },
+        select: {
+          projectId: true
+        }
+      });
+      if (!targetLegalDoc) {
+        res.status(404).json({ ok: false, message: "Legal document not found." });
+        return;
+      }
+      if (
+        targetLegalDoc.projectId !== existingProjectId &&
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId: targetLegalDoc.projectId,
+          domain: "obligations",
+          permission: "obligations.edit",
+          res
+        }))
+      ) {
+        return;
+      }
 
       const updated = await prisma.obligation.update({
         where: {
@@ -1159,6 +1286,24 @@ export function createObligationsRouter(
       const existing = await findObligationById(prisma, req.params.id);
       if (!existing) {
         res.status(404).json({ ok: false, message: "Obligation not found." });
+        return;
+      }
+      const projectId = await findObligationProjectId(prisma, existing.id);
+      if (
+        !projectId ||
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId,
+          domain: "obligations",
+          permission: "obligations.archive",
+          res,
+          notFoundMessage: "Obligation not found."
+        }))
+      ) {
+        if (!projectId) {
+          res.status(404).json({ ok: false, message: "Obligation not found." });
+        }
         return;
       }
 
@@ -1202,6 +1347,24 @@ export function createObligationsRouter(
         res.status(404).json({ ok: false, message: "Obligation not found." });
         return;
       }
+      const projectId = await findObligationProjectId(prisma, existing.id);
+      if (
+        !projectId ||
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId,
+          domain: "obligations",
+          permission: "obligations.archive",
+          res,
+          notFoundMessage: "Obligation not found."
+        }))
+      ) {
+        if (!projectId) {
+          res.status(404).json({ ok: false, message: "Obligation not found." });
+        }
+        return;
+      }
 
       const updatedRecord = !existing.isArchived && !existing.archivedAt
         ? existing
@@ -1241,7 +1404,28 @@ export function createObligationsRouter(
         return;
       }
 
+      const projectId = await findObligationProjectId(prisma, req.params.id);
+      if (
+        !projectId ||
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId,
+          domain: "obligations",
+          permission: "obligations.archive",
+          res,
+          notFoundMessage: "Obligation not found."
+        }))
+      ) {
+        if (!projectId) {
+          res.status(404).json({ ok: false, message: "Obligation not found." });
+        }
+        return;
+      }
+
       const result = await prisma.$transaction(async (tx) => {
+        await lockObligationHardDeleteTables(tx);
+
         const existing = await findObligationById(tx, req.params.id);
         if (!existing) {
           return {

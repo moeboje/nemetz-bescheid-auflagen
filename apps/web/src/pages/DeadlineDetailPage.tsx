@@ -60,6 +60,10 @@ export default function DeadlineDetailPage() {
   const project = projects.find(
     (item) => item.id === (deadline?.projectId ?? legalDoc?.projectId)
   );
+  const canWriteProject = Boolean(project?.currentUserCanWrite);
+  const canCompleteDeadline = permissions.canCompleteTasks && canWriteProject;
+  const canEditDeadlineStatus = permissions.canEditTasks && canWriteProject;
+  const canEditDeadline = permissions.canEditDeadlines && canWriteProject;
   const scopeLabel = useMemo(() => {
     if (!deadline) {
       return "";
@@ -141,7 +145,7 @@ export default function DeadlineDetailPage() {
           {status !== "DONE" ? (
             <Button
               variant="secondary"
-              disabled={!permissions.canCompleteTasks}
+              disabled={!canCompleteDeadline}
               onClick={() => setCompletionModalOpen(true)}
             >
               {t("deadlines.action.markDone")}
@@ -150,7 +154,7 @@ export default function DeadlineDetailPage() {
             <>
               <Button
                 variant="secondary"
-                disabled={!permissions.canEditTasks}
+                disabled={!canEditDeadlineStatus}
                 onClick={() => reopenDeadline(deadline.id)}
               >
                 {t("deadlines.action.reopen")}
@@ -161,7 +165,7 @@ export default function DeadlineDetailPage() {
             </>
           )}
           <Button
-            disabled={!permissions.canEditDeadlines}
+            disabled={!canEditDeadline}
             onClick={() => setModalOpen(true)}
           >
             {t("common.edit")}

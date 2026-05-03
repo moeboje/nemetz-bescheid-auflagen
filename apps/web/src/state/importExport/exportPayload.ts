@@ -2,6 +2,7 @@ import { getRuntimeConfigSnapshot } from "../../config/runtimeConfig";
 import { clearAllFiles } from "../../services/fileStorage";
 import { listAuthorities } from "../../api/authorities";
 import { listDeadlines } from "../../api/deadlines";
+import { listLegacyDecisions } from "../../api/legacyDecisions";
 import { listLegalDocs } from "../../api/legalDocs";
 import { listObligations } from "../../api/obligations";
 import { listProjectChecklists } from "../../api/projectChecklists";
@@ -20,6 +21,7 @@ import type { ExportDataBundle, ExportPayload } from "./types";
 type ServerDomainReaderResult = {
   authorities: Awaited<ReturnType<typeof readAuthoritiesForExport>>;
   deadlines: Awaited<ReturnType<typeof readDeadlinesForExport>>;
+  legacyDecisions: Awaited<ReturnType<typeof readLegacyDecisionsForExport>>;
   legalDocs: Awaited<ReturnType<typeof readLegalDocsForExport>>;
   obligations: Awaited<ReturnType<typeof readObligationsForExport>>;
   projectChecklists: Awaited<ReturnType<typeof readProjectChecklistsForExport>>;
@@ -126,6 +128,10 @@ async function readLegalDocsForExport() {
   return listLegalDocs();
 }
 
+async function readLegacyDecisionsForExport() {
+  return listLegacyDecisions();
+}
+
 async function readObligationsForExport() {
   return listObligations();
 }
@@ -145,6 +151,7 @@ async function readServerDomainsForExport(): Promise<ServerDomainReaderResult> {
     ["projects", readProjectsForExport],
     ["projectChecklists", readProjectChecklistsForExport],
     ["legalDocs", readLegalDocsForExport],
+    ["legacyDecisions", readLegacyDecisionsForExport],
     ["obligations", readObligationsForExport],
     ["deadlines", readDeadlinesForExport],
     ["taskState", readTaskStateForExport]
@@ -174,6 +181,7 @@ export async function buildStorageExportPayload(
     projects: serverDomains.projects,
     projectChecklists: serverDomains.projectChecklists,
     legalDocs: serverDomains.legalDocs,
+    legacyDecisions: serverDomains.legacyDecisions,
     obligations: serverDomains.obligations,
     deadlines: serverDomains.deadlines,
     taskState: serverDomains.taskState,

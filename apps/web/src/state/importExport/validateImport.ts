@@ -147,6 +147,7 @@ function normalizePayloadShape(value: unknown): ExportPayload | null {
         projects: source.projects as ExportDataBundle["projects"],
         projectChecklists: source.projectChecklists as ExportDataBundle["projectChecklists"],
         legalDocs: source.legalDocs as ExportDataBundle["legalDocs"],
+        legacyDecisions: source.legacyDecisions as ExportDataBundle["legacyDecisions"],
         obligations: source.obligations as ExportDataBundle["obligations"],
         deadlines: source.deadlines as ExportDataBundle["deadlines"],
         taskState: source.taskState as ExportDataBundle["taskState"],
@@ -483,6 +484,7 @@ export function validateImport(value: unknown): ImportValidationResult {
   validateProjects(data.projects, errors);
   validateProjectChecklists(data.projectChecklists, errors);
   validateOptionalArray(data.legalDocs, "data.legalDocs", errors);
+  validateOptionalArray(data.legacyDecisions, "data.legacyDecisions", errors);
   validateOptionalArray(data.obligations, "data.obligations", errors);
   validateOptionalArray(data.deadlines, "data.deadlines", errors);
   validateOptionalArray(data.auditLog, "data.auditLog", errors);
@@ -509,6 +511,9 @@ export function validateImport(value: unknown): ImportValidationResult {
   }
   if (!hasValue(data.legalDocs)) {
     pushMessage(warnings, "import.validation.missingOptionalKey", "data.legalDocs");
+  }
+  if (!hasValue(data.legacyDecisions)) {
+    pushMessage(warnings, "import.validation.missingOptionalKey", "data.legacyDecisions");
   }
   if (!hasValue(data.obligations)) {
     pushMessage(warnings, "import.validation.missingOptionalKey", "data.obligations");

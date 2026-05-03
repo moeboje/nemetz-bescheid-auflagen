@@ -83,7 +83,7 @@ async function seedObligation(evidenceRequirements: {
   requirePhoto?: boolean;
   requireDocument?: boolean;
   requireReport?: boolean;
-}) {
+}, accessUserId?: string) {
   const company = await prisma.company.create({
     data: {
       name: `Task State Company ${requestCounter}`
@@ -127,6 +127,16 @@ async function seedObligation(evidenceRequirements: {
       }
     }
   });
+
+  if (accessUserId) {
+    await prisma.projectAccess.create({
+      data: {
+        projectId: project.id,
+        userId: accessUserId,
+        accessRole: "PROJECT_EDITOR"
+      }
+    });
+  }
 
   return obligation;
 }
@@ -208,9 +218,79 @@ describe("Task state evidence requirements", () => {
     await prisma.role.deleteMany();
   });
 
+  it("requires tasks.view in addition to project access for task-state reads", async () => {
+    await createRole("TASK_PROJECT_ONLY", ["projects.view"]);
+    await createRole("TASK_READER_ONLY", ["tasks.view"]);
+
+    const projectOnlyUser = await createUser(
+      "task-state-project-only@example.com",
+      "ValidPassword1!",
+      "TASK_PROJECT_ONLY"
+    );
+    const taskReader = await createUser(
+      "task-state-reader-only@example.com",
+      "ValidPassword1!",
+      "TASK_READER_ONLY"
+    );
+    const domainNoAccessUser = await createUser(
+      "task-state-reader-no-access@example.com",
+      "ValidPassword1!",
+      "TASK_READER_ONLY"
+    );
+    const obligation = await seedObligation({}, projectOnlyUser.id);
+    const project = await prisma.project.findFirstOrThrow({
+      where: {
+        legalDocuments: {
+          some: {
+            obligations: {
+              some: {
+                id: obligation.id
+              }
+            }
+          }
+        }
+      },
+      select: {
+        id: true
+      }
+    });
+    await prisma.projectAccess.create({
+      data: {
+        projectId: project.id,
+        userId: taskReader.id,
+        accessRole: "PROJECT_VIEWER"
+      }
+    });
+    const id = taskInstanceId(obligation.id);
+    await prisma.taskStateEntry.create({
+      data: {
+        taskInstanceId: id,
+        status: "OPEN",
+        evidence: []
+      }
+    });
+
+    const projectOnlyCookie = await login(projectOnlyUser.email, "ValidPassword1!");
+    const taskReaderCookie = await login(taskReader.email, "ValidPassword1!");
+    const domainNoAccessCookie = await login(domainNoAccessUser.email, "ValidPassword1!");
+
+    const projectOnlyList = await request("/task-state", { cookie: projectOnlyCookie });
+    assert.equal(projectOnlyList.status, 200);
+    assert.deepEqual(await projectOnlyList.json(), {});
+
+    const scopedList = await request("/task-state", { cookie: taskReaderCookie });
+    assert.equal(scopedList.status, 200);
+    const scopedPayload = (await scopedList.json()) as Record<string, unknown>;
+    assert.deepEqual(Object.keys(scopedPayload), [id]);
+
+    const domainNoAccessList = await request("/task-state", { cookie: domainNoAccessCookie });
+    assert.equal(domainNoAccessList.status, 200);
+    assert.deepEqual(await domainNoAccessList.json(), {});
+  });
+
   it("accepts completion with photo and report for photo and document requirements", async () => {
     const user = await createUser("task-state-accept@example.com", "ValidPassword1!");
-    const obligation = await seedObligation({ requirePhoto: true, requireDocument: true });
+    const obligation = await seedObligation({ requirePhoto: true, requireDocument: true }, user.id);
     const cookie = await login(user.email, "ValidPassword1!");
     const id = taskInstanceId(obligation.id);
 
@@ -240,7 +320,7 @@ describe("Task state evidence requirements", () => {
 
   it("rejects completion when a required document is missing", async () => {
     const user = await createUser("task-state-reject@example.com", "ValidPassword1!");
-    const obligation = await seedObligation({ requireDocument: true });
+    const obligation = await seedObligation({ requireDocument: true }, user.id);
     const cookie = await login(user.email, "ValidPassword1!");
     const id = taskInstanceId(obligation.id);
 
@@ -261,7 +341,7 @@ describe("Task state evidence requirements", () => {
 
   it("rejects direct DONE status when required evidence is still missing", async () => {
     const user = await createUser("task-state-status-reject@example.com", "ValidPassword1!");
-    const obligation = await seedObligation({ requireDocument: true });
+    const obligation = await seedObligation({ requireDocument: true }, user.id);
     const cookie = await login(user.email, "ValidPassword1!");
 
     const response = await request(`/task-state/${encodeURIComponent(taskInstanceId(obligation.id))}/status`, {
@@ -280,7 +360,7 @@ describe("Task state evidence requirements", () => {
   it("allows evidence completion for users with tasks.complete", async () => {
     await createRole("TASK_COMPLETE_ONLY", ["tasks.view", "tasks.complete"]);
     const user = await createUser("task-state-evidence-complete@example.com", "ValidPassword1!", "TASK_COMPLETE_ONLY");
-    const obligation = await seedObligation({});
+    const obligation = await seedObligation({}, user.id);
     const cookie = await login(user.email, "ValidPassword1!");
     const id = taskInstanceId(obligation.id);
 
@@ -302,7 +382,7 @@ describe("Task state evidence requirements", () => {
   it("rejects evidence completion for users with tasks.edit but without tasks.complete", async () => {
     await createRole("TASK_EDIT_ONLY", ["tasks.view", "tasks.edit"]);
     const user = await createUser("task-state-evidence-edit-only@example.com", "ValidPassword1!", "TASK_EDIT_ONLY");
-    const obligation = await seedObligation({});
+    const obligation = await seedObligation({}, user.id);
     const cookie = await login(user.email, "ValidPassword1!");
     const id = taskInstanceId(obligation.id);
 
@@ -322,7 +402,7 @@ describe("Task state evidence requirements", () => {
   it("keeps complete and DONE status protected while allowing edit-only reopen", async () => {
     await createRole("TASK_EDIT_REOPEN_ONLY", ["tasks.view", "tasks.edit"]);
     const user = await createUser("task-state-edit-only-reopen@example.com", "ValidPassword1!", "TASK_EDIT_REOPEN_ONLY");
-    const obligation = await seedObligation({});
+    const obligation = await seedObligation({}, user.id);
     const cookie = await login(user.email, "ValidPassword1!");
     const id = taskInstanceId(obligation.id);
 
@@ -372,7 +452,7 @@ describe("Task state evidence requirements", () => {
       "ValidPassword1!",
       "TASK_EDIT_RECONCILE_ONLY"
     );
-    const obligation = await seedObligation({});
+    const obligation = await seedObligation({}, user.id);
     const cookie = await login(user.email, "ValidPassword1!");
     const id = taskInstanceId(obligation.id);
 

@@ -13,6 +13,7 @@ export type BootstrapMode =
   | "baseline-20260420113000_email_notifications_powerautomate_e2_mvp"
   | "baseline-20260422120000_project_status_submission_type"
   | "baseline-20260429103000_obligation_recurrence_external_execution"
+  | "baseline-20260502120000_project_access_legacy_decisions"
   | "partial";
 
 type TableRow = {
@@ -1142,6 +1143,129 @@ const obligationExternalRecurrenceRequirements = {
   ]
 } satisfies SchemaRequirements;
 
+const projectAccessLegacyDecisionsRequirements = {
+  tables: ["ProjectAccess", "LegacyDecision"],
+  columns: [
+    "ProjectAccess.id",
+    "ProjectAccess.projectId",
+    "ProjectAccess.userId",
+    "ProjectAccess.accessRole",
+    "ProjectAccess.note",
+    "ProjectAccess.grantedByUserId",
+    "ProjectAccess.createdAt",
+    "ProjectAccess.updatedAt",
+    "LegacyDecision.id",
+    "LegacyDecision.projectId",
+    "LegacyDecision.title",
+    "LegacyDecision.fileNumber",
+    "LegacyDecision.authorityId",
+    "LegacyDecision.authorityName",
+    "LegacyDecision.issuedAt",
+    "LegacyDecision.validFrom",
+    "LegacyDecision.validUntil",
+    "LegacyDecision.legacyStatus",
+    "LegacyDecision.reviewStatus",
+    "LegacyDecision.relevanceNote",
+    "LegacyDecision.reviewedAt",
+    "LegacyDecision.reviewedByUserId",
+    "LegacyDecision.linkedLegalDocId",
+    "LegacyDecision.supersededByLegalDocId",
+    "LegacyDecision.archivedAt",
+    "LegacyDecision.isArchived",
+    "LegacyDecision.createdAt",
+    "LegacyDecision.updatedAt"
+  ],
+  enumValues: [
+    "ProjectAccessRole.PROJECT_VIEWER",
+    "ProjectAccessRole.PROJECT_EDITOR",
+    "ProjectAccessRole.EXTERNAL_PROJECT_VIEWER",
+    "ProjectAccessRole.EXTERNAL_EXECUTOR",
+    "LegacyDecisionStatus.ARCHIVE_ONLY",
+    "LegacyDecisionStatus.HISTORICALLY_RELEVANT",
+    "LegacyDecisionStatus.PARTIALLY_RELEVANT",
+    "LegacyDecisionStatus.NEEDS_REVIEW",
+    "LegacyDecisionStatus.SUPERSEDED",
+    "LegacyDecisionStatus.CONVERTED",
+    "LegacyDecisionReviewStatus.NOT_REVIEWED",
+    "LegacyDecisionReviewStatus.IN_REVIEW",
+    "LegacyDecisionReviewStatus.REVIEWED"
+  ],
+  indexes: [
+    index("ProjectAccess_projectId_userId_key", "ProjectAccess", ["projectId", "userId"], {
+      unique: true
+    }),
+    index("ProjectAccess_projectId_idx", "ProjectAccess", ["projectId"]),
+    index("ProjectAccess_userId_idx", "ProjectAccess", ["userId"]),
+    index("ProjectAccess_accessRole_idx", "ProjectAccess", ["accessRole"]),
+    index("LegacyDecision_projectId_idx", "LegacyDecision", ["projectId"]),
+    index("LegacyDecision_authorityId_idx", "LegacyDecision", ["authorityId"]),
+    index("LegacyDecision_reviewedByUserId_idx", "LegacyDecision", ["reviewedByUserId"]),
+    index("LegacyDecision_linkedLegalDocId_idx", "LegacyDecision", ["linkedLegalDocId"]),
+    index("LegacyDecision_supersededByLegalDocId_idx", "LegacyDecision", [
+      "supersededByLegalDocId"
+    ]),
+    index("LegacyDecision_legacyStatus_idx", "LegacyDecision", ["legacyStatus"]),
+    index("LegacyDecision_reviewStatus_idx", "LegacyDecision", ["reviewStatus"]),
+    index("LegacyDecision_isArchived_idx", "LegacyDecision", ["isArchived"])
+  ],
+  primaryKeys: [
+    primaryKey("ProjectAccess_pkey", "ProjectAccess", ["id"]),
+    primaryKey("LegacyDecision_pkey", "LegacyDecision", ["id"])
+  ],
+  foreignKeys: [
+    foreignKey("ProjectAccess_projectId_fkey", "ProjectAccess", ["projectId"], "Project", [
+      "id"
+    ], { onDelete: "CASCADE", onUpdate: "CASCADE" }),
+    foreignKey("ProjectAccess_userId_fkey", "ProjectAccess", ["userId"], "User", ["id"], {
+      onDelete: "CASCADE",
+      onUpdate: "CASCADE"
+    }),
+    foreignKey(
+      "ProjectAccess_grantedByUserId_fkey",
+      "ProjectAccess",
+      ["grantedByUserId"],
+      "User",
+      ["id"],
+      { onDelete: "SET NULL", onUpdate: "CASCADE" }
+    ),
+    foreignKey("LegacyDecision_projectId_fkey", "LegacyDecision", ["projectId"], "Project", [
+      "id"
+    ], { onDelete: "CASCADE", onUpdate: "CASCADE" }),
+    foreignKey(
+      "LegacyDecision_authorityId_fkey",
+      "LegacyDecision",
+      ["authorityId"],
+      "Authority",
+      ["id"],
+      { onDelete: "SET NULL", onUpdate: "CASCADE" }
+    ),
+    foreignKey(
+      "LegacyDecision_reviewedByUserId_fkey",
+      "LegacyDecision",
+      ["reviewedByUserId"],
+      "User",
+      ["id"],
+      { onDelete: "SET NULL", onUpdate: "CASCADE" }
+    ),
+    foreignKey(
+      "LegacyDecision_linkedLegalDocId_fkey",
+      "LegacyDecision",
+      ["linkedLegalDocId"],
+      "LegalDocument",
+      ["id"],
+      { onDelete: "SET NULL", onUpdate: "CASCADE" }
+    ),
+    foreignKey(
+      "LegacyDecision_supersededByLegalDocId_fkey",
+      "LegacyDecision",
+      ["supersededByLegalDocId"],
+      "LegalDocument",
+      ["id"],
+      { onDelete: "SET NULL", onUpdate: "CASCADE" }
+    )
+  ]
+} satisfies SchemaRequirements;
+
 function mergeRequirements(...requirements: SchemaRequirements[]): SchemaRequirements {
   return {
     tables: requirements.flatMap((requirement) => requirement.tables),
@@ -1176,6 +1300,15 @@ const projectStatusSubmissionTypeBaselineRequirements = mergeRequirements(
 );
 
 export const baselineStages = [
+  {
+    mode: "baseline-20260502120000_project_access_legacy_decisions",
+    introduced: projectAccessLegacyDecisionsRequirements,
+    requirements: mergeRequirements(
+      projectStatusSubmissionTypeBaselineRequirements,
+      obligationExternalRecurrenceRequirements,
+      projectAccessLegacyDecisionsRequirements
+    )
+  },
   {
     mode: "baseline-20260429103000_obligation_recurrence_external_execution",
     introduced: obligationExternalRecurrenceRequirements,

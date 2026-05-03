@@ -4,8 +4,15 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import {
   applyNoStoreHeaders,
   requireAdminRoutePermissions,
+  requireAuthenticatedRouteUser,
   requireInternalRouteUser
 } from "./routeAuth.js";
+import {
+  getReadableProjectIdsForDomain,
+  requireProjectDomainRead,
+  requireProjectDomainReadPermission,
+  requireProjectDomainWrite
+} from "../projectAccess.js";
 
 const CHECKLIST_ITEM_STATUS_VALUES = [
   "OPEN",
@@ -411,17 +418,32 @@ async function readProjectChecklistByProjectId(db: DbClient, projectId: string) 
   );
 }
 
-async function listProjectChecklistSnapshots(db: DbClient) {
+async function listProjectChecklistSnapshots(db: DbClient, projectIds?: string[]) {
+  if (projectIds && projectIds.length === 0) {
+    return [];
+  }
+
   const checklistRows = await db.$queryRaw<DbProjectChecklistRow[]>(
-    Prisma.sql`
-      SELECT
-        "id",
-        "projectId",
-        "createdAt",
-        "updatedAt"
-      FROM "ProjectChecklist"
-      ORDER BY "projectId" ASC
-    `
+    projectIds
+      ? Prisma.sql`
+          SELECT
+            "id",
+            "projectId",
+            "createdAt",
+            "updatedAt"
+          FROM "ProjectChecklist"
+          WHERE "projectId" IN (${Prisma.join(projectIds)})
+          ORDER BY "projectId" ASC
+        `
+      : Prisma.sql`
+          SELECT
+            "id",
+            "projectId",
+            "createdAt",
+            "updatedAt"
+          FROM "ProjectChecklist"
+          ORDER BY "projectId" ASC
+        `
   );
 
   if (checklistRows.length === 0) {
@@ -517,12 +539,17 @@ export function createProjectChecklistsRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireInternalRouteUser(req, res, prisma);
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
       if (!user) {
         return;
       }
 
-      res.json(await listProjectChecklistSnapshots(prisma));
+      const readableProjectIds = await getReadableProjectIdsForDomain(prisma, user, "projectChecklists");
+      res.json(
+        readableProjectIds === null
+          ? await listProjectChecklistSnapshots(prisma)
+          : await listProjectChecklistSnapshots(prisma, readableProjectIds)
+      );
     } catch (error) {
       next(error);
     }
@@ -532,14 +559,29 @@ export function createProjectChecklistsRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireInternalRouteUser(req, res, prisma);
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
       if (!user) {
+        return;
+      }
+
+      if (!requireProjectDomainReadPermission({ user, domain: "projectChecklists", res })) {
         return;
       }
 
       const projectExists = await ensureProjectExists(prisma, req.params.id);
       if (!projectExists) {
         res.status(404).json({ ok: false, message: "Project not found." });
+        return;
+      }
+      if (
+        !(await requireProjectDomainRead({
+          db: prisma,
+          user,
+          projectId: req.params.id,
+          domain: "projectChecklists",
+          res
+        }))
+      ) {
         return;
       }
 
@@ -565,6 +607,18 @@ export function createProjectChecklistsRouter(prisma: PrismaClient) {
       const projectExists = await ensureProjectExists(prisma, req.params.id);
       if (!projectExists) {
         res.status(404).json({ ok: false, message: "Project not found." });
+        return;
+      }
+      if (
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId: req.params.id,
+          domain: "projectChecklists",
+          permission: "projects.edit",
+          res
+        }))
+      ) {
         return;
       }
 
@@ -605,6 +659,18 @@ export function createProjectChecklistsRouter(prisma: PrismaClient) {
       const projectExists = await ensureProjectExists(prisma, req.params.id);
       if (!projectExists) {
         res.status(404).json({ ok: false, message: "Project not found." });
+        return;
+      }
+      if (
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId: req.params.id,
+          domain: "projectChecklists",
+          permission: "projects.edit",
+          res
+        }))
+      ) {
         return;
       }
 

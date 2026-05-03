@@ -234,7 +234,12 @@ function normalizeProject(value: Partial<Project>, index: number): Project | nul
     archivedAt: value.archivedAt ?? undefined,
     isArchived: toBoolean(value.isArchived || value.archivedAt),
     createdAt,
-    updatedAt
+    updatedAt,
+    currentUserAccessRole: value.currentUserAccessRole,
+    currentUserAccessSource: value.currentUserAccessSource,
+    currentUserCanWrite: value.currentUserCanWrite,
+    canUpdate: value.canUpdate,
+    canArchive: value.canArchive
   };
 }
 
@@ -261,7 +266,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
   const [projects, setProjects] = useState<Project[]>([]);
 
   const reloadProjects = useCallback(async () => {
-    if (!authUser || authUser.type === "EXTERNAL") {
+    if (!authUser) {
       setProjects([]);
       clearPersistedValue(PROJECTS_STORAGE_KEY);
       return [];
@@ -274,7 +279,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
   }, [authUser]);
 
   useEffect(() => {
-    if (!authUser || authUser.type === "EXTERNAL") {
+    if (!authUser) {
       setProjects([]);
       clearPersistedValue(PROJECTS_STORAGE_KEY);
       return;

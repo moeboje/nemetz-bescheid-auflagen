@@ -76,6 +76,10 @@ export default function LegalDocPage() {
 
   const legalDoc = useMemo(() => legalDocs.find((doc) => doc.id === id), [id, legalDocs]);
   const docProject = projects.find((project) => project.id === legalDoc?.projectId);
+  const canWriteInProject = Boolean(docProject?.currentUserCanWrite);
+  const canEditLegalDoc = canWriteInProject && permissions.canEditLegalDocs;
+  const canEditObligationsInProject = canWriteInProject && permissions.canEditObligations;
+  const canEditDeadlinesInProject = canWriteInProject && permissions.canEditDeadlines;
   const referencingProjects = useMemo(
     () =>
       projects.filter((project) =>
@@ -259,7 +263,7 @@ export default function LegalDocPage() {
           {!legalDoc.isArchived ? (
             <Button
               variant="secondary"
-              disabled={!permissions.canEditLegalDocs}
+              disabled={!canEditLegalDoc}
               onClick={() => setArchiveModalOpen(true)}
             >
               {t("common.archive")}
@@ -267,7 +271,7 @@ export default function LegalDocPage() {
           ) : (
             <Button
               variant="secondary"
-              disabled={!permissions.canEditLegalDocs}
+              disabled={!canEditLegalDoc}
               onClick={() => void restoreLegalDoc(legalDoc.id)}
             >
               {t("common.restore")}
@@ -423,7 +427,7 @@ export default function LegalDocPage() {
           <div className="sectionHeader">
             <h2 className="sectionTitle">{t("legalDoc.obligations.titleSection")}</h2>
             <Button
-              disabled={!permissions.canEditObligations}
+              disabled={!canEditObligationsInProject}
               onClick={() => setObligationModalOpen(true)}
             >
               {t("legalDoc.obligations.actionNew")}
@@ -443,7 +447,7 @@ export default function LegalDocPage() {
                 </IconButton>
                 <IconButton
                   ariaLabel={t("obligations.action.edit")}
-                  disabled={!permissions.canEditObligations}
+                  disabled={!canEditObligationsInProject}
                   onClick={() => {
                     setEditingObligationId(row.id);
                     setObligationModalOpen(true);
@@ -462,7 +466,7 @@ export default function LegalDocPage() {
           <div className="sectionHeader">
             <h2 className="sectionTitle">{t("legalDocs.detail.tabs.deadlines")}</h2>
             <Button
-              disabled={!permissions.canEditDeadlines}
+              disabled={!canEditDeadlinesInProject}
               onClick={() => setDeadlineModalOpen(true)}
             >
               {t("deadlines.new")}
@@ -482,7 +486,7 @@ export default function LegalDocPage() {
                 </IconButton>
                 <IconButton
                   ariaLabel={t("common.edit")}
-                  disabled={!permissions.canEditDeadlines}
+                  disabled={!canEditDeadlinesInProject}
                   onClick={() => {
                     setEditingDeadlineId(row.id);
                     setDeadlineModalOpen(true);
@@ -502,7 +506,7 @@ export default function LegalDocPage() {
             ownerType="LEGAL_DOC"
             ownerId={legalDoc.id}
             titleKey="legalDoc.section.attachments"
-            allowUpload={permissions.canEditLegalDocs}
+            allowUpload={canEditLegalDoc}
             legacyItems={legalDoc.attachments}
           />
         </Card>
@@ -510,7 +514,11 @@ export default function LegalDocPage() {
 
       {tab === "notes" ? (
         <Card>
-          <CommentsPanel entityType="LEGAL_DOC" entityId={legalDoc.id} />
+          <CommentsPanel
+            entityType="LEGAL_DOC"
+            entityId={legalDoc.id}
+            canWrite={canEditLegalDoc}
+          />
         </Card>
       ) : null}
 

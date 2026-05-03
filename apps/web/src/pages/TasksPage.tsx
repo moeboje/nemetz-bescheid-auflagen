@@ -148,6 +148,8 @@ export default function TasksPage() {
     () => new Map(projects.map((project) => [project.id, project.title] as const)),
     [projects]
   );
+  const canWriteTaskProject = (task: (typeof tasks)[number]) =>
+    Boolean(projects.find((project) => project.id === task.projectId)?.currentUserCanWrite);
 
   const completionTask = useMemo(
     () => tasks.find((task) => task.id === completionTaskId),
@@ -375,14 +377,19 @@ export default function TasksPage() {
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={!permissions.canCompleteTasks}
+                disabled={!permissions.canCompleteTasks || !canWriteTaskProject(task)}
                 onClick={() => setCompletionTaskId(task.id)}
               >
                 {t("tasks.actions.complete")}
               </Button>
             ) : (
               <>
-                <Button size="sm" variant="ghost" onClick={() => reopenTask(task.id)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={!permissions.canEditTasks || !canWriteTaskProject(task)}
+                  onClick={() => reopenTask(task.id)}
+                >
                   {t("tasks.action.reopen")}
                 </Button>
                 <Button size="sm" variant="secondary" onClick={() => setEvidenceTaskId(task.id)}>

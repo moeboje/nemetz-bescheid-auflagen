@@ -1336,8 +1336,8 @@ export default function AdminPage() {
         </button>
         <button
           type="button"
-          className={`tabButton ${tab === "users" ? "tabButtonActive" : ""}`}
-          onClick={() => setTab("users")}
+          className="tabButton"
+          onClick={() => navigate("/admin/users")}
         >
           {t("admin.tabs.users")}
         </button>

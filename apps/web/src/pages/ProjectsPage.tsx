@@ -369,22 +369,28 @@ export default function ProjectsPage() {
         </label>
       </Card>
 
-      <DataTable
-        columns={columns}
-        data={filteredProjects}
-        getRowKey={(project) => project.id}
-        className="tableSticky"
-        rowActions={(project) => (
-          <div className="tableActions">
-            <IconButton
-              ariaLabel={t("projects.action.view")}
-              onClick={() => navigate(project.id)}
-            >
-              <EyeIcon />
-            </IconButton>
-          </div>
-        )}
-      />
+      {projects.length === 0 ? (
+        <Card>
+          <p className="placeholderText">{t("projects.empty.assigned")}</p>
+        </Card>
+      ) : (
+        <DataTable
+          columns={columns}
+          data={filteredProjects}
+          getRowKey={(project) => project.id}
+          className="tableSticky"
+          rowActions={(project) => (
+            <div className="tableActions">
+              <IconButton
+                ariaLabel={t("projects.action.view")}
+                onClick={() => navigate(project.id)}
+              >
+                <EyeIcon />
+              </IconButton>
+            </div>
+          )}
+        />
+      )}
 
       <ProjectModal open={modalOpen} onClose={() => setModalOpen(false)} />
     </div>

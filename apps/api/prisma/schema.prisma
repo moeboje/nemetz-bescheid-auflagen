@@ -31,6 +31,28 @@ enum ChecklistItemStatus {
   NOT_REQUIRED
 }
 
+enum ProjectAccessRole {
+  PROJECT_VIEWER
+  PROJECT_EDITOR
+  EXTERNAL_PROJECT_VIEWER
+  EXTERNAL_EXECUTOR
+}
+
+enum LegacyDecisionStatus {
+  ARCHIVE_ONLY
+  HISTORICALLY_RELEVANT
+  PARTIALLY_RELEVANT
+  NEEDS_REVIEW
+  SUPERSEDED
+  CONVERTED
+}
+
+enum LegacyDecisionReviewStatus {
+  NOT_REVIEWED
+  IN_REVIEW
+  REVIEWED
+}
+
 model User {
   id                            String                        @id @default(cuid())
   firstName                     String
@@ -72,6 +94,8 @@ model User {
   externalOrg                   ExternalOrganization?         @relation(fields: [externalOrgId], references: [id], onDelete: SetNull)
   ownedProjects                 Project[]                     @relation("ProjectOwner")
   deputyProjects                Project[]                     @relation("ProjectDeputy")
+  projectAccesses               ProjectAccess[]               @relation("ProjectAccessUser")
+  grantedProjectAccesses        ProjectAccess[]               @relation("ProjectAccessGrantedBy")
   ownedObligations              Obligation[]                  @relation("ObligationOwner")
   deputyObligations             Obligation[]                  @relation("ObligationDeputy")
   externalObligations           Obligation[]                  @relation("ObligationExternalUser")
@@ -79,6 +103,7 @@ model User {
   deputyDeadlines               Deadline[]                    @relation("DeadlineDeputy")
   completedDeadlines            Deadline[]                    @relation("DeadlineCompletedBy")
   completedTaskStateEntries     TaskStateEntry[]              @relation("TaskStateCompletedBy")
+  reviewedLegacyDecisions       LegacyDecision[]              @relation("LegacyDecisionReviewedBy")
 
   @@index([isArchived])
   @@index([role])
@@ -241,6 +266,7 @@ model Authority {
   legalDocs  LegalDocument[]
   projects   Project[]
   deadlines  Deadline[]
+  legacyDecisions LegacyDecision[]
 
   @@index([isArchived])
 }
@@ -303,6 +329,8 @@ model Project {
   authorityContact     AuthorityContact?      @relation(fields: [authorityContactId], references: [id])
   ownerUser            User?                  @relation("ProjectOwner", fields: [ownerUserId], references: [id])
   deputyUser           User?                  @relation("ProjectDeputy", fields: [deputyUserId], references: [id])
+  accessEntries        ProjectAccess[]
+  legacyDecisions      LegacyDecision[]
 
   @@index([companyId])
   @@index([siteId])
@@ -313,6 +341,25 @@ model Project {
   @@index([deputyUserId])
   @@index([submissionType])
   @@index([isArchived])
+}
+
+model ProjectAccess {
+  id              String            @id @default(cuid())
+  projectId       String
+  userId          String
+  accessRole      ProjectAccessRole
+  note            String?
+  grantedByUserId String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  project         Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user            User              @relation("ProjectAccessUser", fields: [userId], references: [id], onDelete: Cascade)
+  grantedByUser   User?             @relation("ProjectAccessGrantedBy", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, userId])
+  @@index([projectId])
+  @@index([userId])
+  @@index([accessRole])
 }
 
 model ProjectChecklist {
@@ -374,10 +421,49 @@ model LegalDocument {
   authorityContact   AuthorityContact? @relation(fields: [authorityContactId], references: [id], onDelete: SetNull)
   obligations        Obligation[]
   deadlines          Deadline[]
+  linkedLegacyDecisions LegacyDecision[] @relation("LegacyDecisionLinkedLegalDoc")
+  supersededLegacyDecisions LegacyDecision[] @relation("LegacyDecisionSupersededByLegalDoc")
 
   @@index([projectId])
   @@index([authorityId])
   @@index([authorityContactId])
+  @@index([isArchived])
+}
+
+model LegacyDecision {
+  id                    String                     @id
+  projectId             String
+  title                 String
+  fileNumber            String?
+  authorityId           String?
+  authorityName         String?
+  issuedAt              String?
+  validFrom             String?
+  validUntil            String?
+  legacyStatus          LegacyDecisionStatus       @default(ARCHIVE_ONLY)
+  reviewStatus          LegacyDecisionReviewStatus @default(NOT_REVIEWED)
+  relevanceNote         String?
+  reviewedAt            DateTime?
+  reviewedByUserId      String?
+  linkedLegalDocId      String?
+  supersededByLegalDocId String?
+  archivedAt            DateTime?
+  isArchived            Boolean                    @default(false)
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
+  project               Project                    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  authority             Authority?                 @relation(fields: [authorityId], references: [id], onDelete: SetNull)
+  reviewedByUser        User?                      @relation("LegacyDecisionReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  linkedLegalDoc        LegalDocument?             @relation("LegacyDecisionLinkedLegalDoc", fields: [linkedLegalDocId], references: [id], onDelete: SetNull)
+  supersededByLegalDoc  LegalDocument?             @relation("LegacyDecisionSupersededByLegalDoc", fields: [supersededByLegalDocId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([authorityId])
+  @@index([reviewedByUserId])
+  @@index([linkedLegalDocId])
+  @@index([supersededByLegalDocId])
+  @@index([legacyStatus])
+  @@index([reviewStatus])
   @@index([isArchived])
 }
 

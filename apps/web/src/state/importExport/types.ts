@@ -2,6 +2,7 @@ import type { RuntimeFeatures } from "../../config/runtimeConfig";
 import type { Authority, AuthorityContact } from "../../data/authorities";
 import type { Deadline } from "../../data/deadlines";
 import type { LegalDoc } from "../../data/legalDocs";
+import type { LegacyDecision } from "../../data/legacyDecisions";
 import type { Obligation } from "../../data/obligations";
 import type { ProjectChecklist } from "../../data/projectChecklists";
 import type { Project } from "../../data/projects";
@@ -21,6 +22,7 @@ export type ExportDataBundle = {
   projects?: Project[];
   projectChecklists?: ProjectChecklist[];
   legalDocs?: LegalDoc[];
+  legacyDecisions?: LegacyDecision[];
   obligations?: Obligation[];
   deadlines?: Deadline[];
   taskState?: TaskStateMap;

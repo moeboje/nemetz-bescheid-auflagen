@@ -69,11 +69,22 @@ import { ExternalOrgsProvider } from "./state/ExternalOrgsStore";
 
 const MODULE_PREFIX = "compliance";
 const MODULE_BASE_PATH = `/${MODULE_PREFIX}`;
+const ADMIN_BASE_PATH = "/admin";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "nemetz.sidebarCollapsed";
 
 function isPersonalSecurityRoute(pathname: string) {
   const normalizedPath = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
   return normalizedPath.endsWith("/account/security") || normalizedPath.endsWith("/settings/security");
+}
+
+function isAdminRoute(pathname: string) {
+  const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  return (
+    normalizedPath === ADMIN_BASE_PATH ||
+    normalizedPath.startsWith(`${ADMIN_BASE_PATH}/`) ||
+    normalizedPath === `${MODULE_BASE_PATH}/admin` ||
+    normalizedPath.startsWith(`${MODULE_BASE_PATH}/admin/`)
+  );
 }
 
 function isTasksReportPrintRoute(pathname: string) {
@@ -176,18 +187,18 @@ function AppLayout() {
   const accountPath = `${MODULE_BASE_PATH}/account`;
   const personalSecurityPath = `${MODULE_BASE_PATH}/account/security`;
   const defaultAdminPath = permissions.canViewUsersAdmin
-    ? `${MODULE_BASE_PATH}/admin/users`
+    ? `${ADMIN_BASE_PATH}/users`
     : permissions.canViewRolesAdmin
-    ? `${MODULE_BASE_PATH}/admin/roles`
-    : permissions.canViewNotificationsAdmin
-    ? `${MODULE_BASE_PATH}/admin/notifications`
-    : permissions.canViewExternalOrgsAdmin
-    ? `${MODULE_BASE_PATH}/admin/external-orgs`
-    : permissions.canViewAuthoritiesAdmin
-    ? `${MODULE_BASE_PATH}/admin/authorities`
+    ? `${ADMIN_BASE_PATH}/roles`
     : permissions.canViewSecurityAdmin
-    ? `${MODULE_BASE_PATH}/admin/security`
-    : `${MODULE_BASE_PATH}/admin`;
+    ? `${ADMIN_BASE_PATH}/security`
+    : permissions.canViewExternalOrgsAdmin
+    ? `${ADMIN_BASE_PATH}/external-orgs`
+    : permissions.canViewAuthoritiesAdmin
+    ? `${ADMIN_BASE_PATH}/authorities`
+    : permissions.canViewNotificationsAdmin
+    ? `${ADMIN_BASE_PATH}/notifications`
+    : ADMIN_BASE_PATH;
 
   React.useEffect(() => {
     saveToStorage(SIDEBAR_COLLAPSED_STORAGE_KEY, sidebarCollapsed);
@@ -338,7 +349,7 @@ function AppLayout() {
     {
       key: "admin",
       label: t("nav.admin"),
-      path: canAccessLegacyAdmin ? `${MODULE_BASE_PATH}/admin` : defaultAdminPath,
+      path: defaultAdminPath,
       icon: <AdminIcon />,
       visible: permissions.canViewAdmin
     }
@@ -388,7 +399,7 @@ function AppLayout() {
                 icon={item.icon}
                 collapsed={sidebarNavCollapsed}
                 tooltip={item.label}
-                active={location.pathname.startsWith(item.path)}
+                active={item.key === "admin" ? isAdminRoute(location.pathname) : location.pathname.startsWith(item.path)}
                 onClick={() => navigate(item.path)}
               >
                 {item.label}
@@ -542,7 +553,7 @@ function AppLayout() {
             path="admin"
             element={
               permissions.canViewAdmin ? (
-                canAccessLegacyAdmin ? <AdminPage /> : <Navigate to={defaultAdminPath} replace />
+                <Navigate to={defaultAdminPath} replace />
               ) : (
                 <Navigate to={restrictedFallback} replace />
               )
@@ -550,27 +561,27 @@ function AppLayout() {
           />
           <Route
             path="admin/users"
-            element={permissions.canViewUsersAdmin ? <AdminUsersPage /> : <Navigate to={restrictedFallback} replace />}
+            element={permissions.canViewUsersAdmin ? <Navigate to={`${ADMIN_BASE_PATH}/users`} replace /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route
             path="admin/roles"
-            element={permissions.canViewRolesAdmin ? <AdminRolesPage /> : <Navigate to={restrictedFallback} replace />}
+            element={permissions.canViewRolesAdmin ? <Navigate to={`${ADMIN_BASE_PATH}/roles`} replace /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route
             path="admin/external-orgs"
-            element={permissions.canViewExternalOrgsAdmin ? <AdminExternalOrgsPage /> : <Navigate to={restrictedFallback} replace />}
+            element={permissions.canViewExternalOrgsAdmin ? <Navigate to={`${ADMIN_BASE_PATH}/external-orgs`} replace /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route
             path="admin/authorities"
-            element={permissions.canViewAuthoritiesAdmin ? <AdminAuthoritiesPage /> : <Navigate to={restrictedFallback} replace />}
+            element={permissions.canViewAuthoritiesAdmin ? <Navigate to={`${ADMIN_BASE_PATH}/authorities`} replace /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route
             path="admin/security"
-            element={permissions.canViewSecurityAdmin ? <AdminSecurityPage /> : <Navigate to={restrictedFallback} replace />}
+            element={permissions.canViewSecurityAdmin ? <Navigate to={`${ADMIN_BASE_PATH}/security`} replace /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route
             path="admin/notifications"
-            element={permissions.canViewNotificationsAdmin ? <AdminNotificationsPage /> : <Navigate to={restrictedFallback} replace />}
+            element={permissions.canViewNotificationsAdmin ? <Navigate to={`${ADMIN_BASE_PATH}/notifications`} replace /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route path="account" element={<AccountPage />} />
           <Route path="account/security" element={<SecuritySettingsPage />} />

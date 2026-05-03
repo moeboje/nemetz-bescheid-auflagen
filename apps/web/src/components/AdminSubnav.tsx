@@ -55,10 +55,6 @@ const ITEMS: AdminSubnavItem[] = [
   }
 ];
 
-function withCompliancePrefix(pathname: string) {
-  return pathname.startsWith("/compliance/") || pathname === "/compliance";
-}
-
 function getActiveKey(pathname: string): AdminSubnavItem["key"] {
   if (pathname.includes("/admin/roles")) {
     return "roles";
@@ -83,7 +79,6 @@ export default function AdminSubnav() {
   const navigate = useNavigate();
   const { permissions } = useAuthorization();
   const activeKey = getActiveKey(location.pathname);
-  const prefix = withCompliancePrefix(location.pathname) ? "/compliance" : "";
   const visibleItems = ITEMS.filter((item) => item.isVisible(permissions));
 
   return (
@@ -95,7 +90,7 @@ export default function AdminSubnav() {
           role="tab"
           aria-selected={item.key === activeKey}
           className={`tabButton ${item.key === activeKey ? "tabButtonActive" : ""}`}
-          onClick={() => navigate(`${prefix}${item.path}`)}
+          onClick={() => navigate(item.path)}
         >
           {t(item.labelKey)}
         </button>

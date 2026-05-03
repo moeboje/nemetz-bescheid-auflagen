@@ -64,6 +64,47 @@ export type Project = {
   isArchived: boolean;
   createdAt: string;
   updatedAt: string;
+  currentUserAccessRole?: ProjectAccessRole;
+  currentUserAccessSource?: ProjectAccessSource;
+  currentUserCanWrite?: boolean;
+  canUpdate?: boolean;
+  canArchive?: boolean;
+};
+
+export type ProjectAccessRole =
+  | "PROJECT_VIEWER"
+  | "PROJECT_EDITOR"
+  | "EXTERNAL_PROJECT_VIEWER"
+  | "EXTERNAL_EXECUTOR";
+
+export type ProjectAccessSource =
+  | "GLOBAL"
+  | "IMPLICIT_OWNER"
+  | "IMPLICIT_DEPUTY"
+  | "IMPLICIT_PARTICIPANT"
+  | "EXPLICIT";
+
+export type ProjectAccessEntry = {
+  id?: string;
+  projectId: string;
+  userId: string;
+  accessRole: ProjectAccessRole;
+  note?: string;
+  source: ProjectAccessSource;
+  grantedByUserId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  user?: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    email: string;
+    role: string;
+    type: "INTERNAL" | "EXTERNAL";
+    externalOrgId?: string;
+    externalOrgName?: string;
+    isArchived: boolean;
+  };
 };
 
 const seedTimestamp = "2026-02-01T09:00:00.000Z";

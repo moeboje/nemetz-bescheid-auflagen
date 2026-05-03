@@ -8,9 +8,17 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import {
   applyNoStoreHeaders,
   requireAdminRoutePermissions,
-  requireInternalRouteUser
+  requireAuthenticatedRouteUser,
+  requireInternalRouteUser,
+  type RouteUser
 } from "./routeAuth.js";
 import { hasPermission } from "../accessControl.js";
+import {
+  getReadableProjectIdsForDomain,
+  hasGlobalProjectReadAccess,
+  requireProjectDomainWrite,
+  resolveTaskInstanceProjectId
+} from "../projectAccess.js";
 
 type AttachmentKindDto = "PHOTO" | "DOCUMENT" | "REPORT";
 type AttachmentStorageDto = "indexeddb" | "none";
@@ -509,14 +517,85 @@ function toTaskStateEntryUpdateInput(entry: TaskStateEntryDto): Prisma.TaskState
   };
 }
 
-async function listTaskStateFromDb(db: DbClient): Promise<TaskStateMapDto> {
+async function listTaskStateFromDb(db: DbClient, taskInstanceIds?: string[]): Promise<TaskStateMapDto> {
+  if (taskInstanceIds && taskInstanceIds.length === 0) {
+    return {};
+  }
+
   const rows = await db.taskStateEntry.findMany({
+    where: taskInstanceIds
+      ? {
+          taskInstanceId: {
+            in: taskInstanceIds
+          }
+        }
+      : undefined,
     orderBy: [{ updatedAt: "desc" }, { taskInstanceId: "asc" }]
   });
 
   return Object.fromEntries(
     rows.map((row) => [row.taskInstanceId, toTaskStateEntryDto(row)] as const)
   );
+}
+
+async function listAccessibleTaskInstanceIds(db: DbClient, projectIds: string[]) {
+  if (projectIds.length === 0) {
+    return [];
+  }
+
+  const obligations = await db.obligation.findMany({
+    where: {
+      legalDocument: {
+        projectId: {
+          in: projectIds
+        }
+      }
+    },
+    select: {
+      id: true
+    }
+  });
+  const obligationIds = new Set(obligations.map((obligation) => obligation.id));
+  const rows = await db.taskStateEntry.findMany({
+    select: {
+      taskInstanceId: true
+    }
+  });
+
+  return rows
+    .map((row) => row.taskInstanceId)
+    .filter((taskInstanceId) => {
+      const parsed = parseObligationTaskInstanceId(taskInstanceId);
+      return parsed ? obligationIds.has(parsed.obligationId) : false;
+    });
+}
+
+async function requireTaskInstanceWriteAccess(input: {
+  prisma: PrismaClient;
+  taskInstanceId: string;
+  user: RouteUser;
+  res: Response;
+  permission: "tasks.edit" | "tasks.complete";
+}) {
+  if (!input.user) {
+    return false;
+  }
+
+  const projectId = await resolveTaskInstanceProjectId(input.prisma, input.taskInstanceId);
+  if (!projectId) {
+    input.res.status(404).json({ ok: false, message: "Task not found." });
+    return false;
+  }
+
+  return requireProjectDomainWrite({
+    db: input.prisma,
+    user: input.user,
+    projectId,
+    domain: "tasks",
+    permission: input.permission,
+    res: input.res,
+    notFoundMessage: "Task not found."
+  });
 }
 
 async function findTaskStateEntry(db: DbClient, taskInstanceId: string) {
@@ -623,12 +702,21 @@ export function createTaskStateRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireInternalRouteUser(req, res, prisma);
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
       if (!user) {
         return;
       }
 
-      res.json(await listTaskStateFromDb(prisma));
+      const readableProjectIds = await getReadableProjectIdsForDomain(prisma, user, "tasks");
+      const taskState =
+        readableProjectIds === null
+          ? await listTaskStateFromDb(prisma)
+          : await listTaskStateFromDb(
+              prisma,
+              await listAccessibleTaskInstanceIds(prisma, readableProjectIds)
+            );
+
+      res.json(taskState);
     } catch (error) {
       next(error);
     }
@@ -648,6 +736,10 @@ export function createTaskStateRouter(prisma: PrismaClient) {
           ? req.body.taskState
           : req.body;
       const normalizedTaskState = normalizeTaskStateMap(input);
+      if (!hasGlobalProjectReadAccess(user)) {
+        res.status(403).json({ ok: false, message: "Forbidden." });
+        return;
+      }
       if (containsCompletedTaskState(normalizedTaskState) && !hasPermission(user.permissionKeys, "tasks.complete")) {
         res.status(403).json({ ok: false, message: "Forbidden." });
         return;
@@ -685,6 +777,17 @@ export function createTaskStateRouter(prisma: PrismaClient) {
 
       if (!isTaskStateStatus(req.body?.status)) {
         res.status(400).json({ ok: false, message: "Invalid task status." });
+        return;
+      }
+      if (
+        !(await requireTaskInstanceWriteAccess({
+          prisma,
+          taskInstanceId,
+          user,
+          res,
+          permission: req.body.status === "DONE" ? "tasks.complete" : "tasks.edit"
+        }))
+      ) {
         return;
       }
 
@@ -743,6 +846,17 @@ export function createTaskStateRouter(prisma: PrismaClient) {
       const taskInstanceId = parseInstanceId(req.params.taskInstanceId);
       if (!taskInstanceId) {
         res.status(400).json({ ok: false, message: "Invalid task instance id." });
+        return;
+      }
+      if (
+        !(await requireTaskInstanceWriteAccess({
+          prisma,
+          taskInstanceId,
+          user,
+          res,
+          permission: "tasks.complete"
+        }))
+      ) {
         return;
       }
 
@@ -814,6 +928,17 @@ export function createTaskStateRouter(prisma: PrismaClient) {
         res.status(400).json({ ok: false, message: "Invalid task instance id." });
         return;
       }
+      if (
+        !(await requireTaskInstanceWriteAccess({
+          prisma,
+          taskInstanceId,
+          user,
+          res,
+          permission: "tasks.complete"
+        }))
+      ) {
+        return;
+      }
 
       const existing = await findTaskStateEntry(prisma, taskInstanceId);
       const previous = existing ? toTaskStateEntryDto(existing) : undefined;
@@ -883,6 +1008,17 @@ export function createTaskStateRouter(prisma: PrismaClient) {
         res.status(400).json({ ok: false, message: "Invalid task instance id." });
         return;
       }
+      if (
+        !(await requireTaskInstanceWriteAccess({
+          prisma,
+          taskInstanceId,
+          user,
+          res,
+          permission: "tasks.edit"
+        }))
+      ) {
+        return;
+      }
 
       const existing = await findTaskStateEntry(prisma, taskInstanceId);
       const previous = existing ? toTaskStateEntryDto(existing) : undefined;
@@ -927,6 +1063,17 @@ export function createTaskStateRouter(prisma: PrismaClient) {
         const taskInstanceId = parseInstanceId(req.params.taskInstanceId);
         if (!taskInstanceId) {
           res.status(400).json({ ok: false, message: "Invalid task instance id." });
+          return;
+        }
+        if (
+          !(await requireTaskInstanceWriteAccess({
+            prisma,
+            taskInstanceId,
+            user,
+            res,
+            permission: "tasks.edit"
+          }))
+        ) {
           return;
         }
 

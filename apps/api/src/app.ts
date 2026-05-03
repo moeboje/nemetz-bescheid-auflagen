@@ -10,6 +10,7 @@ import { prisma } from "./prisma.js";
 import { createAuthoritiesRouter } from "./routes/authorities.js";
 import { createDeadlinesRouter } from "./routes/deadlines.js";
 import { createLegalDocsRouter } from "./routes/legalDocs.js";
+import { createLegacyDecisionsRouter } from "./routes/legacyDecisions.js";
 import { createObligationsRouter } from "./routes/obligations.js";
 import { createProjectChecklistsRouter } from "./routes/projectChecklists.js";
 import { createProjectsRouter } from "./routes/projects.js";
@@ -79,6 +80,14 @@ import {
   sanitizeNotificationSettingsInput,
   saveNotificationSettings
 } from "./notificationSettings.js";
+import {
+  canReadProjectDomain,
+  hasDomainReadPermission,
+  hasGlobalProjectReadAccess,
+  requireProjectDomainWrite,
+  resolveDocumentOwnerProjectContext,
+  type ProjectDomain
+} from "./projectAccess.js";
 
 const SESSION_COOKIE_NAME = "nemetz_session";
 const DEFAULT_ADMIN_PAGE = 1;
@@ -94,7 +103,7 @@ const ADMIN_SORT_FIELDS = ["name", "email", "createdAt", "lastLoginAt"] as const
 const SORT_DIRECTIONS = ["asc", "desc"] as const;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ROLE_KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
-const DOCUMENT_OWNER_TYPES = ["PROJECT", "LEGAL_DOC", "OBLIGATION", "DEADLINE", "TASK_EVIDENCE"] as const;
+const DOCUMENT_OWNER_TYPES = ["PROJECT", "LEGAL_DOC", "OBLIGATION", "DEADLINE", "TASK_EVIDENCE", "LEGACY_DECISION"] as const;
 const COMMENT_ENTITY_TYPES = ["PROJECT", "LEGAL_DOC", "DOCUMENT"] as const;
 const DEFAULT_EXTERNAL_ORG_TYPE = "Firma";
 const MAX_COMMENT_ENTITY_ID_LENGTH = 200;
@@ -1399,22 +1408,87 @@ function assertCanUseDocumentEndpoints(req: AuthenticatedRequest, res: Response)
   return true;
 }
 
-function assertCanReadDocumentOwner(req: AuthenticatedRequest, res: Response, ownerType: string) {
-  const permission = getDocumentOwnerReadPermission(ownerType);
-  if (!permission || !hasPermission(req.authPermissionKeys ?? [], permission)) {
-    res.status(403).json({
-      ok: false,
-      message: "Forbidden."
-    });
-    return false;
+function routeUserFromAuthenticatedRequest(req: AuthenticatedRequest) {
+  if (!req.authUser) {
+    return null;
   }
 
-  return true;
+  return {
+    id: req.authUser.id,
+    role: req.authUser.role,
+    type: req.authUser.type,
+    isArchived: req.authUser.isArchived,
+    permissionKeys: req.authPermissionKeys ?? []
+  };
 }
 
-function assertCanWriteDocumentOwner(req: AuthenticatedRequest, res: Response, ownerType: string) {
-  const permission = getDocumentOwnerWritePermission(ownerType);
-  if (!permission || !hasPermission(req.authPermissionKeys ?? [], permission)) {
+function documentOwnerDomain(ownerType: string): ProjectDomain {
+  switch (ownerType.trim().toUpperCase()) {
+    case "LEGAL_DOC":
+      return "legalDocs";
+    case "OBLIGATION":
+      return "obligations";
+    case "DEADLINE":
+      return "deadlines";
+    case "TASK_EVIDENCE":
+      return "tasks";
+    case "LEGACY_DECISION":
+      return "legacyDecisions";
+    case "PROJECT":
+    default:
+      return "documents";
+  }
+}
+
+function commentDomainWritePermission(domain: ProjectDomain): PermissionKey | null {
+  switch (domain) {
+    case "comments":
+    case "documents":
+    case "projects":
+    case "projectChecklists":
+      return "projects.edit";
+    case "legalDocs":
+    case "legacyDecisions":
+      return "legalDocs.edit";
+    case "obligations":
+      return "obligations.edit";
+    case "deadlines":
+      return "deadlines.edit";
+    case "tasks":
+      return "tasks.edit";
+    default:
+      return null;
+  }
+}
+
+function hasCommentDomainPermission(user: ReturnType<typeof routeUserFromAuthenticatedRequest>, domain: ProjectDomain, action: "read" | "write") {
+  if (!user) {
+    return false;
+  }
+
+  if (action === "read") {
+    return hasDomainReadPermission(user, domain);
+  }
+
+  const permission = commentDomainWritePermission(domain);
+  return Boolean(permission && hasPermission(user.permissionKeys, permission));
+}
+
+async function assertCanReadDocumentOwner(
+  req: AuthenticatedRequest,
+  res: Response,
+  ownerType: string,
+  ownerId: string
+) {
+  const user = routeUserFromAuthenticatedRequest(req);
+  if (!user) {
+    res.status(401).json({ ok: false, message: "Authentication required." });
+    return false;
+  }
+
+  const permission = getDocumentOwnerReadPermission(ownerType);
+  const domain = documentOwnerDomain(ownerType);
+  if (!permission || !hasDomainReadPermission(user, domain)) {
     res.status(403).json({
       ok: false,
       message: "Forbidden."
@@ -1422,7 +1496,223 @@ function assertCanWriteDocumentOwner(req: AuthenticatedRequest, res: Response, o
     return false;
   }
 
-  return true;
+  const context = await resolveDocumentOwnerProjectContext(prisma, ownerType, ownerId);
+  if (!context.exists) {
+    res.status(404).json({ ok: false, message: "Document owner not found." });
+    return false;
+  }
+
+  if (!context.projectId) {
+    if (hasGlobalProjectReadAccess(user)) {
+      return true;
+    }
+    res.status(403).json({
+      ok: false,
+      message: "Forbidden."
+    });
+    return false;
+  }
+
+  if (await canReadProjectDomain(prisma, user, context.projectId, domain)) {
+    return true;
+  }
+
+  res.status(403).json({
+    ok: false,
+    message: "Forbidden."
+  });
+  return false;
+}
+
+async function assertCanWriteDocumentOwner(
+  req: AuthenticatedRequest,
+  res: Response,
+  ownerType: string,
+  ownerId: string
+) {
+  const user = routeUserFromAuthenticatedRequest(req);
+  if (!user) {
+    res.status(401).json({ ok: false, message: "Authentication required." });
+    return false;
+  }
+
+  const permission = getDocumentOwnerWritePermission(ownerType);
+  if (!permission || !hasPermission(user.permissionKeys, permission)) {
+    res.status(403).json({
+      ok: false,
+      message: "Forbidden."
+    });
+    return false;
+  }
+
+  const domain = documentOwnerDomain(ownerType);
+  const context = await resolveDocumentOwnerProjectContext(prisma, ownerType, ownerId);
+  if (!context.exists) {
+    res.status(404).json({ ok: false, message: "Document owner not found." });
+    return false;
+  }
+
+  if (!context.projectId) {
+    if (hasGlobalProjectReadAccess(user) && hasPermission(req.authPermissionKeys ?? [], permission)) {
+      return true;
+    }
+    res.status(403).json({ ok: false, message: "Forbidden." });
+    return false;
+  }
+
+  return requireProjectDomainWrite({
+    db: prisma,
+    user,
+    projectId: context.projectId,
+    domain,
+    permission,
+    res
+  });
+}
+
+async function resolveCommentDocumentDomain(
+  entityId: string,
+  action: "read" | "write",
+  user: ReturnType<typeof routeUserFromAuthenticatedRequest>
+): Promise<{ exists: false; domain: null; ownerType: null; ownerId: null } | { exists: true; domain: ProjectDomain; ownerType: string; ownerId: string; allowed: boolean }> {
+  const document = await prisma.document.findFirst({
+    where: {
+      id: entityId,
+      isArchived: false
+    },
+    select: {
+      ownerType: true,
+      ownerId: true
+    }
+  });
+
+  if (!document) {
+    return { exists: false, domain: null, ownerType: null, ownerId: null };
+  }
+
+  const domain = documentOwnerDomain(document.ownerType);
+  const readPermission = getDocumentOwnerReadPermission(document.ownerType);
+  const writePermission = getDocumentOwnerWritePermission(document.ownerType);
+  const allowed =
+    action === "read"
+      ? Boolean(readPermission && user && hasDomainReadPermission(user, domain))
+      : Boolean(writePermission && user && hasPermission(user.permissionKeys, writePermission));
+
+  return {
+    exists: true,
+    domain,
+    ownerType: document.ownerType,
+    ownerId: document.ownerId,
+    allowed
+  };
+}
+
+async function resolveCommentEntityProjectContext(
+  entityType: CommentEntityType,
+  entityId: string,
+  action: "read" | "write",
+  user: ReturnType<typeof routeUserFromAuthenticatedRequest>
+): Promise<{ exists: boolean; projectId: string | null; domain: ProjectDomain; domainPermissionAllowed: boolean }> {
+  switch (entityType) {
+    case "PROJECT": {
+      if (!hasCommentDomainPermission(user, "comments", action)) {
+        return { exists: true, projectId: null, domain: "comments", domainPermissionAllowed: false };
+      }
+      const project = await prisma.project.findUnique({
+        where: { id: entityId },
+        select: { id: true }
+      });
+      return { exists: Boolean(project), projectId: project?.id ?? null, domain: "comments", domainPermissionAllowed: true };
+    }
+    case "LEGAL_DOC": {
+      if (!hasCommentDomainPermission(user, "legalDocs", action)) {
+        return { exists: true, projectId: null, domain: "legalDocs", domainPermissionAllowed: false };
+      }
+      const legalDoc = await prisma.legalDocument.findUnique({
+        where: { id: entityId },
+        select: { projectId: true }
+      });
+      return { exists: Boolean(legalDoc), projectId: legalDoc?.projectId ?? null, domain: "legalDocs", domainPermissionAllowed: true };
+    }
+    case "DOCUMENT": {
+      const document = await resolveCommentDocumentDomain(entityId, action, user);
+      if (!document.exists) {
+        return { exists: false, projectId: null, domain: "documents", domainPermissionAllowed: true };
+      }
+      if (!document.allowed) {
+        return { exists: true, projectId: null, domain: document.domain, domainPermissionAllowed: false };
+      }
+      const context = await resolveDocumentOwnerProjectContext(prisma, document.ownerType, document.ownerId);
+      return {
+        ...context,
+        domain: document.domain,
+        domainPermissionAllowed: true
+      };
+    }
+    default:
+      return { exists: true, projectId: null, domain: "comments", domainPermissionAllowed: false };
+  }
+}
+
+async function assertCanUseCommentEntity(
+  req: AuthenticatedRequest,
+  res: Response,
+  entityType: CommentEntityType,
+  entityId: string,
+  action: "read" | "write" = "read"
+) {
+  const user = routeUserFromAuthenticatedRequest(req);
+  if (!user) {
+    res.status(401).json({ ok: false, message: "Authentication required." });
+    return false;
+  }
+
+  const context = await resolveCommentEntityProjectContext(entityType, entityId, action, user);
+  if (!context.exists) {
+    res.status(404).json({ ok: false, message: "Comment entity not found." });
+    return false;
+  }
+
+  if (!context.domainPermissionAllowed || !hasCommentDomainPermission(user, context.domain, action)) {
+    res.status(403).json({ ok: false, message: "Forbidden." });
+    return false;
+  }
+
+  if (!context.projectId) {
+    if (
+      action === "read" &&
+      hasGlobalProjectReadAccess(user) &&
+      hasDomainReadPermission(user, context.domain)
+    ) {
+      return true;
+    }
+    res.status(403).json({ ok: false, message: "Forbidden." });
+    return false;
+  }
+
+  if (action === "write") {
+    const permission = commentDomainWritePermission(context.domain);
+    if (!permission) {
+      res.status(403).json({ ok: false, message: "Forbidden." });
+      return false;
+    }
+
+    return requireProjectDomainWrite({
+      db: prisma,
+      user,
+      projectId: context.projectId,
+      domain: context.domain,
+      permission,
+      res
+    });
+  }
+
+  if (await canReadProjectDomain(prisma, user, context.projectId, context.domain)) {
+    return true;
+  }
+
+  res.status(403).json({ ok: false, message: "Forbidden." });
+  return false;
 }
 
 function applySecurityHeaders(_req: Request, res: Response, next: NextFunction) {
@@ -1560,6 +1850,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.use(createAuthoritiesRouter(prisma));
   router.use(createDeadlinesRouter(prisma));
   router.use(createLegalDocsRouter(prisma));
+  router.use(createLegacyDecisionsRouter(prisma));
   router.use(createObligationsRouter(prisma, config));
   router.use(createProjectChecklistsRouter(prisma));
   router.use(createProjectsRouter(prisma));
@@ -2052,7 +2343,7 @@ export function createApp(config: AppConfig = loadConfig()) {
           return;
         }
 
-        if (!assertCanWriteDocumentOwner(req, res, ownerTypeRaw)) {
+        if (!(await assertCanWriteDocumentOwner(req, res, ownerTypeRaw, ownerId))) {
           return;
         }
 
@@ -2155,7 +2446,7 @@ export function createApp(config: AppConfig = loadConfig()) {
         return;
       }
 
-      if (!assertCanReadDocumentOwner(req, res, ownerTypeRaw)) {
+      if (!(await assertCanReadDocumentOwner(req, res, ownerTypeRaw, ownerId))) {
         return;
       }
 
@@ -2197,7 +2488,7 @@ export function createApp(config: AppConfig = loadConfig()) {
         return;
       }
 
-      if (!assertCanReadDocumentOwner(req, res, document.ownerType)) {
+      if (!(await assertCanReadDocumentOwner(req, res, document.ownerType, document.ownerId))) {
         return;
       }
 
@@ -2228,7 +2519,7 @@ export function createApp(config: AppConfig = loadConfig()) {
         return;
       }
 
-      if (!assertCanReadDocumentOwner(req, res, document.ownerType)) {
+      if (!(await assertCanReadDocumentOwner(req, res, document.ownerType, document.ownerId))) {
         return;
       }
 
@@ -2296,6 +2587,9 @@ export function createApp(config: AppConfig = loadConfig()) {
         res.status(400).json({ ok: false, message: "entityType and entityId are required." });
         return;
       }
+      if (!(await assertCanUseCommentEntity(req, res, entityType, entityId))) {
+        return;
+      }
 
       const comments = await prisma.comment.findMany({
         where: {
@@ -2349,6 +2643,9 @@ export function createApp(config: AppConfig = loadConfig()) {
           ok: false,
           message: "Invalid comment input."
         });
+        return;
+      }
+      if (!(await assertCanUseCommentEntity(req, res, entityType, entityId, "write"))) {
         return;
       }
 
@@ -2418,6 +2715,13 @@ export function createApp(config: AppConfig = loadConfig()) {
 
       if (!currentComment) {
         res.status(404).json({ ok: false, message: "Comment not found." });
+        return;
+      }
+      if (!isCommentEntityType(currentComment.entityType)) {
+        res.status(403).json({ ok: false, message: "Forbidden." });
+        return;
+      }
+      if (!(await assertCanUseCommentEntity(req, res, currentComment.entityType, currentComment.entityId, "write"))) {
         return;
       }
 
@@ -2528,12 +2832,21 @@ export function createApp(config: AppConfig = loadConfig()) {
         },
         select: {
           id: true,
-          authorUserId: true
+          authorUserId: true,
+          entityType: true,
+          entityId: true
         }
       });
 
       if (!comment) {
         res.status(404).json({ ok: false, message: "Comment not found." });
+        return;
+      }
+      if (!isCommentEntityType(comment.entityType)) {
+        res.status(403).json({ ok: false, message: "Forbidden." });
+        return;
+      }
+      if (!(await assertCanUseCommentEntity(req, res, comment.entityType, comment.entityId))) {
         return;
       }
 
@@ -2579,6 +2892,13 @@ export function createApp(config: AppConfig = loadConfig()) {
 
       if (!comment) {
         res.status(404).json({ ok: false, message: "Comment not found." });
+        return;
+      }
+      if (!isCommentEntityType(comment.entityType)) {
+        res.status(403).json({ ok: false, message: "Forbidden." });
+        return;
+      }
+      if (!(await assertCanUseCommentEntity(req, res, comment.entityType, comment.entityId, "write"))) {
         return;
       }
 

@@ -7,9 +7,24 @@ import {
   Card,
   DataTable,
   IconButton,
-  Modal
+  Input,
+  Modal,
+  Select
 } from "@nemetz/ui";
 import { t } from "../i18n";
+import {
+  archiveLegacyDecision,
+  createLegacyDecision,
+  listProjectLegacyDecisions,
+  restoreLegacyDecision,
+  updateLegacyDecision,
+  type LegacyDecisionInput
+} from "../api/legacyDecisions";
+import {
+  listProjectAccess,
+  removeProjectAccess,
+  upsertProjectAccess
+} from "../api/projects";
 import AuditTimeline from "../components/AuditTimeline";
 import DeadlineModal from "../components/DeadlineModal";
 import HelpHintCard from "../components/HelpHintCard";
@@ -22,7 +37,12 @@ import ObligationModal from "../components/ObligationModal";
 import ProjectChecklistTab from "../components/ProjectChecklistTab";
 import ProjectModal from "../components/ProjectModal";
 import { useRuntimeConfig } from "../config/runtimeConfig";
-import type { ExternalParticipant } from "../data/projects";
+import {
+  LEGACY_DECISION_REVIEW_STATUS_VALUES,
+  LEGACY_DECISION_STATUS_VALUES,
+  type LegacyDecision
+} from "../data/legacyDecisions";
+import type { ExternalParticipant, ProjectAccessEntry, ProjectAccessRole } from "../data/projects";
 import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { ProjectPolicy } from "../policies/ProjectPolicy";
 import { useAuditLog } from "../state/AuditLogStore";
@@ -121,6 +141,194 @@ function getIntervalUnitLabel(unit: "DAY" | "WEEK" | "MONTH" | "QUARTER" | "YEAR
   }
 }
 
+function getProjectAccessRoleLabel(role: ProjectAccessRole) {
+  return t(`projects.access.roles.${role}`);
+}
+
+function getProjectAccessSourceLabel(source: ProjectAccessEntry["source"]) {
+  return t(`projects.access.sources.${source}`);
+}
+
+function getLegacyDecisionStatusLabel(status: LegacyDecision["legacyStatus"]) {
+  return t(`legacyDecisions.status.${status}`);
+}
+
+function getLegacyDecisionReviewStatusLabel(status: LegacyDecision["reviewStatus"]) {
+  return t(`legacyDecisions.reviewStatus.${status}`);
+}
+
+type LegacyDecisionModalProps = {
+  open: boolean;
+  legacyDecision?: LegacyDecision;
+  projectId: string;
+  authorities: { id: string; name: string; isArchived?: boolean }[];
+  legalDocs: { id: string; title: string; isArchived?: boolean; archivedAt?: string }[];
+  onClose: () => void;
+  onSave: (input: LegacyDecisionInput) => Promise<boolean>;
+};
+
+function LegacyDecisionModal({
+  open,
+  legacyDecision,
+  projectId,
+  authorities,
+  legalDocs,
+  onClose,
+  onSave
+}: LegacyDecisionModalProps) {
+  const [form, setForm] = React.useState<LegacyDecisionInput>({
+    title: "",
+    legacyStatus: "ARCHIVE_ONLY",
+    reviewStatus: "NOT_REVIEWED"
+  });
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [error, setError] = React.useState("");
+
+  React.useEffect(() => {
+    if (!open) {
+      return;
+    }
+    setForm({
+      projectId,
+      title: legacyDecision?.title ?? "",
+      fileNumber: legacyDecision?.fileNumber ?? "",
+      authorityId: legacyDecision?.authorityId ?? "",
+      authorityName: legacyDecision?.authorityName ?? "",
+      issuedAt: legacyDecision?.issuedAt ?? "",
+      validFrom: legacyDecision?.validFrom ?? "",
+      validUntil: legacyDecision?.validUntil ?? "",
+      legacyStatus: legacyDecision?.legacyStatus ?? "ARCHIVE_ONLY",
+      reviewStatus: legacyDecision?.reviewStatus ?? "NOT_REVIEWED",
+      relevanceNote: legacyDecision?.relevanceNote ?? "",
+      linkedLegalDocId: legacyDecision?.linkedLegalDocId ?? "",
+      supersededByLegalDocId: legacyDecision?.supersededByLegalDocId ?? ""
+    });
+    setError("");
+  }, [legacyDecision, open, projectId]);
+
+  const update = (key: keyof LegacyDecisionInput, value: string) => {
+    setForm((prev) => ({
+      ...prev,
+      [key]: value || undefined
+    }));
+  };
+
+  const submit = async () => {
+    if (!form.title?.trim()) {
+      setError(t("legacyDecisions.validation.titleRequired"));
+      return;
+    }
+
+    setIsSubmitting(true);
+    setError("");
+    const ok = await onSave({
+      ...form,
+      projectId,
+      title: form.title.trim()
+    });
+    setIsSubmitting(false);
+    if (ok) {
+      onClose();
+      return;
+    }
+    setError(t("legacyDecisions.validation.saveFailed"));
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      closeAriaLabel={t("modal.close")}
+      header={legacyDecision ? t("legacyDecisions.edit") : t("legacyDecisions.create")}
+      footer={
+        <div className="modalFooter">
+          <Button variant="secondary" onClick={onClose} disabled={isSubmitting}>
+            {t("common.cancel")}
+          </Button>
+          <Button onClick={() => void submit()} disabled={isSubmitting}>
+            {t("common.save")}
+          </Button>
+        </div>
+      }
+    >
+      <div className="modalForm">
+        <label className="formField">
+          <span className="fieldLabel">{t("legacyDecisions.fields.title")}</span>
+          <Input value={form.title ?? ""} onChange={(event) => update("title", event.target.value)} />
+        </label>
+        <label className="formField">
+          <span className="fieldLabel">{t("legacyDecisions.fields.fileNumber")}</span>
+          <Input value={form.fileNumber ?? ""} onChange={(event) => update("fileNumber", event.target.value)} />
+        </label>
+        <label className="formField">
+          <span className="fieldLabel">{t("legacyDecisions.fields.authority")}</span>
+          <Select
+            value={form.authorityId ?? ""}
+            options={[
+              { value: "", label: t("common.notAssigned") },
+              ...authorities
+                .filter((authority) => !authority.isArchived || authority.id === form.authorityId)
+                .map((authority) => ({ value: authority.id, label: authority.name }))
+            ]}
+            onChange={(event) => update("authorityId", event.target.value)}
+          />
+        </label>
+        <label className="formField">
+          <span className="fieldLabel">{t("legacyDecisions.fields.authorityName")}</span>
+          <Input value={form.authorityName ?? ""} onChange={(event) => update("authorityName", event.target.value)} />
+        </label>
+        <label className="formField">
+          <span className="fieldLabel">{t("legacyDecisions.fields.issuedAt")}</span>
+          <Input type="date" value={form.issuedAt ?? ""} onChange={(event) => update("issuedAt", event.target.value)} />
+        </label>
+        <label className="formField">
+          <span className="fieldLabel">{t("legacyDecisions.fields.legacyStatus")}</span>
+          <Select
+            value={form.legacyStatus ?? "ARCHIVE_ONLY"}
+            options={LEGACY_DECISION_STATUS_VALUES.map((status) => ({
+              value: status,
+              label: getLegacyDecisionStatusLabel(status)
+            }))}
+            onChange={(event) => update("legacyStatus", event.target.value)}
+          />
+        </label>
+        <label className="formField">
+          <span className="fieldLabel">{t("legacyDecisions.fields.reviewStatus")}</span>
+          <Select
+            value={form.reviewStatus ?? "NOT_REVIEWED"}
+            options={LEGACY_DECISION_REVIEW_STATUS_VALUES.map((status) => ({
+              value: status,
+              label: getLegacyDecisionReviewStatusLabel(status)
+            }))}
+            onChange={(event) => update("reviewStatus", event.target.value)}
+          />
+        </label>
+        <label className="formField">
+          <span className="fieldLabel">{t("legacyDecisions.fields.linkedLegalDoc")}</span>
+          <Select
+            value={form.linkedLegalDocId ?? ""}
+            options={[
+              { value: "", label: t("common.notAssigned") },
+              ...legalDocs.map((doc) => ({ value: doc.id, label: doc.title }))
+            ]}
+            onChange={(event) => update("linkedLegalDocId", event.target.value)}
+          />
+        </label>
+        <label className="formField">
+          <span className="fieldLabel">{t("legacyDecisions.fields.relevanceNote")}</span>
+          <textarea
+            className="textArea"
+            value={form.relevanceNote ?? ""}
+            onChange={(event) => update("relevanceNote", event.target.value)}
+          />
+        </label>
+        <p className="placeholderText">{t("legacyDecisions.noAutomaticObligations")}</p>
+        {error ? <p className="validationText">{error}</p> : null}
+      </div>
+    </Modal>
+  );
+}
+
 export default function ProjectDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -144,8 +352,8 @@ export default function ProjectDetailPage() {
     clearMutationError
   } = useObligations();
   const { getScopeLabel } = useScopes();
-  const { contacts, getAuthorityName, getContactsForAuthority } = useAuthorities();
-  const { getUser, getDisplayName } = useUsers();
+  const { authorities, contacts, getAuthorityName, getContactsForAuthority } = useAuthorities();
+  const { users, getUser, getDisplayName } = useUsers();
   const { legalDocs, archiveLegalDoc } = useLegalDocs();
   const { deadlines, archiveDeadline, getDeadlineStatus } = useDeadlines();
   const { tasks } = useTasks();
@@ -168,6 +376,17 @@ export default function ProjectDetailPage() {
     null
   );
   const [showArchivedExternal, setShowArchivedExternal] = useState(false);
+  const [accessEntries, setAccessEntries] = useState<ProjectAccessEntry[]>([]);
+  const [accessUserId, setAccessUserId] = useState<string | null>(null);
+  const [accessRole, setAccessRole] = useState<ProjectAccessRole>("PROJECT_VIEWER");
+  const [accessNote, setAccessNote] = useState("");
+  const [accessError, setAccessError] = useState("");
+  const [legacyDecisions, setLegacyDecisions] = useState<LegacyDecision[]>([]);
+  const [legacyModalOpen, setLegacyModalOpen] = useState(false);
+  const [editingLegacyDecisionId, setEditingLegacyDecisionId] = useState<string | null>(null);
+  const [selectedLegacyDecisionId, setSelectedLegacyDecisionId] = useState<string | null>(null);
+  const [showArchivedLegacyDecisions, setShowArchivedLegacyDecisions] = useState(false);
+  const [legacyError, setLegacyError] = useState("");
   const checklistTabEnabled = runtimeConfig.features.enableProjectChecklists;
 
   const project = useMemo(() => projects.find((item) => item.id === id), [id, projects]);
@@ -306,6 +525,44 @@ export default function ProjectDetailPage() {
       setTab("overview");
     }
   }, [actor.isExternal, permissions.canViewObligations, permissions.canViewProjects, tab]);
+  const canManageProjectAccessUi =
+    !actor.isExternal &&
+    actor.isAdmin &&
+    permissions.canManageUsersAdmin;
+
+  React.useEffect(() => {
+    if (!canManageProjectAccessUi && tab === "access") {
+      setTab("overview");
+    }
+  }, [canManageProjectAccessUi, tab]);
+
+  React.useEffect(() => {
+    if (!project || !canManageProjectAccessUi || tab !== "access") {
+      return;
+    }
+    void listProjectAccess(project.id)
+      .then((items) => {
+        setAccessEntries(items);
+        setAccessError("");
+      })
+      .catch(() => {
+        setAccessError(t("projects.access.loadError"));
+      });
+  }, [canManageProjectAccessUi, project, tab]);
+
+  React.useEffect(() => {
+    if (!project || tab !== "legacyDecisions") {
+      return;
+    }
+    void listProjectLegacyDecisions(project.id)
+      .then((items) => {
+        setLegacyDecisions(items);
+        setLegacyError("");
+      })
+      .catch(() => {
+        setLegacyError(t("legacyDecisions.loadError"));
+      });
+  }, [project, tab]);
 
   if (!project) {
     return (
@@ -318,13 +575,14 @@ export default function ProjectDetailPage() {
   }
 
   const canView = ProjectPolicy.view(actor, project);
+  const canWriteProject = ProjectPolicy.write(actor, project);
   const canUpdate = ProjectPolicy.update(actor, project);
   const canArchive = ProjectPolicy.archive(actor, project);
   const canViewObligationsTab =
     permissions.canViewProjects && permissions.canViewObligations && !actor.isExternal;
-  const canCreateLegalDocFromProject = canUpdate && permissions.canCreateLegalDocs;
+  const canCreateLegalDocFromProject = canWriteProject && permissions.canCreateLegalDocs;
   const canCreateObligationFromProject =
-    canViewObligationsTab && permissions.canCreateObligations && projectDocs.length > 0;
+    canViewObligationsTab && canWriteProject && permissions.canCreateObligations && projectDocs.length > 0;
 
   if (!canView) {
     return (
@@ -540,7 +798,7 @@ export default function ProjectDetailPage() {
   };
 
   const openDeleteObligationModal = (target: (typeof obligations)[number]) => {
-    if (!permissions.canDeleteObligations) {
+    if (!canWriteProject || !permissions.canDeleteObligations) {
       return;
     }
     clearMutationError();
@@ -557,7 +815,7 @@ export default function ProjectDetailPage() {
   };
 
   const handleDeleteObligation = async () => {
-    if (!deleteObligationTarget || !permissions.canDeleteObligations) {
+    if (!deleteObligationTarget || !canWriteProject || !permissions.canDeleteObligations) {
       return;
     }
 
@@ -591,6 +849,146 @@ export default function ProjectDetailPage() {
         {user?.isArchived ? <Badge variant="warning">{t("users.archived")}</Badge> : null}
       </span>
     );
+  };
+
+  const selectedAccessUser = users.find((user) => user.id === accessUserId);
+  const accessRoleOptions =
+    selectedAccessUser?.type === "EXTERNAL"
+      ? (["EXTERNAL_PROJECT_VIEWER", "EXTERNAL_EXECUTOR"] as ProjectAccessRole[])
+      : (["PROJECT_VIEWER", "PROJECT_EDITOR"] as ProjectAccessRole[]);
+
+  const handleGrantAccess = async () => {
+    if (!accessUserId || !canManageProjectAccessUi) {
+      return;
+    }
+    try {
+      await upsertProjectAccess(project.id, accessUserId, {
+        accessRole,
+        note: accessNote
+      });
+      setAccessEntries(await listProjectAccess(project.id));
+      setAccessUserId(null);
+      setAccessRole("PROJECT_VIEWER");
+      setAccessNote("");
+      setAccessError("");
+    } catch {
+      setAccessError(t("projects.access.saveError"));
+    }
+  };
+
+  const handleRemoveAccess = async (entry: ProjectAccessEntry) => {
+    if (!canManageProjectAccessUi || entry.source !== "EXPLICIT") {
+      return;
+    }
+    try {
+      await removeProjectAccess(project.id, entry.userId);
+      setAccessEntries(await listProjectAccess(project.id));
+      setAccessError("");
+    } catch {
+      setAccessError(t("projects.access.removeError"));
+    }
+  };
+
+  const legacyDecisionColumns = [
+    {
+      key: "title",
+      header: t("legacyDecisions.fields.title"),
+      render: (legacyDecision: LegacyDecision) => legacyDecision.title
+    },
+    {
+      key: "fileNumber",
+      header: t("legacyDecisions.fields.fileNumber"),
+      render: (legacyDecision: LegacyDecision) => legacyDecision.fileNumber ?? t("common.notAvailable")
+    },
+    {
+      key: "authority",
+      header: t("legacyDecisions.fields.authority"),
+      render: (legacyDecision: LegacyDecision) =>
+        getAuthorityName(legacyDecision.authorityId) ||
+        legacyDecision.authorityName ||
+        t("common.notAvailable")
+    },
+    {
+      key: "issuedAt",
+      header: t("legacyDecisions.fields.issuedAt"),
+      render: (legacyDecision: LegacyDecision) => legacyDecision.issuedAt ?? t("common.notAvailable")
+    },
+    {
+      key: "legacyStatus",
+      header: t("legacyDecisions.fields.legacyStatus"),
+      render: (legacyDecision: LegacyDecision) => (
+        <Badge variant={legacyDecision.legacyStatus === "ARCHIVE_ONLY" ? "neutral" : "warning"}>
+          {getLegacyDecisionStatusLabel(legacyDecision.legacyStatus)}
+        </Badge>
+      )
+    },
+    {
+      key: "reviewStatus",
+      header: t("legacyDecisions.fields.reviewStatus"),
+      render: (legacyDecision: LegacyDecision) =>
+        getLegacyDecisionReviewStatusLabel(legacyDecision.reviewStatus)
+    }
+  ];
+
+  const visibleLegacyDecisions = showArchivedLegacyDecisions
+    ? legacyDecisions
+    : legacyDecisions.filter((legacyDecision) => !legacyDecision.isArchived && !legacyDecision.archivedAt);
+  const editingLegacyDecision = legacyDecisions.find((legacyDecision) => legacyDecision.id === editingLegacyDecisionId);
+  const selectedLegacyDecision = legacyDecisions.find((legacyDecision) => legacyDecision.id === selectedLegacyDecisionId);
+
+  const accessColumns = [
+    {
+      key: "user",
+      header: t("projects.access.user"),
+      render: (entry: ProjectAccessEntry) => {
+        const user = entry.user ?? getUser(entry.userId);
+        const label = user
+          ? `${user.firstName} ${user.lastName}`.trim()
+          : entry.userId;
+        return (
+          <span className="inlineMeta">
+            <span>{label}</span>
+            {user ? (
+              <Badge variant={user.type === "EXTERNAL" ? "warning" : "neutral"}>
+                {user.type === "EXTERNAL" ? t("users.external") : t("users.internal")}
+              </Badge>
+            ) : null}
+          </span>
+        );
+      }
+    },
+    {
+      key: "role",
+      header: t("projects.access.role"),
+      render: (entry: ProjectAccessEntry) => getProjectAccessRoleLabel(entry.accessRole)
+    },
+    {
+      key: "source",
+      header: t("projects.access.source"),
+      render: (entry: ProjectAccessEntry) => getProjectAccessSourceLabel(entry.source)
+    },
+    {
+      key: "note",
+      header: t("projects.access.note"),
+      render: (entry: ProjectAccessEntry) => entry.note ?? t("common.notAvailable")
+    }
+  ];
+
+  const saveLegacyDecision = async (input: LegacyDecisionInput) => {
+    try {
+      if (editingLegacyDecision) {
+        await updateLegacyDecision(editingLegacyDecision.id, input);
+      } else {
+        await createLegacyDecision(project.id, input);
+      }
+      setLegacyDecisions(await listProjectLegacyDecisions(project.id));
+      setEditingLegacyDecisionId(null);
+      setLegacyError("");
+      return true;
+    } catch {
+      setLegacyError(t("legacyDecisions.saveError"));
+      return false;
+    }
   };
 
   return (
@@ -683,6 +1081,13 @@ export default function ProjectDetailPage() {
         >
           {t("projects.detail.tabs.attachments")}
         </button>
+        <button
+          type="button"
+          className={`tabButton ${tab === "legacyDecisions" ? "tabButtonActive" : ""}`}
+          onClick={() => setTab("legacyDecisions")}
+        >
+          {t("projects.detail.tabs.legacyDecisions")}
+        </button>
         {canViewObligationsTab ? (
           <button
             type="button"
@@ -706,6 +1111,15 @@ export default function ProjectDetailPage() {
             onClick={() => setTab("checklist")}
           >
             {t("projects.detail.tabs.checklist")}
+          </button>
+        ) : null}
+        {canManageProjectAccessUi ? (
+          <button
+            type="button"
+            className={`tabButton ${tab === "access" ? "tabButtonActive" : ""}`}
+            onClick={() => setTab("access")}
+          >
+            {t("projects.detail.tabs.access")}
           </button>
         ) : null}
         <button
@@ -859,7 +1273,7 @@ export default function ProjectDetailPage() {
         <div className="tableSection">
           <div className="sectionHeader">
             <h2 className="sectionTitle">{t("projects.detail.legalDocs.title")}</h2>
-            <Button disabled={!canUpdate} onClick={() => setLegalDocModalOpen(true)}>
+            <Button disabled={!canCreateLegalDocFromProject} onClick={() => setLegalDocModalOpen(true)}>
               {t("legalDocs.action.new")}
             </Button>
           </div>
@@ -874,7 +1288,7 @@ export default function ProjectDetailPage() {
                 </IconButton>
                 <IconButton
                   ariaLabel={t("legalDocs.action.edit")}
-                  disabled={!canUpdate}
+                  disabled={!canWriteProject || !permissions.canEditLegalDocs}
                   onClick={() => {
                     setEditingDocId(doc.id);
                     setLegalDocModalOpen(true);
@@ -892,7 +1306,7 @@ export default function ProjectDetailPage() {
         <div className="tableSection">
           <div className="sectionHeader">
             <h2 className="sectionTitle">{t("projects.detail.tabs.deadlines")}</h2>
-            <Button disabled={!canUpdate} onClick={() => setDeadlineModalOpen(true)}>
+            <Button disabled={!canWriteProject || !permissions.canCreateDeadlines} onClick={() => setDeadlineModalOpen(true)}>
               {t("deadlines.new")}
             </Button>
           </div>
@@ -910,7 +1324,7 @@ export default function ProjectDetailPage() {
                 </IconButton>
                 <IconButton
                   ariaLabel={t("common.edit")}
-                  disabled={!canUpdate}
+                  disabled={!canWriteProject || !permissions.canEditDeadlines}
                   onClick={() => {
                     setEditingDeadlineId(deadline.id);
                     setDeadlineModalOpen(true);
@@ -936,19 +1350,187 @@ export default function ProjectDetailPage() {
         </Card>
       ) : null}
 
+      {tab === "legacyDecisions" ? (
+        <div className="tableSection">
+          <div className="sectionHeader">
+            <h2 className="sectionTitle">{t("legacyDecisions.title")}</h2>
+            <div className="inlineMeta">
+              <label className="checkboxRow">
+                <input
+                  type="checkbox"
+                  checked={showArchivedLegacyDecisions}
+                  onChange={(event) => setShowArchivedLegacyDecisions(event.target.checked)}
+                />
+                <span>{t("common.showArchived")}</span>
+              </label>
+              <Button disabled={!permissions.canCreateLegalDocs || !canWriteProject} onClick={() => setLegacyModalOpen(true)}>
+                {t("legacyDecisions.upload")}
+              </Button>
+            </div>
+          </div>
+          {legacyError ? <p className="validationText">{legacyError}</p> : null}
+          <p className="placeholderText">{t("legacyDecisions.noAutomaticObligations")}</p>
+          {visibleLegacyDecisions.length === 0 ? (
+            <Card>
+              <p className="placeholderText">{t("legacyDecisions.empty")}</p>
+            </Card>
+          ) : (
+            <DataTable
+              columns={legacyDecisionColumns}
+              data={visibleLegacyDecisions}
+              getRowKey={(legacyDecision) => legacyDecision.id}
+              rowActions={(legacyDecision) => (
+                <div className="tableActions">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setSelectedLegacyDecisionId(legacyDecision.id)}
+                  >
+                    {t("common.view")}
+                  </Button>
+                  <IconButton
+                    ariaLabel={t("common.edit")}
+                    disabled={!permissions.canEditLegalDocs || !canWriteProject}
+                    onClick={() => {
+                      setEditingLegacyDecisionId(legacyDecision.id);
+                      setLegacyModalOpen(true);
+                    }}
+                  >
+                    <EditIcon />
+                  </IconButton>
+                  {!legacyDecision.isArchived && !legacyDecision.archivedAt ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={!permissions.canEditLegalDocs || !canWriteProject}
+                      onClick={async () => {
+                        await archiveLegacyDecision(legacyDecision.id);
+                        setLegacyDecisions(await listProjectLegacyDecisions(project.id));
+                      }}
+                    >
+                      {t("common.archive")}
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={!permissions.canEditLegalDocs || !canWriteProject}
+                      onClick={async () => {
+                        await restoreLegacyDecision(legacyDecision.id);
+                        setLegacyDecisions(await listProjectLegacyDecisions(project.id));
+                      }}
+                    >
+                      {t("common.restore")}
+                    </Button>
+                  )}
+                </div>
+              )}
+            />
+          )}
+          {selectedLegacyDecision ? (
+            <Card>
+              <h3 className="sectionTitle">{selectedLegacyDecision.title}</h3>
+              <div className="detailGrid">
+                <div>
+                  <div className="metaLabel">{t("legacyDecisions.fields.fileNumber")}</div>
+                  <div className="metaValue">{selectedLegacyDecision.fileNumber || t("common.notAvailable")}</div>
+                </div>
+                <div>
+                  <div className="metaLabel">{t("legacyDecisions.fields.legacyStatus")}</div>
+                  <div className="metaValue">
+                    {getLegacyDecisionStatusLabel(selectedLegacyDecision.legacyStatus)}
+                  </div>
+                </div>
+                <div>
+                  <div className="metaLabel">{t("legacyDecisions.fields.relevanceNote")}</div>
+                  <div className="metaValue">{selectedLegacyDecision.relevanceNote || t("common.notAvailable")}</div>
+                </div>
+              </div>
+              <DocumentsPanel
+                ownerType="LEGACY_DECISION"
+                ownerId={selectedLegacyDecision.id}
+                titleKey="legacyDecisions.documents"
+                allowUpload={permissions.canEditLegalDocs && canWriteProject}
+              />
+            </Card>
+          ) : null}
+        </div>
+      ) : null}
+
+      {canManageProjectAccessUi && tab === "access" ? (
+        <div className="tableSection">
+          <Card>
+            <h2 className="sectionTitle">{t("projects.access.title")}</h2>
+            <div className="modalForm">
+              <div className="formField">
+                <span className="fieldLabel">{t("projects.access.addUser")}</span>
+                <UserSelect
+                  value={accessUserId}
+                  includeExternal
+                  includeInternal
+                  allowArchivedCurrentValue={false}
+                  showSearch
+                  placeholderKey="projects.access.addUser"
+                  onChange={(userId) => {
+                    setAccessUserId(userId);
+                    const selectedUser = users.find((user) => user.id === userId);
+                    setAccessRole(selectedUser?.type === "EXTERNAL" ? "EXTERNAL_PROJECT_VIEWER" : "PROJECT_VIEWER");
+                  }}
+                />
+              </div>
+              <label className="formField">
+                <span className="fieldLabel">{t("projects.access.role")}</span>
+                <Select
+                  value={accessRole}
+                  options={accessRoleOptions.map((role) => ({
+                    value: role,
+                    label: getProjectAccessRoleLabel(role)
+                  }))}
+                  onChange={(event) => setAccessRole(event.target.value as ProjectAccessRole)}
+                />
+              </label>
+              <label className="formField">
+                <span className="fieldLabel">{t("projects.access.note")}</span>
+                <Input value={accessNote} onChange={(event) => setAccessNote(event.target.value)} />
+              </label>
+              <Button disabled={!accessUserId} onClick={() => void handleGrantAccess()}>
+                {t("projects.access.grant")}
+              </Button>
+              {accessError ? <p className="validationText">{accessError}</p> : null}
+            </div>
+          </Card>
+          <DataTable
+            columns={accessColumns}
+            data={accessEntries}
+            getRowKey={(entry) => `${entry.source}:${entry.userId}`}
+            rowActions={(entry) =>
+              entry.source === "EXPLICIT" ? (
+                <Button size="sm" variant="ghost" onClick={() => void handleRemoveAccess(entry)}>
+                  {t("projects.access.remove")}
+                </Button>
+              ) : (
+                <Badge variant="neutral">{t("projects.access.implicit")}</Badge>
+              )
+            }
+          />
+        </div>
+      ) : null}
+
       {canViewObligationsTab && tab === "obligations" ? (
         <div className="tableSection">
           <div className="sectionHeader">
             <h2 className="sectionTitle">{t("projects.obligations.title")}</h2>
-            <Button
-              disabled={!canCreateObligationFromProject}
-              onClick={() => {
-                setEditingObligationId(null);
-                setObligationModalOpen(true);
-              }}
-            >
-              {t("projects.obligations.actionNew")}
-            </Button>
+            {canWriteProject && permissions.canCreateObligations ? (
+              <Button
+                disabled={!canCreateObligationFromProject}
+                onClick={() => {
+                  setEditingObligationId(null);
+                  setObligationModalOpen(true);
+                }}
+              >
+                {t("projects.obligations.actionNew")}
+              </Button>
+            ) : null}
           </div>
           {projectObligationRows.length === 0 ? (
             <Card>
@@ -982,17 +1564,18 @@ export default function ProjectDetailPage() {
                   >
                     <EyeIcon />
                   </IconButton>
-                  <IconButton
-                    ariaLabel={t("obligations.action.edit")}
-                    disabled={!permissions.canEditObligations}
-                    onClick={() => {
-                      setEditingObligationId(obligation.id);
-                      setObligationModalOpen(true);
-                    }}
-                  >
-                    <EditIcon />
-                  </IconButton>
-                  {permissions.canDeleteObligations ? (
+                  {canWriteProject && permissions.canEditObligations ? (
+                    <IconButton
+                      ariaLabel={t("obligations.action.edit")}
+                      onClick={() => {
+                        setEditingObligationId(obligation.id);
+                        setObligationModalOpen(true);
+                      }}
+                    >
+                      <EditIcon />
+                    </IconButton>
+                  ) : null}
+                  {canWriteProject && permissions.canDeleteObligations ? (
                     <Button
                       size="sm"
                       variant="ghost"
@@ -1137,7 +1720,7 @@ export default function ProjectDetailPage() {
 
       {tab === "notes" ? (
         <Card>
-          <CommentsPanel entityType="PROJECT" entityId={project.id} />
+          <CommentsPanel entityType="PROJECT" entityId={project.id} canWrite={canUpdate} />
         </Card>
       ) : null}
 
@@ -1195,7 +1778,10 @@ export default function ProjectDetailPage() {
             >
               {t("common.cancel")}
             </Button>
-            <Button onClick={() => void handleDeleteObligation()} disabled={isDeleteObligationSubmitting}>
+            <Button
+              onClick={() => void handleDeleteObligation()}
+              disabled={isDeleteObligationSubmitting || !canWriteProject || !permissions.canDeleteObligations}
+            >
               {isDeleteObligationSubmitting
                 ? t("obligations.delete.pending")
                 : t("obligations.action.delete")}
@@ -1228,6 +1814,19 @@ export default function ProjectDetailPage() {
           }
           return addExternalParticipant(project.id, input);
         }}
+      />
+
+      <LegacyDecisionModal
+        open={legacyModalOpen}
+        onClose={() => {
+          setLegacyModalOpen(false);
+          setEditingLegacyDecisionId(null);
+        }}
+        legacyDecision={editingLegacyDecision}
+        projectId={project.id}
+        authorities={authorities}
+        legalDocs={projectAllDocs}
+        onSave={saveLegacyDecision}
       />
 
       <Modal

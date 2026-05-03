@@ -1,5 +1,5 @@
 import { apiRequest } from "./client";
-import type { Project } from "../data/projects";
+import type { Project, ProjectAccessEntry, ProjectAccessRole } from "../data/projects";
 
 type ProjectInput = {
   id?: string;
@@ -64,6 +64,34 @@ export async function restoreProject(id: string) {
     method: "POST"
   });
   return payload.project;
+}
+
+export async function listProjectAccess(projectId: string) {
+  const payload = await apiRequest<{ ok: boolean; items: ProjectAccessEntry[] }>(
+    `/projects/${projectId}/access`
+  );
+  return payload.items;
+}
+
+export async function upsertProjectAccess(
+  projectId: string,
+  userId: string,
+  input: { accessRole: ProjectAccessRole; note?: string }
+) {
+  const payload = await apiRequest<{ ok: boolean; access: ProjectAccessEntry }>(
+    `/projects/${projectId}/access/${userId}`,
+    {
+      method: "PUT",
+      body: input
+    }
+  );
+  return payload.access;
+}
+
+export async function removeProjectAccess(projectId: string, userId: string) {
+  return apiRequest<{ ok: boolean }>(`/projects/${projectId}/access/${userId}`, {
+    method: "DELETE"
+  });
 }
 
 export async function bulkReplaceProjects(projects: Project[]) {

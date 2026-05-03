@@ -38,6 +38,10 @@ export default function LegalDocsPage() {
     scopeLabel: "",
     showArchived: false
   });
+  const hasWritableProject = projects.some((project) => project.currentUserCanWrite);
+  const canCreateLegalDoc = permissions.canEditLegalDocs && hasWritableProject;
+  const canEditLegalDoc = (projectId?: string) =>
+    Boolean(permissions.canEditLegalDocs && projects.find((project) => project.id === projectId)?.currentUserCanWrite);
 
   const projectOptions = useMemo(
     () => projects.map((project) => ({ value: project.id, label: project.title })),
@@ -149,7 +153,7 @@ export default function LegalDocsPage() {
           <h1 className="pageTitle">{t("legalDocs.title")}</h1>
         </div>
         <Button
-          disabled={!permissions.canEditLegalDocs}
+          disabled={!canCreateLegalDoc}
           onClick={() => setModalOpen(true)}
         >
           {t("legalDocs.action.new")}
@@ -234,7 +238,7 @@ export default function LegalDocsPage() {
             </IconButton>
             <IconButton
               ariaLabel={t("legalDocs.action.edit")}
-              disabled={!permissions.canEditLegalDocs}
+              disabled={!canEditLegalDoc(doc.projectId)}
               onClick={() => {
                 setEditingDocId(doc.id);
                 setModalOpen(true);

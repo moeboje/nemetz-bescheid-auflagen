@@ -8,8 +8,15 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import {
   applyNoStoreHeaders,
   requireAdminRoutePermissions,
+  requireAuthenticatedRouteUser,
   requireInternalRouteUser
 } from "./routeAuth.js";
+import {
+  getReadableProjectIdsForDomain,
+  requireProjectDomainRead,
+  requireProjectDomainReadPermission,
+  requireProjectDomainWrite
+} from "../projectAccess.js";
 
 type LegalDocAttachmentDto = {
   id: string;
@@ -295,8 +302,9 @@ function toLegalDocUpdateInput(input: LegalDocDto): Prisma.LegalDocumentUnchecke
   };
 }
 
-async function listLegalDocsFromDb(db: DbClient): Promise<LegalDocDto[]> {
+async function listLegalDocsFromDb(db: DbClient, where?: Prisma.LegalDocumentWhereInput): Promise<LegalDocDto[]> {
   const legalDocs = await db.legalDocument.findMany({
+    where,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }]
   });
 
@@ -648,12 +656,24 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireInternalRouteUser(req, res, prisma);
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
       if (!user) {
         return;
       }
 
-      res.json(await listLegalDocsFromDb(prisma));
+      const readableProjectIds = await getReadableProjectIdsForDomain(prisma, user, "legalDocs");
+      const legalDocs =
+        readableProjectIds === null
+          ? await listLegalDocsFromDb(prisma)
+          : readableProjectIds.length > 0
+          ? await listLegalDocsFromDb(prisma, {
+              projectId: {
+                in: readableProjectIds
+              }
+            })
+          : [];
+
+      res.json(legalDocs);
     } catch (error) {
       next(error);
     }
@@ -663,14 +683,30 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
     try {
       applyNoStoreHeaders(res);
 
-      const user = await requireInternalRouteUser(req, res, prisma);
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
       if (!user) {
+        return;
+      }
+
+      if (!requireProjectDomainReadPermission({ user, domain: "legalDocs", res })) {
         return;
       }
 
       const legalDoc = await findLegalDocById(prisma, req.params.id);
       if (!legalDoc) {
         res.status(404).json({ ok: false, message: "Legal document not found." });
+        return;
+      }
+      if (
+        !(await requireProjectDomainRead({
+          db: prisma,
+          user,
+          projectId: legalDoc.projectId,
+          domain: "legalDocs",
+          res,
+          notFoundMessage: "Legal document not found."
+        }))
+      ) {
         return;
       }
 
@@ -739,6 +775,18 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
         res.status(normalized.status).json({ ok: false, message: normalized.message });
         return;
       }
+      if (
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId: normalized.legalDoc.projectId,
+          domain: "legalDocs",
+          permission: "legalDocs.create",
+          res
+        }))
+      ) {
+        return;
+      }
 
       const legalDoc = await prisma.legalDocument.create({
         data: toLegalDocCreateInput(normalized.legalDoc)
@@ -765,6 +813,19 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
       const existingRecord = await findLegalDocById(prisma, req.params.id);
       if (!existingRecord) {
         res.status(404).json({ ok: false, message: "Legal document not found." });
+        return;
+      }
+      if (
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId: existingRecord.projectId,
+          domain: "legalDocs",
+          permission: "legalDocs.edit",
+          res,
+          notFoundMessage: "Legal document not found."
+        }))
+      ) {
         return;
       }
 
@@ -825,6 +886,19 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
         res.status(normalized.status).json({ ok: false, message: normalized.message });
         return;
       }
+      if (
+        normalized.legalDoc.projectId !== existingRecord.projectId &&
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId: normalized.legalDoc.projectId,
+          domain: "legalDocs",
+          permission: "legalDocs.edit",
+          res
+        }))
+      ) {
+        return;
+      }
 
       const updated = await prisma.legalDocument.update({
         where: {
@@ -854,6 +928,19 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
       const existing = await findLegalDocById(prisma, req.params.id);
       if (!existing) {
         res.status(404).json({ ok: false, message: "Legal document not found." });
+        return;
+      }
+      if (
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId: existing.projectId,
+          domain: "legalDocs",
+          permission: "legalDocs.archive",
+          res,
+          notFoundMessage: "Legal document not found."
+        }))
+      ) {
         return;
       }
 
@@ -890,6 +977,19 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
       const existing = await findLegalDocById(prisma, req.params.id);
       if (!existing) {
         res.status(404).json({ ok: false, message: "Legal document not found." });
+        return;
+      }
+      if (
+        !(await requireProjectDomainWrite({
+          db: prisma,
+          user,
+          projectId: existing.projectId,
+          domain: "legalDocs",
+          permission: "legalDocs.archive",
+          res,
+          notFoundMessage: "Legal document not found."
+        }))
+      ) {
         return;
       }
 

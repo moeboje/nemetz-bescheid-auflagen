@@ -9,6 +9,11 @@ const REQUIRED_OBLIGATION_FIELDS = [
   "externalOrgId",
   "externalUserId"
 ];
+const REQUIRED_MODEL_FIELDS = {
+  Obligation: REQUIRED_OBLIGATION_FIELDS,
+  ProjectAccess: ["projectId", "userId", "accessRole", "grantedByUserId"],
+  LegacyDecision: ["projectId", "title", "legacyStatus", "reviewStatus", "linkedLegalDocId"]
+};
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const apiRoot = path.resolve(scriptDir, "..");
@@ -33,16 +38,18 @@ function findMissingGeneratedSchemaFields() {
   }
 
   const generatedSchema = readFileSync(generatedSchemaPath, "utf8");
-  const obligationBlock = getModelBlock(generatedSchema, "Obligation");
-  if (!obligationBlock) {
-    fail(
-      "Generated Prisma schema is stale: model Obligation was not found. Run npm run prisma:generate in apps/api."
-    );
-  }
+  return Object.entries(REQUIRED_MODEL_FIELDS).flatMap(([modelName, fieldNames]) => {
+    const modelBlock = getModelBlock(generatedSchema, modelName);
+    if (!modelBlock) {
+      fail(
+        `Generated Prisma schema is stale: model ${modelName} was not found. Run npm run prisma:generate in apps/api.`
+      );
+    }
 
-  return REQUIRED_OBLIGATION_FIELDS.filter(
-    (fieldName) => !new RegExp(`^\\s+${fieldName}\\b`, "m").test(obligationBlock)
-  );
+    return fieldNames
+      .filter((fieldName) => !new RegExp(`^\\s+${fieldName}\\b`, "m").test(modelBlock))
+      .map((fieldName) => `${modelName}.${fieldName}`);
+  });
 }
 
 function findMissingDmmfFields() {
@@ -54,12 +61,14 @@ function findMissingDmmfFields() {
 
   const require = createRequire(import.meta.url);
   const { Prisma } = require(generatedClientPath);
-  const obligationModel = Prisma.dmmf.datamodel.models.find(
-    (model) => model.name === "Obligation"
-  );
-  const fieldNames = new Set(obligationModel?.fields.map((field) => field.name) ?? []);
+  return Object.entries(REQUIRED_MODEL_FIELDS).flatMap(([modelName, requiredFieldNames]) => {
+    const model = Prisma.dmmf.datamodel.models.find((entry) => entry.name === modelName);
+    const fieldNames = new Set(model?.fields.map((field) => field.name) ?? []);
 
-  return REQUIRED_OBLIGATION_FIELDS.filter((fieldName) => !fieldNames.has(fieldName));
+    return requiredFieldNames
+      .filter((fieldName) => !fieldNames.has(fieldName))
+      .map((fieldName) => `${modelName}.${fieldName}`);
+  });
 }
 
 const missingSchemaFields = findMissingGeneratedSchemaFields();
@@ -68,7 +77,7 @@ const missing = Array.from(new Set([...missingSchemaFields, ...missingDmmfFields
 
 if (missing.length > 0) {
   fail(
-    `Generated Prisma Client is stale: Obligation is missing ${missing.join(
+    `Generated Prisma Client is stale: missing ${missing.join(
       ", "
     )}. Run npm run prisma:generate in apps/api.`
   );

@@ -62,6 +62,17 @@ async function createUser(args: {
   });
 }
 
+async function createRole(key: string, permissionKeys: string[]) {
+  return prisma.role.create({
+    data: {
+      key,
+      labelDe: key,
+      isSystem: false,
+      permissionsJson: permissionKeys
+    }
+  });
+}
+
 async function login(email: string, password: string) {
   const response = await request("/auth/login", {
     method: "POST",
@@ -149,6 +160,7 @@ describe("Projects submission type", () => {
     await prisma.company.deleteMany();
     await prisma.user.deleteMany();
     await prisma.externalOrganization.deleteMany();
+    await prisma.role.deleteMany();
   });
 
   it("keeps submissionType unset when not provided", async () => {
@@ -603,5 +615,543 @@ describe("Projects submission type", () => {
     assert.equal(response.status, 409);
     assert.equal(await prisma.legalDocument.count(), 1);
     assert.equal(await prisma.deadline.count({ where: { legalDocId: legalDoc.id } }), 1);
+  });
+
+  it("scopes project lists and details by explicit ProjectAccess", async () => {
+    await createRole("PROJECT_SCOPE_ADMIN_ONLY", ["admin.access"]);
+    await createRole("PROJECT_SCOPE_USER_ADMIN", ["admin.access", "users.manage"]);
+    await createRole("PROJECT_SCOPE_VIEW_ALL", ["projects.viewAll"]);
+    await createRole("PROJECT_SCOPE_GLOBAL_EDITOR", ["projects.viewAll", "projects.edit"]);
+
+    const admin = await createUser({
+      email: "project-access-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const adminAccessOnly = await createUser({
+      email: "project-access-admin-only@example.com",
+      password: "ValidPassword1!",
+      role: "PROJECT_SCOPE_ADMIN_ONLY"
+    });
+    const userAdmin = await createUser({
+      email: "project-access-user-admin-scope@example.com",
+      password: "ValidPassword1!",
+      role: "PROJECT_SCOPE_USER_ADMIN"
+    });
+    const viewAllUser = await createUser({
+      email: "project-access-view-all@example.com",
+      password: "ValidPassword1!",
+      role: "PROJECT_SCOPE_VIEW_ALL"
+    });
+    const globalEditor = await createUser({
+      email: "project-access-global-editor@example.com",
+      password: "ValidPassword1!",
+      role: "PROJECT_SCOPE_GLOBAL_EDITOR"
+    });
+    const internalUser = await createUser({
+      email: "project-access-internal@example.com",
+      password: "ValidPassword1!"
+    });
+    const externalOrg = await prisma.externalOrganization.create({
+      data: {
+        name: "Project Access External Org",
+        type: "SERVICE_PROVIDER"
+      }
+    });
+    const externalUser = await createUser({
+      email: "project-access-external@example.com",
+      password: "ValidPassword1!",
+      role: "EXTERNAL",
+      type: "EXTERNAL",
+      externalOrgId: externalOrg.id
+    });
+    const company = await createCompany("Project Access Company");
+    const firstProject = await prisma.project.create({
+      data: {
+        id: "project-access-visible",
+        title: "Visible Project",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+    const secondProject = await prisma.project.create({
+      data: {
+        id: "project-access-hidden",
+        title: "Hidden Project",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+
+    const adminCookie = await login(admin.email, "ValidPassword1!");
+    const adminAccessOnlyCookie = await login(adminAccessOnly.email, "ValidPassword1!");
+    const userAdminCookie = await login(userAdmin.email, "ValidPassword1!");
+    const viewAllCookie = await login(viewAllUser.email, "ValidPassword1!");
+    const globalEditorCookie = await login(globalEditor.email, "ValidPassword1!");
+    const internalCookie = await login(internalUser.email, "ValidPassword1!");
+    const externalCookie = await login(externalUser.email, "ValidPassword1!");
+
+    const adminList = await request("/projects", { cookie: adminCookie });
+    assert.equal(adminList.status, 200);
+    const adminProjects = (await adminList.json()) as Array<{ id: string }>;
+    assert.deepEqual(
+      adminProjects.map((project) => project.id).sort(),
+      [firstProject.id, secondProject.id].sort()
+    );
+
+    const adminAccessOnlyList = await request("/projects", { cookie: adminAccessOnlyCookie });
+    assert.equal(adminAccessOnlyList.status, 200);
+    assert.deepEqual(await adminAccessOnlyList.json(), []);
+    const adminAccessOnlyDetail = await request(`/projects/${firstProject.id}`, { cookie: adminAccessOnlyCookie });
+    assert.equal(adminAccessOnlyDetail.status, 403);
+
+    const userAdminList = await request("/projects", { cookie: userAdminCookie });
+    assert.equal(userAdminList.status, 200);
+    assert.deepEqual(await userAdminList.json(), []);
+    const userAdminDetail = await request(`/projects/${firstProject.id}`, { cookie: userAdminCookie });
+    assert.equal(userAdminDetail.status, 403);
+
+    const viewAllList = await request("/projects", { cookie: viewAllCookie });
+    assert.equal(viewAllList.status, 200);
+    const viewAllProjects = (await viewAllList.json()) as Array<{
+      id: string;
+      currentUserAccessRole?: string;
+      currentUserAccessSource?: string;
+      currentUserCanWrite?: boolean;
+      canUpdate?: boolean;
+      canArchive?: boolean;
+    }>;
+    assert.deepEqual(
+      viewAllProjects.map((project) => project.id).sort(),
+      [firstProject.id, secondProject.id].sort()
+    );
+    const viewAllFirstProject = viewAllProjects.find((project) => project.id === firstProject.id);
+    assert.equal(viewAllFirstProject?.currentUserAccessSource, "GLOBAL");
+    assert.equal(viewAllFirstProject?.currentUserAccessRole, undefined);
+    assert.equal(viewAllFirstProject?.currentUserCanWrite, false);
+    assert.equal(viewAllFirstProject?.canUpdate, false);
+    assert.equal(viewAllFirstProject?.canArchive, false);
+    const viewAllDetail = await request(`/projects/${firstProject.id}`, { cookie: viewAllCookie });
+    assert.equal(viewAllDetail.status, 200);
+    const viewAllDetailPayload = (await viewAllDetail.json()) as {
+      project: {
+        currentUserAccessRole?: string;
+        currentUserAccessSource?: string;
+        currentUserCanWrite?: boolean;
+        canUpdate?: boolean;
+        canArchive?: boolean;
+      };
+    };
+    assert.equal(viewAllDetailPayload.project.currentUserAccessSource, "GLOBAL");
+    assert.equal(viewAllDetailPayload.project.currentUserAccessRole, undefined);
+    assert.equal(viewAllDetailPayload.project.currentUserCanWrite, false);
+    assert.equal(viewAllDetailPayload.project.canUpdate, false);
+    assert.equal(viewAllDetailPayload.project.canArchive, false);
+    const viewAllPatch = await request(`/projects/${firstProject.id}`, {
+      method: "PATCH",
+      cookie: viewAllCookie,
+      body: {
+        title: "View all must not write"
+      }
+    });
+    assert.equal(viewAllPatch.status, 403);
+
+    const globalEditorDetail = await request(`/projects/${firstProject.id}`, { cookie: globalEditorCookie });
+    assert.equal(globalEditorDetail.status, 200);
+    const globalEditorDetailPayload = (await globalEditorDetail.json()) as {
+      project: {
+        currentUserAccessRole?: string;
+        currentUserAccessSource?: string;
+        currentUserCanWrite?: boolean;
+        canUpdate?: boolean;
+        canArchive?: boolean;
+      };
+    };
+    assert.equal(globalEditorDetailPayload.project.currentUserAccessSource, "GLOBAL");
+    assert.equal(globalEditorDetailPayload.project.currentUserAccessRole, "PROJECT_EDITOR");
+    assert.equal(globalEditorDetailPayload.project.currentUserCanWrite, true);
+    assert.equal(globalEditorDetailPayload.project.canUpdate, true);
+    assert.equal(globalEditorDetailPayload.project.canArchive, false);
+    const globalEditorPatch = await request(`/projects/${firstProject.id}`, {
+      method: "PATCH",
+      cookie: globalEditorCookie,
+      body: {
+        title: "Global editor writes"
+      }
+    });
+    assert.equal(globalEditorPatch.status, 200);
+
+    const internalEmpty = await request("/projects", { cookie: internalCookie });
+    assert.equal(internalEmpty.status, 200);
+    assert.deepEqual(await internalEmpty.json(), []);
+
+    await prisma.projectAccess.createMany({
+      data: [
+        {
+          projectId: firstProject.id,
+          userId: internalUser.id,
+          accessRole: "PROJECT_VIEWER"
+        },
+        {
+          projectId: firstProject.id,
+          userId: externalUser.id,
+          accessRole: "EXTERNAL_PROJECT_VIEWER"
+        }
+      ]
+    });
+
+    const internalList = await request("/projects", { cookie: internalCookie });
+    assert.equal(internalList.status, 200);
+    const internalProjects = (await internalList.json()) as Array<{ id: string; currentUserAccessRole?: string }>;
+    assert.deepEqual(internalProjects.map((project) => project.id), [firstProject.id]);
+    assert.equal(internalProjects[0]?.currentUserAccessRole, "PROJECT_VIEWER");
+
+    const externalList = await request("/projects", { cookie: externalCookie });
+    assert.equal(externalList.status, 200);
+    const externalProjects = (await externalList.json()) as Array<{ id: string; currentUserAccessRole?: string }>;
+    assert.deepEqual(externalProjects.map((project) => project.id), [firstProject.id]);
+    assert.equal(externalProjects[0]?.currentUserAccessRole, "EXTERNAL_PROJECT_VIEWER");
+
+    const hiddenDetail = await request(`/projects/${secondProject.id}`, { cookie: internalCookie });
+    assert.equal(hiddenDetail.status, 403);
+
+    const removeResponse = await request(`/projects/${firstProject.id}/access/${internalUser.id}`, {
+      method: "DELETE",
+      cookie: adminCookie
+    });
+    assert.equal(removeResponse.status, 200);
+
+    const internalAfterRemove = await request("/projects", { cookie: internalCookie });
+    assert.equal(internalAfterRemove.status, 200);
+    assert.deepEqual(await internalAfterRemove.json(), []);
+  });
+
+  it("requires legal document read permission in addition to project access", async () => {
+    await createRole("PROJECT_SCOPE_ONLY", ["projects.view"]);
+    await createRole("LEGAL_DOC_READER_ONLY", ["legalDocs.view"]);
+
+    const projectOnlyUser = await createUser({
+      email: "legal-doc-project-only@example.com",
+      password: "ValidPassword1!",
+      role: "PROJECT_SCOPE_ONLY"
+    });
+    const legalDocReader = await createUser({
+      email: "legal-doc-reader-only@example.com",
+      password: "ValidPassword1!",
+      role: "LEGAL_DOC_READER_ONLY"
+    });
+    const domainNoAccessUser = await createUser({
+      email: "legal-doc-reader-no-access@example.com",
+      password: "ValidPassword1!",
+      role: "LEGAL_DOC_READER_ONLY"
+    });
+    const admin = await createUser({
+      email: "legal-doc-admin-all@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const company = await createCompany("Legal Doc Domain Scope Company");
+    const visibleProject = await prisma.project.create({
+      data: {
+        id: "legal-doc-scope-visible",
+        title: "Visible Legal Doc Scope",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+    const hiddenProject = await prisma.project.create({
+      data: {
+        id: "legal-doc-scope-hidden",
+        title: "Hidden Legal Doc Scope",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+    const visibleLegalDoc = await prisma.legalDocument.create({
+      data: {
+        id: "legal-doc-domain-visible",
+        projectId: visibleProject.id,
+        type: "NOTICE",
+        title: "Visible Legal Doc",
+        attachments: []
+      }
+    });
+    const hiddenLegalDoc = await prisma.legalDocument.create({
+      data: {
+        id: "legal-doc-domain-hidden",
+        projectId: hiddenProject.id,
+        type: "NOTICE",
+        title: "Hidden Legal Doc",
+        attachments: []
+      }
+    });
+    await prisma.projectAccess.createMany({
+      data: [
+        {
+          projectId: visibleProject.id,
+          userId: projectOnlyUser.id,
+          accessRole: "PROJECT_VIEWER"
+        },
+        {
+          projectId: visibleProject.id,
+          userId: legalDocReader.id,
+          accessRole: "PROJECT_VIEWER"
+        }
+      ]
+    });
+
+    const projectOnlyCookie = await login(projectOnlyUser.email, "ValidPassword1!");
+    const legalDocReaderCookie = await login(legalDocReader.email, "ValidPassword1!");
+    const domainNoAccessCookie = await login(domainNoAccessUser.email, "ValidPassword1!");
+    const adminCookie = await login(admin.email, "ValidPassword1!");
+
+    const projectOnlyList = await request("/legal-docs", { cookie: projectOnlyCookie });
+    assert.equal(projectOnlyList.status, 200);
+    assert.deepEqual(await projectOnlyList.json(), []);
+    const projectOnlyDetail = await request(`/legal-docs/${visibleLegalDoc.id}`, { cookie: projectOnlyCookie });
+    assert.equal(projectOnlyDetail.status, 403);
+    const projectOnlyMissingDetail = await request("/legal-docs/does-not-exist", { cookie: projectOnlyCookie });
+    assert.equal(projectOnlyMissingDetail.status, 403);
+
+    const scopedList = await request("/legal-docs", { cookie: legalDocReaderCookie });
+    assert.equal(scopedList.status, 200);
+    const scopedPayload = (await scopedList.json()) as Array<{ id: string }>;
+    assert.deepEqual(scopedPayload.map((entry) => entry.id), [visibleLegalDoc.id]);
+    const hiddenDetail = await request(`/legal-docs/${hiddenLegalDoc.id}`, { cookie: legalDocReaderCookie });
+    assert.equal(hiddenDetail.status, 403);
+
+    const domainNoAccessList = await request("/legal-docs", { cookie: domainNoAccessCookie });
+    assert.equal(domainNoAccessList.status, 200);
+    assert.deepEqual(await domainNoAccessList.json(), []);
+
+    const adminList = await request("/legal-docs", { cookie: adminCookie });
+    assert.equal(adminList.status, 200);
+    const adminPayload = (await adminList.json()) as Array<{ id: string }>;
+    assert.deepEqual(
+      adminPayload.map((entry) => entry.id).sort(),
+      [visibleLegalDoc.id, hiddenLegalDoc.id].sort()
+    );
+  });
+
+  it("allows user admins to manage project access without projects.edit", async () => {
+    await createRole("PROJECT_ACCESS_USER_ADMIN", ["admin.access", "users.manage"]);
+    await createRole("PROJECT_ACCESS_UNAUTHORIZED", ["admin.access"]);
+    await createRole("PROJECT_ACCESS_PROJECT_EDITOR_ADMIN", ["admin.access", "projects.edit"]);
+    await createRole("PROJECT_ACCESS_PROJECT_EDITOR_ONLY", ["projects.edit"]);
+    await createRole("PROJECT_ACCESS_VIEW_ALL_EDIT_ONLY", ["projects.viewAll", "projects.edit"]);
+    await createRole("PROJECT_ACCESS_USERS_MANAGE_ONLY", ["users.manage"]);
+
+    const userAdmin = await createUser({
+      email: "project-access-user-admin@example.com",
+      password: "ValidPassword1!",
+      role: "PROJECT_ACCESS_USER_ADMIN"
+    });
+    const unauthorized = await createUser({
+      email: "project-access-unauthorized@example.com",
+      password: "ValidPassword1!",
+      role: "PROJECT_ACCESS_UNAUTHORIZED"
+    });
+    const projectEditorAdmin = await createUser({
+      email: "project-access-editor-admin@example.com",
+      password: "ValidPassword1!",
+      role: "PROJECT_ACCESS_PROJECT_EDITOR_ADMIN"
+    });
+    const projectEditorOnly = await createUser({
+      email: "project-access-editor-only@example.com",
+      password: "ValidPassword1!",
+      role: "PROJECT_ACCESS_PROJECT_EDITOR_ONLY"
+    });
+    const viewAllEditOnly = await createUser({
+      email: "project-access-view-all-edit-only@example.com",
+      password: "ValidPassword1!",
+      role: "PROJECT_ACCESS_VIEW_ALL_EDIT_ONLY"
+    });
+    const usersManageOnly = await createUser({
+      email: "project-access-users-only@example.com",
+      password: "ValidPassword1!",
+      role: "PROJECT_ACCESS_USERS_MANAGE_ONLY"
+    });
+    const target = await createUser({
+      email: "project-access-target@example.com",
+      password: "ValidPassword1!"
+    });
+    const externalOrg = await prisma.externalOrganization.create({
+      data: {
+        name: "Project Access Requester External Org",
+        type: "SERVICE_PROVIDER"
+      }
+    });
+    const externalRequester = await createUser({
+      email: "project-access-requester-external@example.com",
+      password: "ValidPassword1!",
+      role: "EXTERNAL",
+      type: "EXTERNAL",
+      externalOrgId: externalOrg.id
+    });
+    const company = await createCompany("Project Access Mutation Company");
+    const project = await prisma.project.create({
+      data: {
+        id: "project-access-users-manage",
+        title: "Project Access Users Manage",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+
+    const userAdminCookie = await login(userAdmin.email, "ValidPassword1!");
+    const unauthorizedCookie = await login(unauthorized.email, "ValidPassword1!");
+    const projectEditorAdminCookie = await login(projectEditorAdmin.email, "ValidPassword1!");
+    const projectEditorOnlyCookie = await login(projectEditorOnly.email, "ValidPassword1!");
+    const viewAllEditOnlyCookie = await login(viewAllEditOnly.email, "ValidPassword1!");
+    const usersManageOnlyCookie = await login(usersManageOnly.email, "ValidPassword1!");
+    const externalCookie = await login(externalRequester.email, "ValidPassword1!");
+
+    const userAdminList = await request("/projects", { cookie: userAdminCookie });
+    assert.equal(userAdminList.status, 200);
+    assert.deepEqual(await userAdminList.json(), []);
+    const userAdminDetail = await request(`/projects/${project.id}`, { cookie: userAdminCookie });
+    assert.equal(userAdminDetail.status, 403);
+
+    const grantResponse = await request(`/projects/${project.id}/access/${target.id}`, {
+      method: "PUT",
+      cookie: userAdminCookie,
+      body: {
+        accessRole: "PROJECT_VIEWER"
+      }
+    });
+    assert.equal(grantResponse.status, 200);
+    assert.equal(
+      await prisma.projectAccess.count({
+        where: {
+          projectId: project.id,
+          userId: target.id
+        }
+      }),
+      1
+    );
+
+    const unauthorizedResponse = await request(`/projects/${project.id}/access/${target.id}`, {
+      method: "PUT",
+      cookie: unauthorizedCookie,
+      body: {
+        accessRole: "PROJECT_EDITOR"
+      }
+    });
+    assert.equal(unauthorizedResponse.status, 403);
+
+    const projectEditorAdminResponse = await request(`/projects/${project.id}/access/${target.id}`, {
+      method: "PUT",
+      cookie: projectEditorAdminCookie,
+      body: {
+        accessRole: "PROJECT_EDITOR"
+      }
+    });
+    assert.equal(projectEditorAdminResponse.status, 403);
+    const projectEditorAdminDelete = await request(`/projects/${project.id}/access/${target.id}`, {
+      method: "DELETE",
+      cookie: projectEditorAdminCookie
+    });
+    assert.equal(projectEditorAdminDelete.status, 403);
+
+    const projectEditorOnlyResponse = await request(`/projects/${project.id}/access/${target.id}`, {
+      method: "PUT",
+      cookie: projectEditorOnlyCookie,
+      body: {
+        accessRole: "PROJECT_EDITOR"
+      }
+    });
+    assert.equal(projectEditorOnlyResponse.status, 403);
+
+    const viewAllEditOnlyResponse = await request(`/projects/${project.id}/access/${target.id}`, {
+      method: "PUT",
+      cookie: viewAllEditOnlyCookie,
+      body: {
+        accessRole: "PROJECT_EDITOR"
+      }
+    });
+    assert.equal(viewAllEditOnlyResponse.status, 403);
+
+    const usersManageOnlyResponse = await request(`/projects/${project.id}/access/${target.id}`, {
+      method: "PUT",
+      cookie: usersManageOnlyCookie,
+      body: {
+        accessRole: "PROJECT_EDITOR"
+      }
+    });
+    assert.equal(usersManageOnlyResponse.status, 403);
+
+    const externalResponse = await request(`/projects/${project.id}/access/${target.id}`, {
+      method: "PUT",
+      cookie: externalCookie,
+      body: {
+        accessRole: "PROJECT_EDITOR"
+      }
+    });
+    assert.equal(externalResponse.status, 403);
+
+    const removeResponse = await request(`/projects/${project.id}/access/${target.id}`, {
+      method: "DELETE",
+      cookie: userAdminCookie
+    });
+    assert.equal(removeResponse.status, 200);
+    assert.equal(
+      await prisma.projectAccess.count({
+        where: {
+          projectId: project.id,
+          userId: target.id
+        }
+      }),
+      0
+    );
+
+    await prisma.projectAccess.create({
+      data: {
+        projectId: project.id,
+        userId: projectEditorOnly.id,
+        accessRole: "PROJECT_EDITOR"
+      }
+    });
+    const editResponse = await request(`/projects/${project.id}`, {
+      method: "PATCH",
+      cookie: projectEditorOnlyCookie,
+      body: {
+        title: "Project Access Normal Edit"
+      }
+    });
+    assert.equal(editResponse.status, 200);
+    const edited = await prisma.project.findUniqueOrThrow({
+      where: {
+        id: project.id
+      },
+      select: {
+        title: true
+      }
+    });
+    assert.equal(edited.title, "Project Access Normal Edit");
   });
 });

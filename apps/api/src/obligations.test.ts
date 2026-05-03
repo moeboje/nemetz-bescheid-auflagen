@@ -62,6 +62,17 @@ async function createUser(args: {
   });
 }
 
+async function createRole(key: string, permissionKeys: string[]) {
+  return prisma.role.create({
+    data: {
+      key,
+      labelDe: key,
+      isSystem: false,
+      permissionsJson: permissionKeys
+    }
+  });
+}
+
 async function login(email: string, password: string) {
   const response = await request("/auth/login", {
     method: "POST",
@@ -370,6 +381,80 @@ describe("Obligations API", () => {
     assert.match(payload.message, /projectId/i);
   });
 
+  it("requires obligations.view in addition to project access for reads", async () => {
+    await createRole("OBLIGATION_PROJECT_ONLY", ["projects.view"]);
+    await createRole("OBLIGATION_READER_ONLY", ["obligations.view"]);
+
+    const projectOnlyUser = await createUser({
+      email: "obligation-project-only@example.com",
+      password: "ValidPassword1!",
+      role: "OBLIGATION_PROJECT_ONLY"
+    });
+    const obligationReader = await createUser({
+      email: "obligation-reader-only@example.com",
+      password: "ValidPassword1!",
+      role: "OBLIGATION_READER_ONLY"
+    });
+    const domainNoAccessUser = await createUser({
+      email: "obligation-reader-no-access@example.com",
+      password: "ValidPassword1!",
+      role: "OBLIGATION_READER_ONLY"
+    });
+    const first = await seedLegalDoc("obligation-domain-first-project", "obligation-domain-first-doc");
+    const second = await seedLegalDoc("obligation-domain-second-project", "obligation-domain-second-doc");
+    const firstObligation = await prisma.obligation.create({
+      data: {
+        ...baseObligationPayload(first.legalDoc.id),
+        id: "obligation-domain-first",
+        title: "Scoped obligation"
+      }
+    });
+    const secondObligation = await prisma.obligation.create({
+      data: {
+        ...baseObligationPayload(second.legalDoc.id),
+        id: "obligation-domain-second",
+        title: "Hidden obligation"
+      }
+    });
+    await prisma.projectAccess.createMany({
+      data: [
+        {
+          projectId: first.project.id,
+          userId: projectOnlyUser.id,
+          accessRole: "PROJECT_VIEWER"
+        },
+        {
+          projectId: first.project.id,
+          userId: obligationReader.id,
+          accessRole: "PROJECT_VIEWER"
+        }
+      ]
+    });
+
+    const projectOnlyCookie = await login(projectOnlyUser.email, "ValidPassword1!");
+    const obligationReaderCookie = await login(obligationReader.email, "ValidPassword1!");
+    const domainNoAccessCookie = await login(domainNoAccessUser.email, "ValidPassword1!");
+
+    const projectOnlyList = await request("/obligations", { cookie: projectOnlyCookie });
+    assert.equal(projectOnlyList.status, 200);
+    assert.deepEqual(await projectOnlyList.json(), []);
+    const projectOnlyDetail = await request(`/obligations/${firstObligation.id}`, { cookie: projectOnlyCookie });
+    assert.equal(projectOnlyDetail.status, 403);
+    const projectOnlyMissingDetail = await request("/obligations/does-not-exist", { cookie: projectOnlyCookie });
+    assert.equal(projectOnlyMissingDetail.status, 403);
+
+    const scopedList = await request("/obligations", { cookie: obligationReaderCookie });
+    assert.equal(scopedList.status, 200);
+    const scopedPayload = (await scopedList.json()) as Array<{ id: string }>;
+    assert.deepEqual(scopedPayload.map((entry) => entry.id), [firstObligation.id]);
+    const hiddenDetail = await request(`/obligations/${secondObligation.id}`, { cookie: obligationReaderCookie });
+    assert.equal(hiddenDetail.status, 403);
+
+    const domainNoAccessList = await request("/obligations", { cookie: domainNoAccessCookie });
+    assert.equal(domainNoAccessList.status, 200);
+    assert.deepEqual(await domainNoAccessList.json(), []);
+  });
+
   it("allows obligation deletion only with archive permission and without blocking dependencies", async () => {
     const manager = await createUser({
       email: "obligation-delete@example.com",
@@ -422,7 +507,14 @@ describe("Obligations API", () => {
       password: "ValidPassword1!",
       role: "COMPLIANCE_EDITOR"
     });
-    const { legalDoc } = await seedLegalDoc();
+    const { legalDoc, project } = await seedLegalDoc();
+    await prisma.projectAccess.create({
+      data: {
+        projectId: project.id,
+        userId: editor.id,
+        accessRole: "PROJECT_EDITOR"
+      }
+    });
     const adminCookie = await login(admin.email, "ValidPassword1!");
 
     const createResponse = await request("/obligations", {
@@ -866,11 +958,13 @@ describe("Obligations API", () => {
     const obligationsResponse = await request("/obligations", {
       cookie
     });
-    assert.equal(obligationsResponse.status, 403);
+    assert.equal(obligationsResponse.status, 200);
+    assert.deepEqual(await obligationsResponse.json(), []);
 
     const projectsResponse = await request("/projects", {
       cookie
     });
-    assert.equal(projectsResponse.status, 403);
+    assert.equal(projectsResponse.status, 200);
+    assert.deepEqual(await projectsResponse.json(), []);
   });
 });
