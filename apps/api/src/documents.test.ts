@@ -995,6 +995,38 @@ describe("Documents API", () => {
     assert.equal(await response.text(), "legacy-exact-content");
   });
 
+  it("prefers exact legacy DOCUMENTS_STORAGE_DIR uploads layout over stripped UPLOAD_DIR fallback", async () => {
+    const user = await createUser("docs-legacy-shadowing@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const legacyStoragePath = "uploads/shadowed-document-content";
+    const legacyFilePath = resolveLegacyExactTestDocumentPath(legacyStoragePath);
+    const strippedUploadPath = resolveTestDocumentPath(legacyStoragePath);
+    await fs.mkdir(path.dirname(legacyFilePath), { recursive: true });
+    await fs.mkdir(path.dirname(strippedUploadPath), { recursive: true });
+    await fs.writeFile(legacyFilePath, "real legacy content");
+    await fs.writeFile(strippedUploadPath, "stale or unrelated content");
+
+    const document = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: project.id,
+        filename: "shadowed.pdf",
+        originalFilename: "shadowed.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 19,
+        storagePath: legacyStoragePath,
+        sha256: "shadowed"
+      }
+    });
+
+    const response = await request(`/documents/${document.id}/file`, {
+      cookie
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "real legacy content");
+  });
+
   it("uses a new storage key when replacing with the same filename", async () => {
     const user = await createUser("docs-replace-same-name@example.com", "ValidPassword1!");
     const project = await seedProject(user.id);
@@ -1023,6 +1055,61 @@ describe("Documents API", () => {
     });
     assert.equal(response.status, 200);
     assert.equal(await response.text(), "same-name-new");
+  });
+
+  it("replaces only the resolved old file and leaves alternate legacy candidates intact", async () => {
+    const user = await createUser("docs-replace-overlap@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const legacyStoragePath = "uploads/replace-overlap-content";
+    const legacyFilePath = resolveLegacyExactTestDocumentPath(legacyStoragePath);
+    const strippedUploadPath = resolveTestDocumentPath(legacyStoragePath);
+    await fs.mkdir(path.dirname(legacyFilePath), { recursive: true });
+    await fs.mkdir(path.dirname(strippedUploadPath), { recursive: true });
+    await fs.writeFile(legacyFilePath, "replace real legacy content");
+    await fs.writeFile(strippedUploadPath, "replace alternate active content");
+
+    const document = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: project.id,
+        filename: "replace-overlap.pdf",
+        originalFilename: "replace-overlap.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 27,
+        storagePath: legacyStoragePath,
+        sha256: "replace-overlap"
+      }
+    });
+    const alternateDocument = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: project.id,
+        filename: "replace-alternate.pdf",
+        originalFilename: "replace-alternate.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 32,
+        storagePath: "replace-overlap-content",
+        sha256: "replace-alternate"
+      }
+    });
+
+    const replaceResponse = await replaceDocumentFile(cookie, document.id, "replace-new.pdf", "replace new content");
+    assert.equal(replaceResponse.status, 200);
+    await assert.rejects(fs.stat(legacyFilePath), { code: "ENOENT" });
+    assert.equal(await fs.readFile(strippedUploadPath, "utf8"), "replace alternate active content");
+
+    const alternateDownload = await request(`/documents/${alternateDocument.id}/file`, {
+      cookie
+    });
+    assert.equal(alternateDownload.status, 200);
+    assert.equal(await alternateDownload.text(), "replace alternate active content");
+
+    const replacedDownload = await request(`/documents/${document.id}/file`, {
+      cookie
+    });
+    assert.equal(replacedDownload.status, 200);
+    assert.equal(await replacedDownload.text(), "replace new content");
   });
 
   it("keeps the old file intact when replacement DB update fails", async () => {
@@ -1272,6 +1359,99 @@ describe("Documents API", () => {
     assert.equal(listPayload.items.some((item) => item.id === document.id), false);
   });
 
+  it("deletes only the resolved legacy file and leaves stripped alternate documents intact", async () => {
+    const user = await createUser("docs-delete-overlap@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const legacyStoragePath = "uploads/delete-overlap-content";
+    const legacyFilePath = resolveLegacyExactTestDocumentPath(legacyStoragePath);
+    const strippedUploadPath = resolveTestDocumentPath(legacyStoragePath);
+    await fs.mkdir(path.dirname(legacyFilePath), { recursive: true });
+    await fs.mkdir(path.dirname(strippedUploadPath), { recursive: true });
+    await fs.writeFile(legacyFilePath, "delete real legacy content");
+    await fs.writeFile(strippedUploadPath, "delete alternate active content");
+
+    const legacyDocument = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: project.id,
+        filename: "delete-overlap-legacy.pdf",
+        originalFilename: "delete-overlap-legacy.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 26,
+        storagePath: legacyStoragePath,
+        sha256: "delete-overlap-legacy"
+      }
+    });
+    const alternateDocument = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: project.id,
+        filename: "delete-overlap-alternate.pdf",
+        originalFilename: "delete-overlap-alternate.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 31,
+        storagePath: "delete-overlap-content",
+        sha256: "delete-overlap-alternate"
+      }
+    });
+
+    const deleteResponse = await request(`/documents/${legacyDocument.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(deleteResponse.status, 200);
+    await assert.rejects(fs.stat(legacyFilePath), { code: "ENOENT" });
+    assert.equal(await fs.readFile(strippedUploadPath, "utf8"), "delete alternate active content");
+
+    const alternateDownload = await request(`/documents/${alternateDocument.id}/file`, {
+      cookie
+    });
+    assert.equal(alternateDownload.status, 200);
+    assert.equal(await alternateDownload.text(), "delete alternate active content");
+  });
+
+  it("deletes only the first resolved candidate when multiple legacy candidates exist", async () => {
+    const user = await createUser("docs-delete-multiple-candidates@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const legacyStoragePath = "uploads/delete-multiple-candidates";
+    const legacyExactFilePath = resolveLegacyExactTestDocumentPath(legacyStoragePath);
+    const uploadExactFilePath = path.resolve(uploadDir, legacyStoragePath);
+    const uploadStrippedFilePath = resolveTestDocumentPath(legacyStoragePath);
+    const legacyStrippedFilePath = path.resolve(legacyDocumentsStorageDir, "delete-multiple-candidates");
+    for (const filePath of [legacyExactFilePath, uploadExactFilePath, uploadStrippedFilePath, legacyStrippedFilePath]) {
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+    }
+    await fs.writeFile(legacyExactFilePath, "legacy exact");
+    await fs.writeFile(uploadExactFilePath, "upload exact");
+    await fs.writeFile(uploadStrippedFilePath, "upload stripped");
+    await fs.writeFile(legacyStrippedFilePath, "legacy stripped");
+
+    const document = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: project.id,
+        filename: "delete-multiple.pdf",
+        originalFilename: "delete-multiple.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 12,
+        storagePath: legacyStoragePath,
+        sha256: "delete-multiple"
+      }
+    });
+
+    const deleteResponse = await request(`/documents/${document.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(deleteResponse.status, 200);
+    await assert.rejects(fs.stat(legacyExactFilePath), { code: "ENOENT" });
+    assert.equal(await fs.readFile(uploadExactFilePath, "utf8"), "upload exact");
+    assert.equal(await fs.readFile(uploadStrippedFilePath, "utf8"), "upload stripped");
+    assert.equal(await fs.readFile(legacyStrippedFilePath, "utf8"), "legacy stripped");
+  });
+
   it("cleans up missing exact legacy document metadata without requiring the file", async () => {
     const user = await createUser("docs-delete-missing-legacy-exact@example.com", "ValidPassword1!");
     const project = await seedProject(user.id);
@@ -1413,6 +1593,50 @@ describe("Documents API", () => {
     assert.equal(downloadResponse.status, 404);
     const downloadPayload = (await downloadResponse.json()) as { errorCode?: string };
     assert.equal(downloadPayload.errorCode, "DOCUMENT_NOT_FOUND");
+  });
+
+  it("keeps delete successful when audit creation fails after archive", async () => {
+    const user = await createUser("docs-delete-audit-failure@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocument(cookie, "PROJECT", project.id, "delete-audit-failure.pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+
+    const originalAuditCreate = prisma.auditLog.create.bind(prisma.auditLog) as (args: unknown) => Promise<unknown>;
+    (prisma.auditLog as unknown as { create: (args: unknown) => Promise<unknown> }).create = async (args: unknown) => {
+      const createArgs = args as { data?: { action?: unknown } };
+      if (createArgs.data?.action === "DOCUMENT_DELETED") {
+        throw new Error("mock delete audit failure");
+      }
+      return originalAuditCreate(args);
+    };
+
+    let deleteResponse: Response;
+    try {
+      deleteResponse = await request(`/documents/${uploadPayload.document.id}`, {
+        method: "DELETE",
+        cookie
+      });
+    } finally {
+      (prisma.auditLog as unknown as { create: (args: unknown) => Promise<unknown> }).create = originalAuditCreate;
+    }
+    assert.equal(deleteResponse.status, 200);
+
+    const archivedRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    assert.equal(archivedRecord.isArchived, true);
+
+    const listResponse = await request(`/documents?ownerType=PROJECT&ownerId=${encodeURIComponent(project.id)}`, {
+      cookie
+    });
+    assert.equal(listResponse.status, 200);
+    const listPayload = (await listResponse.json()) as { items: Array<{ id: string }> };
+    assert.equal(listPayload.items.some((item) => item.id === uploadPayload.document.id), false);
   });
 
   it("scopes document reads and downloads by stored owner type", async () => {

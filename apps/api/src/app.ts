@@ -1135,13 +1135,25 @@ function resolveStoredDocumentPathCandidates(config: AppConfig, storagePath: str
     };
   }
 
-  addSafeDocumentPathCandidate(candidates, path.resolve(uploadRoot, legacyExactStorageKey), uploadRoot);
-  if (currentStorageKey !== legacyExactStorageKey) {
-    addSafeDocumentPathCandidate(candidates, path.resolve(uploadRoot, currentStorageKey), uploadRoot);
+  const isLegacyUploadsKey = legacyExactStorageKey.startsWith(LEGACY_DOCUMENT_STORAGE_PREFIX);
+  if (legacyRoot && isLegacyUploadsKey) {
+    addSafeDocumentPathCandidate(candidates, path.resolve(legacyRoot, legacyExactStorageKey), legacyRoot);
+    addSafeDocumentPathCandidate(candidates, path.resolve(uploadRoot, legacyExactStorageKey), uploadRoot);
+    if (currentStorageKey !== legacyExactStorageKey) {
+      addSafeDocumentPathCandidate(candidates, path.resolve(uploadRoot, currentStorageKey), uploadRoot);
+      addSafeDocumentPathCandidate(candidates, path.resolve(legacyRoot, currentStorageKey), legacyRoot);
+    }
+  } else {
+    addSafeDocumentPathCandidate(candidates, path.resolve(uploadRoot, legacyExactStorageKey), uploadRoot);
+    if (currentStorageKey !== legacyExactStorageKey) {
+      addSafeDocumentPathCandidate(candidates, path.resolve(uploadRoot, currentStorageKey), uploadRoot);
+    }
+    if (legacyRoot) {
+      addSafeDocumentPathCandidate(candidates, path.resolve(legacyRoot, legacyExactStorageKey), legacyRoot);
+    }
   }
 
-  if (legacyRoot) {
-    addSafeDocumentPathCandidate(candidates, path.resolve(legacyRoot, legacyExactStorageKey), legacyRoot);
+  if (legacyRoot && !isLegacyUploadsKey && currentStorageKey !== legacyExactStorageKey) {
     addSafeDocumentPathCandidate(candidates, path.resolve(legacyRoot, currentStorageKey), legacyRoot);
   }
 
@@ -3183,7 +3195,8 @@ export function createApp(config: AppConfig = loadConfig()) {
         return;
       }
 
-      const fileCleanupPaths = resolveStoredDocumentPathCandidates(config, document.storagePath).candidates;
+      const fileCleanupResolution = await resolveExistingStoredDocumentPath(config, document.storagePath);
+      const resolvedFilePath = fileCleanupResolution.isSafe ? fileCleanupResolution.absoluteFilePath : null;
 
       await prisma.document.update({
         where: {
@@ -3195,26 +3208,31 @@ export function createApp(config: AppConfig = loadConfig()) {
       });
 
       let fileCleanupFailed = false;
-      if (fileCleanupPaths.length > 0) {
+      if (resolvedFilePath) {
         try {
-          await Promise.all(fileCleanupPaths.map((filePath) => unlinkIfExists(filePath)));
-        } catch {
+          await unlinkIfExists(resolvedFilePath);
+        } catch (error) {
           fileCleanupFailed = true;
+          logDocumentPostCommitFailure("Document delete file cleanup failed after commit.", document.id, error);
         }
       }
 
-      await audit({
-        actorUserId: req.authUser.id,
-        action: "DOCUMENT_DELETED",
-        req,
-        metadata: {
-          documentId: document.id,
-          ownerType: document.ownerType,
-          ownerId: document.ownerId,
-          fileCleanupAttempted: fileCleanupPaths.length > 0,
-          fileCleanupFailed
-        }
-      });
+      try {
+        await audit({
+          actorUserId: req.authUser.id,
+          action: "DOCUMENT_DELETED",
+          req,
+          metadata: {
+            documentId: document.id,
+            ownerType: document.ownerType,
+            ownerId: document.ownerId,
+            fileCleanupAttempted: Boolean(resolvedFilePath),
+            fileCleanupFailed
+          }
+        });
+      } catch (error) {
+        logDocumentPostCommitFailure("Document delete audit failed after commit.", document.id, error);
+      }
 
       res.json({ ok: true });
     } catch (error) {
@@ -3281,7 +3299,8 @@ export function createApp(config: AppConfig = loadConfig()) {
           return;
         }
 
-        const previousFilePaths = resolveStoredDocumentPathCandidates(config, document.storagePath).candidates;
+        const previousFileResolution = await resolveExistingStoredDocumentPath(config, document.storagePath);
+        const previousResolvedFilePath = previousFileResolution.isSafe ? previousFileResolution.absoluteFilePath : null;
         const temporaryFilePath = `${absoluteFilePath}.tmp-${randomUUID()}`;
         let newFileFinalized = false;
 
@@ -3319,11 +3338,13 @@ export function createApp(config: AppConfig = loadConfig()) {
           throw error;
         }
 
-        const previousFileCleanupPaths = previousFilePaths.filter((previousFilePath) => previousFilePath !== absoluteFilePath);
+        const previousFileCleanupPath = previousResolvedFilePath && previousResolvedFilePath !== absoluteFilePath
+          ? previousResolvedFilePath
+          : null;
         let previousFileCleanupFailed = false;
-        if (previousFileCleanupPaths.length > 0) {
+        if (previousFileCleanupPath) {
           try {
-            await Promise.all(previousFileCleanupPaths.map((previousFilePath) => unlinkIfExists(previousFilePath)));
+            await unlinkIfExists(previousFileCleanupPath);
           } catch (error) {
             previousFileCleanupFailed = true;
             logDocumentPostCommitFailure("Document replace old-file cleanup failed after commit.", updated.id, error);
@@ -3341,7 +3362,7 @@ export function createApp(config: AppConfig = loadConfig()) {
               ownerId: updated.ownerId,
               mimeType: updated.mimeType,
               sizeBytes: updated.sizeBytes,
-              previousFileCleanupAttempted: previousFileCleanupPaths.length > 0,
+              previousFileCleanupAttempted: Boolean(previousFileCleanupPath),
               previousFileCleanupFailed
             }
           });

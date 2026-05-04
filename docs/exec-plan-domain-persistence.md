@@ -581,6 +581,16 @@
 - Nicht-Ziele:
 - keine UI-Aenderung, keine neue Permission, keine RBAC-Lockerung, keine Bulk-Operationen, keine neuen Dependencies und keine Azure-Aenderungen.
 
+## 2zc. Gezielter P1/P2-Fixlauf 2026-05-04 fuer Dokument-Storage-Cleanup
+- Dies ist keine neue Feature-Phase, keine Azure-Arbeit und keine Recovery-Architektur.
+- Ziel dieses Laufs ist ausschliesslich die Behebung der Review-Findings zu ueberlappenden Legacy-Storage-Kandidaten und Delete-Post-Commit-Fehlern.
+- Download, Preview, Delete und Replace verwenden dieselbe sichere Candidate-Resolution, bei der `DOCUMENTS_STORAGE_DIR/uploads/<key>` fuer Legacy-Keys vor stripped `UPLOAD_DIR/<key>` gewinnt.
+- Delete und Replace loeschen nach erfolgreichem DB-Commit nur noch die tatsaechlich aufgeloeste alte Datei, niemals pauschal alle Kompatibilitaetskandidaten.
+- Fehlende Dateien blockieren die Metadatenbereinigung nicht; invalid oder nicht vorhandene Storage-Pfade fuehren zu keinem File-Unlink.
+- Audit- und Cleanup-Fehler nach erfolgreichem Delete-Archivieren bleiben best effort und duerfen keinen Client-500 mehr ausloesen.
+- Nicht-Ziele:
+- keine UI-Aenderung, keine neue Permission, keine RBAC-Lockerung, keine Bulk-/Recovery-Pfade, keine neuen Dependencies und keine Azure-Aenderungen.
+
 ## 3. Ist-Zustand
 - Browser-persistiert fachlich aktiv ist aktuell nur noch `taskState`; zusätzliche UI-/Recovery-Daten liegen weiterhin via `apps/web/src/state/persistence.ts` lokal.
 - `ScopesStore`, `AuthoritiesStore`, `ProjectsStore`, `LegalDocsStore`, `ObligationsStore` und `DeadlinesStore` sind bereits API-backed und löschen ihre alten Domänen-Storage-Keys aktiv.
