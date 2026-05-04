@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { once } from "node:events";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { after, before, beforeEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
@@ -14,6 +15,10 @@ import { hashPassword } from "./security.js";
 const currentFile = fileURLToPath(import.meta.url);
 const currentDir = path.dirname(currentFile);
 const uploadDir = path.resolve(currentDir, "..", "storage", "uploads");
+const legacyDocumentsStorageDir = path.resolve(currentDir, "..", "legacy-storage", "uploads");
+const alternateStorageRoot = path.join(tmpdir(), `nemetz-documents-api-${process.pid}`);
+const exactDocumentsUploadRoot = path.join(alternateStorageRoot, "documents");
+const exactUploadsRoot = path.join(alternateStorageRoot, "uploads");
 
 let baseUrl = "";
 let server: ReturnType<ReturnType<typeof createApp>["listen"]>;
@@ -21,10 +26,15 @@ let requestCounter = 0;
 
 async function cleanUploadDir() {
   await fs.rm(uploadDir, { recursive: true, force: true });
+  await fs.rm(legacyDocumentsStorageDir, { recursive: true, force: true });
+  await fs.rm(alternateStorageRoot, { recursive: true, force: true });
   await fs.mkdir(uploadDir, { recursive: true });
+  await fs.mkdir(legacyDocumentsStorageDir, { recursive: true });
+  await fs.mkdir(exactDocumentsUploadRoot, { recursive: true });
+  await fs.mkdir(exactUploadsRoot, { recursive: true });
 }
 
-async function request(pathname: string, options: { method?: string; body?: unknown; cookie?: string } = {}) {
+async function requestTo(apiBaseUrl: string, pathname: string, options: { method?: string; body?: unknown; cookie?: string } = {}) {
   requestCounter += 1;
   const headers = new Headers();
   headers.set("X-Forwarded-For", `127.0.0.${(requestCounter % 200) + 1}`);
@@ -37,11 +47,15 @@ async function request(pathname: string, options: { method?: string; body?: unkn
     headers.set("Content-Type", "application/json");
   }
 
-  return fetch(`${baseUrl}${pathname}`, {
+  return fetch(`${apiBaseUrl}${pathname}`, {
     method: options.method ?? "GET",
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined
   });
+}
+
+async function request(pathname: string, options: { method?: string; body?: unknown; cookie?: string } = {}) {
+  return requestTo(baseUrl, pathname, options);
 }
 
 function extractSessionCookie(setCookieHeader: string | null) {
@@ -77,8 +91,8 @@ async function createRole(key: string, permissionKeys: string[]) {
   });
 }
 
-async function login(email: string, password: string) {
-  const response = await request("/auth/login", {
+async function loginTo(apiBaseUrl: string, email: string, password: string) {
+  const response = await requestTo(apiBaseUrl, "/auth/login", {
     method: "POST",
     body: {
       email,
@@ -90,6 +104,10 @@ async function login(email: string, password: string) {
   const cookie = extractSessionCookie(response.headers.get("set-cookie"));
   assert.ok(cookie, "Expected session cookie");
   return cookie;
+}
+
+async function login(email: string, password: string) {
+  return loginTo(baseUrl, email, password);
 }
 
 async function seedProject(
@@ -219,7 +237,13 @@ async function seedOwnerBundle(
   };
 }
 
-async function uploadDocument(cookie: string, ownerType: string, ownerId: string, filename = "example.pdf") {
+async function uploadDocumentTo(
+  apiBaseUrl: string,
+  cookie: string,
+  ownerType: string,
+  ownerId: string,
+  filename = "example.pdf"
+) {
   requestCounter += 1;
   const form = new FormData();
   form.set("ownerType", ownerType);
@@ -230,54 +254,147 @@ async function uploadDocument(cookie: string, ownerType: string, ownerId: string
   headers.set("X-Forwarded-For", `127.0.0.${(requestCounter % 200) + 1}`);
   headers.set("Cookie", cookie);
 
-  return fetch(`${baseUrl}/documents`, {
+  return fetch(`${apiBaseUrl}/documents`, {
     method: "POST",
     headers,
     body: form
   });
 }
 
+async function uploadDocument(cookie: string, ownerType: string, ownerId: string, filename = "example.pdf") {
+  return uploadDocumentTo(baseUrl, cookie, ownerType, ownerId, filename);
+}
+
+async function replaceDocumentFileTo(
+  apiBaseUrl: string,
+  cookie: string,
+  documentId: string,
+  filename = "replacement.pdf",
+  content = "replacement-content"
+) {
+  requestCounter += 1;
+  const form = new FormData();
+  form.set("file", new Blob([content], { type: "application/pdf" }), filename);
+
+  const headers = new Headers();
+  headers.set("X-Forwarded-For", `127.0.0.${(requestCounter % 200) + 1}`);
+  headers.set("Cookie", cookie);
+
+  return fetch(`${apiBaseUrl}/documents/${encodeURIComponent(documentId)}/file`, {
+    method: "PUT",
+    headers,
+    body: form
+  });
+}
+
+async function replaceDocumentFile(cookie: string, documentId: string, filename = "replacement.pdf", content = "replacement-content") {
+  return replaceDocumentFileTo(baseUrl, cookie, documentId, filename, content);
+}
+
+function resolveTestDocumentPath(storagePath: string) {
+  const normalized = storagePath.startsWith("uploads/")
+    ? storagePath.slice("uploads/".length)
+    : storagePath;
+  return path.resolve(uploadDir, normalized);
+}
+
+function resolveLegacyExactTestDocumentPath(storagePath: string) {
+  return path.resolve(legacyDocumentsStorageDir, storagePath.replace(/\\/g, "/"));
+}
+
+function storagePathBasename(storagePath: string) {
+  return path.posix.basename(storagePath.replace(/\\/g, "/"));
+}
+
+function assertBoundedStoragePath(storagePath: string) {
+  assert.match(storagePath, /^documents\/\d{4}\/\d{2}\/[^/]+$/);
+  assert.ok(Buffer.byteLength(storagePathBasename(storagePath), "utf8") < 255);
+}
+
+function makeLongPdfFilename() {
+  return `${"a".repeat(236)}.pdf`;
+}
+
+async function listUploadFiles(dir = uploadDir): Promise<string[]> {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  const files = await Promise.all(
+    entries.map(async (entry) => {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        return listUploadFiles(fullPath);
+      }
+      return [fullPath];
+    })
+  );
+  return files.flat().sort();
+}
+
+function makeDocumentsTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
+  return {
+    port: 0,
+    databaseUrl: resolveDatabaseUrl(process.env, "test"),
+    appOrigin: "http://localhost:5173",
+    notificationBaseUrl: "http://localhost:5173",
+    notificationDispatchEnabled: false,
+    notificationDryRun: true,
+    notificationFromLabel: "Nemetz Portal",
+    powerAutomateNotificationWebhookUrl: "",
+    powerAutomateNotificationSecret: "",
+    notificationMaxAttempts: 5,
+    notificationDispatchBatchSize: 25,
+    notificationDispatchTimeoutMs: 15_000,
+    notificationClaimLeaseSeconds: 300,
+    notificationTimeZone: "Europe/Vienna",
+    sessionSecret: "test-secret",
+    nodeEnv: "test",
+    resetTokenTtlMinutes: 30,
+    sessionTtlDays: 7,
+    cookieSecure: false,
+    basePath: "/api",
+    authEnableEntra: false,
+    entraTenantId: "",
+    entraClientId: "",
+    entraClientSecret: "",
+    entraRedirectUri: "http://localhost:4000/api/auth/entra/callback",
+    entraAllowedDomains: ["nemetz-ag.at"],
+    entraAutoProvision: false,
+    entraScopes: ["openid", "profile", "email"],
+    documentsStorageDir: "storage",
+    legacyDocumentsStorageDir,
+    documentsMaxUploadBytes: 20 * 1024 * 1024,
+    ...overrides
+  };
+}
+
+async function startDocumentsTestServer(overrides: Partial<AppConfig> = {}) {
+  const app = createApp(makeDocumentsTestConfig(overrides));
+  const testServer = app.listen(0);
+  await once(testServer, "listening");
+
+  const address = testServer.address() as AddressInfo;
+  return {
+    server: testServer,
+    baseUrl: `http://127.0.0.1:${address.port}/api`
+  };
+}
+
+async function closeTestServer(testServer: ReturnType<ReturnType<typeof createApp>["listen"]>) {
+  await new Promise<void>((resolve, reject) => {
+    testServer.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
 describe("Documents API", () => {
   before(async () => {
-    const config: AppConfig = {
-      port: 0,
-      databaseUrl: resolveDatabaseUrl(process.env, "test"),
-      appOrigin: "http://localhost:5173",
-      notificationBaseUrl: "http://localhost:5173",
-      notificationDispatchEnabled: false,
-      notificationDryRun: true,
-      notificationFromLabel: "Nemetz Portal",
-      powerAutomateNotificationWebhookUrl: "",
-      powerAutomateNotificationSecret: "",
-      notificationMaxAttempts: 5,
-      notificationDispatchBatchSize: 25,
-      notificationDispatchTimeoutMs: 15_000,
-      notificationClaimLeaseSeconds: 300,
-      notificationTimeZone: "Europe/Vienna",
-      sessionSecret: "test-secret",
-      nodeEnv: "test",
-      resetTokenTtlMinutes: 30,
-      sessionTtlDays: 7,
-      cookieSecure: false,
-      basePath: "/api",
-      authEnableEntra: false,
-      entraTenantId: "",
-      entraClientId: "",
-      entraClientSecret: "",
-      entraRedirectUri: "http://localhost:4000/api/auth/entra/callback",
-      entraAllowedDomains: ["nemetz-ag.at"],
-      entraAutoProvision: false,
-      entraScopes: ["openid", "profile", "email"],
-      documentsStorageDir: "storage",
-      documentsMaxUploadBytes: 20 * 1024 * 1024
-    };
-
-    const app = createApp(config);
-    server = app.listen(0);
-    await once(server, "listening");
-
-    const address = server.address() as AddressInfo;
-    baseUrl = `http://127.0.0.1:${address.port}/api`;
+    const started = await startDocumentsTestServer();
+    server = started.server;
+    baseUrl = started.baseUrl;
   });
 
   after(async () => {
@@ -289,6 +406,7 @@ describe("Documents API", () => {
     await prisma.session.deleteMany();
     await prisma.auditLog.deleteMany();
     await prisma.document.deleteMany();
+    await prisma.taskStateEntry.deleteMany();
     await prisma.legacyDecision.deleteMany();
     await prisma.deadline.deleteMany();
     await prisma.obligation.deleteMany();
@@ -337,9 +455,186 @@ describe("Documents API", () => {
     assert.equal(payload.document.ownerId, project.id);
     assert.ok(payload.document.id);
 
-    const expectedPath = path.resolve(uploadDir, payload.document.id);
+    const record = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: payload.document.id
+      }
+    });
+    assertBoundedStoragePath(record.storagePath);
+    assert.equal(record.filename, "permit.pdf");
+    assert.equal(record.originalFilename, "permit.pdf");
+    const expectedPath = resolveTestDocumentPath(record.storagePath);
     const stat = await fs.stat(expectedPath);
     assert.equal(stat.isFile(), true);
+  });
+
+  it("honors UPLOAD_DIR exactly when its basename is not uploads", async () => {
+    const started = await startDocumentsTestServer({
+      uploadDir: exactDocumentsUploadRoot,
+      documentsStorageDir: "storage/uploads",
+      legacyDocumentsStorageDir: undefined
+    });
+
+    try {
+      const user = await createUser("docs-upload-dir-documents@example.com", "ValidPassword1!");
+      const project = await seedProject(user.id);
+      const cookie = await loginTo(started.baseUrl, user.email, "ValidPassword1!");
+
+      const uploadResponse = await uploadDocumentTo(started.baseUrl, cookie, "PROJECT", project.id, "exact-root.pdf");
+      assert.equal(uploadResponse.status, 201);
+      const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+      const record = await prisma.document.findUniqueOrThrow({
+        where: {
+          id: uploadPayload.document.id
+        }
+      });
+
+      assertBoundedStoragePath(record.storagePath);
+      const expectedPath = path.resolve(exactDocumentsUploadRoot, record.storagePath);
+      const nestedUploadsPath = path.resolve(exactDocumentsUploadRoot, "uploads", record.storagePath);
+      const stat = await fs.stat(expectedPath);
+      assert.equal(stat.isFile(), true);
+      await assert.rejects(fs.stat(nestedUploadsPath), { code: "ENOENT" });
+
+      const downloadResponse = await requestTo(started.baseUrl, `/documents/${uploadPayload.document.id}/file`, {
+        cookie
+      });
+      assert.equal(downloadResponse.status, 200);
+      assert.equal(await downloadResponse.text(), "test-pdf-content");
+    } finally {
+      await closeTestServer(started.server);
+    }
+  });
+
+  it("honors UPLOAD_DIR exactly when its basename is uploads", async () => {
+    const started = await startDocumentsTestServer({
+      uploadDir: exactUploadsRoot,
+      documentsStorageDir: "storage/uploads",
+      legacyDocumentsStorageDir: undefined
+    });
+
+    try {
+      const user = await createUser("docs-upload-dir-uploads@example.com", "ValidPassword1!");
+      const project = await seedProject(user.id);
+      const cookie = await loginTo(started.baseUrl, user.email, "ValidPassword1!");
+
+      const uploadResponse = await uploadDocumentTo(started.baseUrl, cookie, "PROJECT", project.id, "exact-uploads-root.pdf");
+      assert.equal(uploadResponse.status, 201);
+      const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+      const record = await prisma.document.findUniqueOrThrow({
+        where: {
+          id: uploadPayload.document.id
+        }
+      });
+
+      assertBoundedStoragePath(record.storagePath);
+      const expectedPath = path.resolve(exactUploadsRoot, record.storagePath);
+      const doubleUploadsPath = path.resolve(exactUploadsRoot, "uploads", record.storagePath);
+      const stat = await fs.stat(expectedPath);
+      assert.equal(stat.isFile(), true);
+      await assert.rejects(fs.stat(doubleUploadsPath), { code: "ENOENT" });
+
+      const downloadResponse = await requestTo(started.baseUrl, `/documents/${uploadPayload.document.id}/file`, {
+        cookie
+      });
+      assert.equal(downloadResponse.status, 200);
+      assert.equal(await downloadResponse.text(), "test-pdf-content");
+    } finally {
+      await closeTestServer(started.server);
+    }
+  });
+
+  it("resolves stored uploads-prefixed keys exactly inside UPLOAD_DIR without a legacy root", async () => {
+    const started = await startDocumentsTestServer({
+      uploadDir: exactDocumentsUploadRoot,
+      documentsStorageDir: "storage/uploads",
+      legacyDocumentsStorageDir: undefined
+    });
+
+    try {
+      const user = await createUser("docs-upload-dir-exact-legacy-key@example.com", "ValidPassword1!");
+      const project = await seedProject(user.id);
+      const cookie = await loginTo(started.baseUrl, user.email, "ValidPassword1!");
+      const storagePath = "uploads/current-root-legacy-key";
+      const absolutePath = path.resolve(exactDocumentsUploadRoot, storagePath);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, "current-root-legacy-content");
+
+      const document = await prisma.document.create({
+        data: {
+          ownerType: "PROJECT",
+          ownerId: project.id,
+          filename: "current-root-legacy.pdf",
+          originalFilename: "current-root-legacy.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 27,
+          storagePath,
+          sha256: "current-root-legacy"
+        }
+      });
+
+      const response = await requestTo(started.baseUrl, `/documents/${document.id}/file`, {
+        cookie
+      });
+      assert.equal(response.status, 200);
+      assert.equal(await response.text(), "current-root-legacy-content");
+    } finally {
+      await closeTestServer(started.server);
+    }
+  });
+
+  it("uploads a very long filename while keeping the storage key bounded", async () => {
+    const user = await createUser("docs-long-upload@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const longFilename = makeLongPdfFilename();
+
+    const uploadResponse = await uploadDocument(cookie, "PROJECT", project.id, longFilename);
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as {
+      document: { id: string; filename: string; originalFilename?: string | null };
+    };
+    assert.equal(uploadPayload.document.filename, longFilename);
+    assert.equal(uploadPayload.document.originalFilename, longFilename);
+
+    const record = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    assertBoundedStoragePath(record.storagePath);
+    assert.equal(record.filename, longFilename);
+    assert.equal(record.originalFilename, longFilename);
+    assert.ok(!record.storagePath.includes(longFilename));
+
+    const downloadResponse = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie
+    });
+    assert.equal(downloadResponse.status, 200);
+  });
+
+  it("does not use path traversal filenames in storage keys", async () => {
+    const user = await createUser("docs-traversal-filename@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocument(cookie, "PROJECT", project.id, "../../evil.pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    const record = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+
+    assertBoundedStoragePath(record.storagePath);
+    assert.ok(!record.storagePath.includes("evil.pdf"));
+    assert.ok(resolveTestDocumentPath(record.storagePath).startsWith(uploadDir));
+
+    const response = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie
+    });
+    assert.equal(response.status, 200);
   });
 
   it("download returns content with inline headers for pdf", async () => {
@@ -360,6 +655,510 @@ describe("Documents API", () => {
     assert.equal(response.headers.get("content-type"), "application/pdf");
     assert.match(response.headers.get("content-disposition") || "", /inline;/);
     assert.equal(response.headers.get("cache-control"), "private, no-store");
+  });
+
+  it("returns FILE_MISSING when metadata exists but content is gone", async () => {
+    const user = await createUser("docs-missing-file@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocument(cookie, "PROJECT", project.id, "missing-after-upload.pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    const record = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    await fs.rm(resolveTestDocumentPath(record.storagePath), { force: true });
+
+    const response = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie
+    });
+
+    assert.equal(response.status, 404);
+    const payload = (await response.json()) as { errorCode?: string };
+    assert.equal(payload.errorCode, "FILE_MISSING");
+  });
+
+  it("deletes missing-file metadata without requiring the physical file", async () => {
+    const user = await createUser("docs-delete-missing-file@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const document = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: project.id,
+        filename: "missing.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 12,
+        storagePath: "documents/2026/05/missing.pdf",
+        sha256: "missing"
+      }
+    });
+
+    const deleteResponse = await request(`/documents/${document.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(deleteResponse.status, 200);
+    const archivedDocument = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: document.id
+      }
+    });
+    assert.equal(archivedDocument.isArchived, true);
+
+    const listResponse = await request(`/documents?ownerType=PROJECT&ownerId=${encodeURIComponent(project.id)}`, {
+      cookie
+    });
+    assert.equal(listResponse.status, 200);
+    const listPayload = (await listResponse.json()) as { items: Array<{ id: string }> };
+    assert.equal(listPayload.items.some((item) => item.id === document.id), false);
+
+    const downloadResponse = await request(`/documents/${document.id}/file`, {
+      cookie
+    });
+    assert.equal(downloadResponse.status, 404);
+    const downloadPayload = (await downloadResponse.json()) as { errorCode?: string };
+    assert.equal(downloadPayload.errorCode, "DOCUMENT_NOT_FOUND");
+  });
+
+  it("replaces a missing file and keeps download working across requests", async () => {
+    const user = await createUser("docs-replace-missing@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const document = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: project.id,
+        filename: "old.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 12,
+        storagePath: "documents/2026/05/old-missing.pdf",
+        sha256: "old"
+      }
+    });
+
+    const replaceResponse = await replaceDocumentFile(cookie, document.id, "repaired.pdf", "repaired-content");
+    assert.equal(replaceResponse.status, 200);
+    const replacePayload = (await replaceResponse.json()) as { document: { id: string; filename: string } };
+    assert.equal(replacePayload.document.id, document.id);
+    assert.equal(replacePayload.document.filename, "repaired.pdf");
+    const repairedRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: document.id
+      }
+    });
+    assertBoundedStoragePath(repairedRecord.storagePath);
+
+    const firstDownload = await request(`/documents/${document.id}/file`, {
+      cookie
+    });
+    assert.equal(firstDownload.status, 200);
+    assert.equal(await firstDownload.text(), "repaired-content");
+
+    const secondDownload = await request(`/documents/${document.id}/file`, {
+      cookie
+    });
+    assert.equal(secondDownload.status, 200);
+    assert.equal(await secondDownload.text(), "repaired-content");
+  });
+
+  it("replaces with a very long filename while keeping the storage key bounded", async () => {
+    const user = await createUser("docs-long-replace@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const uploadResponse = await uploadDocument(cookie, "PROJECT", project.id, "short.pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    const longFilename = makeLongPdfFilename();
+
+    const replaceResponse = await replaceDocumentFile(cookie, uploadPayload.document.id, longFilename, "long-replace");
+    assert.equal(replaceResponse.status, 200);
+    const replacePayload = (await replaceResponse.json()) as {
+      document: { id: string; filename: string; originalFilename?: string | null };
+    };
+    assert.equal(replacePayload.document.filename, longFilename);
+    assert.equal(replacePayload.document.originalFilename, longFilename);
+
+    const record = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    assertBoundedStoragePath(record.storagePath);
+    assert.equal(record.filename, longFilename);
+    assert.equal(record.originalFilename, longFilename);
+    assert.ok(!record.storagePath.includes(longFilename));
+
+    const response = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "long-replace");
+  });
+
+  it("replaces an existing file and removes the old safe file", async () => {
+    const user = await createUser("docs-replace-existing@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocument(cookie, "PROJECT", project.id, "old-name.pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    const oldRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    const oldPath = resolveTestDocumentPath(oldRecord.storagePath);
+
+    const replaceResponse = await replaceDocumentFile(cookie, uploadPayload.document.id, "new-name.pdf", "new-content");
+    assert.equal(replaceResponse.status, 200);
+    const newRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    assertBoundedStoragePath(newRecord.storagePath);
+    assert.notEqual(newRecord.storagePath, oldRecord.storagePath);
+    await assert.rejects(fs.stat(oldPath), { code: "ENOENT" });
+
+    const response = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "new-content");
+  });
+
+  it("keeps replace successful when old file cleanup fails after the DB update", async (t) => {
+    const user = await createUser("docs-replace-cleanup-failure@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocument(cookie, "PROJECT", project.id, "cleanup-old.pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    const oldRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    const oldPath = resolveTestDocumentPath(oldRecord.storagePath);
+
+    const originalUnlink = fs.unlink.bind(fs) as (...args: unknown[]) => Promise<void>;
+    t.mock.method(fs, "unlink", async (...args: unknown[]) => {
+      if (path.resolve(String(args[0] ?? "")) === oldPath) {
+        throw new Error("mock old file cleanup failure");
+      }
+      return originalUnlink(...args);
+    });
+
+    const replaceResponse = await replaceDocumentFile(
+      cookie,
+      uploadPayload.document.id,
+      "cleanup-new.pdf",
+      "cleanup-new-content"
+    );
+    assert.equal(replaceResponse.status, 200);
+    const replacePayload = (await replaceResponse.json()) as { ok: boolean; document: { id: string } };
+    assert.equal(replacePayload.ok, true);
+    assert.equal(replacePayload.document.id, uploadPayload.document.id);
+
+    const newRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    assert.notEqual(newRecord.storagePath, oldRecord.storagePath);
+    assertBoundedStoragePath(newRecord.storagePath);
+    assert.equal(await fs.readFile(oldPath, "utf8"), "test-pdf-content");
+
+    const response = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "cleanup-new-content");
+  });
+
+  it("keeps replace successful when audit creation fails after the DB update", async () => {
+    const user = await createUser("docs-replace-audit-failure@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocument(cookie, "PROJECT", project.id, "audit-old.pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    const oldRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+
+    const originalAuditCreate = prisma.auditLog.create.bind(prisma.auditLog) as (args: unknown) => Promise<unknown>;
+    (prisma.auditLog as unknown as { create: (args: unknown) => Promise<unknown> }).create = async (args: unknown) => {
+      const createArgs = args as { data?: { action?: unknown } };
+      if (createArgs.data?.action === "DOCUMENT_FILE_REPLACED") {
+        throw new Error("mock replace audit failure");
+      }
+      return originalAuditCreate(args);
+    };
+
+    let replaceResponse: Response;
+    try {
+      replaceResponse = await replaceDocumentFile(
+        cookie,
+        uploadPayload.document.id,
+        "audit-new.pdf",
+        "audit-new-content"
+      );
+    } finally {
+      (prisma.auditLog as unknown as { create: (args: unknown) => Promise<unknown> }).create = originalAuditCreate;
+    }
+
+    assert.equal(replaceResponse.status, 200);
+    const replacePayload = (await replaceResponse.json()) as { ok: boolean; document: { id: string } };
+    assert.equal(replacePayload.ok, true);
+    assert.equal(replacePayload.document.id, uploadPayload.document.id);
+
+    const newRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    assert.notEqual(newRecord.storagePath, oldRecord.storagePath);
+    assertBoundedStoragePath(newRecord.storagePath);
+
+    const response = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "audit-new-content");
+  });
+
+  it("keeps legacy upload storage keys readable", async () => {
+    const user = await createUser("docs-legacy-key@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const legacyStoragePath = "uploads/legacy-document-content";
+    await fs.writeFile(resolveTestDocumentPath(legacyStoragePath), "legacy-content");
+
+    const document = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: project.id,
+        filename: "legacy.pdf",
+        originalFilename: "legacy.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 14,
+        storagePath: legacyStoragePath,
+        sha256: "legacy"
+      }
+    });
+
+    const response = await request(`/documents/${document.id}/file`, {
+      cookie
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "legacy-content");
+  });
+
+  it("keeps exact legacy DOCUMENTS_STORAGE_DIR uploads layout readable", async () => {
+    const user = await createUser("docs-legacy-exact-key@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const legacyStoragePath = "uploads/legacy-exact-document-content";
+    const legacyFilePath = resolveLegacyExactTestDocumentPath(legacyStoragePath);
+    await fs.mkdir(path.dirname(legacyFilePath), { recursive: true });
+    await fs.writeFile(legacyFilePath, "legacy-exact-content");
+
+    const document = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: project.id,
+        filename: "legacy-exact.pdf",
+        originalFilename: "legacy-exact.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 20,
+        storagePath: legacyStoragePath,
+        sha256: "legacy-exact"
+      }
+    });
+
+    const response = await request(`/documents/${document.id}/file`, {
+      cookie
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "legacy-exact-content");
+  });
+
+  it("uses a new storage key when replacing with the same filename", async () => {
+    const user = await createUser("docs-replace-same-name@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const uploadResponse = await uploadDocument(cookie, "PROJECT", project.id, "same-name.pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    const oldRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+
+    const replaceResponse = await replaceDocumentFile(cookie, uploadPayload.document.id, "same-name.pdf", "same-name-new");
+    assert.equal(replaceResponse.status, 200);
+    const newRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+
+    assert.notEqual(newRecord.storagePath, oldRecord.storagePath);
+    assertBoundedStoragePath(newRecord.storagePath);
+    const response = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), "same-name-new");
+  });
+
+  it("keeps the old file intact when replacement DB update fails", async () => {
+    const user = await createUser("docs-replace-db-failure@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const uploadResponse = await uploadDocument(cookie, "PROJECT", project.id, "db-failure.pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    const oldRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    const oldPath = resolveTestDocumentPath(oldRecord.storagePath);
+    assert.equal(await fs.readFile(oldPath, "utf8"), "test-pdf-content");
+
+    const originalUpdate = prisma.document.update.bind(prisma.document) as (args: unknown) => Promise<unknown>;
+    (prisma.document as unknown as { update: (args: unknown) => Promise<unknown> }).update = async (args: unknown) => {
+      const updateArgs = args as { where?: { id?: string }; data?: { storagePath?: unknown } };
+      if (updateArgs.where?.id === uploadPayload.document.id && updateArgs.data?.storagePath) {
+        throw new Error("mock document update failure");
+      }
+      return originalUpdate(args);
+    };
+
+    let replaceResponse: Response;
+    try {
+      replaceResponse = await replaceDocumentFile(cookie, uploadPayload.document.id, "db-failure.pdf", "new-content");
+    } finally {
+      (prisma.document as unknown as { update: (args: unknown) => Promise<unknown> }).update = originalUpdate;
+    }
+    assert.equal(replaceResponse.status, 500);
+
+    const currentRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    assert.equal(currentRecord.storagePath, oldRecord.storagePath);
+    assert.equal(await fs.readFile(oldPath, "utf8"), "test-pdf-content");
+    assert.deepEqual(await listUploadFiles(), [oldPath]);
+  });
+
+  it("keeps the old file and document metadata when replacement file write fails", async (t) => {
+    const user = await createUser("docs-replace-write-failure@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const uploadResponse = await uploadDocument(cookie, "PROJECT", project.id, "write-failure.pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    const oldRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    const oldPath = resolveTestDocumentPath(oldRecord.storagePath);
+
+    const originalWriteFile = fs.writeFile.bind(fs) as (...args: unknown[]) => Promise<void>;
+    t.mock.method(fs, "writeFile", async (...args: unknown[]) => {
+      if (String(args[0] ?? "").includes(".tmp-")) {
+        throw new Error("mock file write failure");
+      }
+      return originalWriteFile(...args);
+    });
+
+    const replaceResponse = await replaceDocumentFile(
+      cookie,
+      uploadPayload.document.id,
+      "write-failure.pdf",
+      "new-content"
+    );
+    assert.equal(replaceResponse.status, 500);
+
+    const currentRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    assert.equal(currentRecord.storagePath, oldRecord.storagePath);
+    assert.equal(await fs.readFile(oldPath, "utf8"), "test-pdf-content");
+    assert.deepEqual(await listUploadFiles(), [oldPath]);
+  });
+
+  it("blocks path traversal and never deletes files outside the upload root", async () => {
+    const user = await createUser("docs-path-traversal@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const outsidePath = path.resolve(uploadDir, "..", "outside-document.pdf");
+    await fs.writeFile(outsidePath, "outside");
+
+    const document = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: project.id,
+        filename: "unsafe.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 7,
+        storagePath: "../outside-document.pdf",
+        sha256: "unsafe"
+      }
+    });
+
+    const downloadResponse = await request(`/documents/${document.id}/file`, {
+      cookie
+    });
+    assert.equal(downloadResponse.status, 400);
+    const downloadPayload = (await downloadResponse.json()) as { errorCode?: string };
+    assert.equal(downloadPayload.errorCode, "INVALID_STORAGE_PATH");
+
+    const deleteResponse = await request(`/documents/${document.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(deleteResponse.status, 200);
+    assert.equal(await fs.readFile(outsidePath, "utf8"), "outside");
+
+    const absoluteOutsideDocument = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: project.id,
+        filename: "outside.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 7,
+        storagePath: outsidePath,
+        sha256: "outside"
+      }
+    });
+
+    const absoluteDeleteResponse = await request(`/documents/${absoluteOutsideDocument.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(absoluteDeleteResponse.status, 200);
+    assert.equal(await fs.readFile(outsidePath, "utf8"), "outside");
+    await fs.rm(outsidePath, { force: true });
   });
 
   it("listing returns only documents of requested owner", async () => {
@@ -384,6 +1183,236 @@ describe("Documents API", () => {
     assert.equal(payload.items.length, 1);
     assert.equal(payload.items[0]?.id, firstPayload.document.id);
     assert.equal(payload.items[0]?.ownerId, firstProject.id);
+  });
+
+  it("allows authorized project document delete and hides the document from lists", async () => {
+    const user = await createUser("docs-delete-project@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocument(cookie, "PROJECT", project.id, "delete-me.pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    const record = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    const filePath = resolveTestDocumentPath(record.storagePath);
+
+    const deleteResponse = await request(`/documents/${uploadPayload.document.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(deleteResponse.status, 200);
+    const archivedRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    assert.equal(archivedRecord.isArchived, true);
+    await assert.rejects(fs.stat(filePath), { code: "ENOENT" });
+
+    const listResponse = await request(`/documents?ownerType=PROJECT&ownerId=${encodeURIComponent(project.id)}`, {
+      cookie
+    });
+    assert.equal(listResponse.status, 200);
+    const listPayload = (await listResponse.json()) as { items: Array<{ id: string }> };
+    assert.equal(listPayload.items.some((item) => item.id === uploadPayload.document.id), false);
+
+    const downloadResponse = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie
+    });
+    assert.equal(downloadResponse.status, 404);
+    const downloadPayload = (await downloadResponse.json()) as { errorCode?: string };
+    assert.equal(downloadPayload.errorCode, "DOCUMENT_NOT_FOUND");
+  });
+
+  it("deletes exact legacy DOCUMENTS_STORAGE_DIR files after archiving the document", async () => {
+    const user = await createUser("docs-delete-legacy-exact@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const legacyStoragePath = "uploads/delete-legacy-exact-content";
+    const legacyFilePath = resolveLegacyExactTestDocumentPath(legacyStoragePath);
+    await fs.mkdir(path.dirname(legacyFilePath), { recursive: true });
+    await fs.writeFile(legacyFilePath, "delete-legacy-exact");
+
+    const document = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: project.id,
+        filename: "delete-legacy-exact.pdf",
+        originalFilename: "delete-legacy-exact.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 19,
+        storagePath: legacyStoragePath,
+        sha256: "delete-legacy-exact"
+      }
+    });
+
+    const deleteResponse = await request(`/documents/${document.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(deleteResponse.status, 200);
+
+    const archivedRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: document.id
+      }
+    });
+    assert.equal(archivedRecord.isArchived, true);
+    await assert.rejects(fs.stat(legacyFilePath), { code: "ENOENT" });
+
+    const listResponse = await request(`/documents?ownerType=PROJECT&ownerId=${encodeURIComponent(project.id)}`, {
+      cookie
+    });
+    assert.equal(listResponse.status, 200);
+    const listPayload = (await listResponse.json()) as { items: Array<{ id: string }> };
+    assert.equal(listPayload.items.some((item) => item.id === document.id), false);
+  });
+
+  it("cleans up missing exact legacy document metadata without requiring the file", async () => {
+    const user = await createUser("docs-delete-missing-legacy-exact@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const document = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: project.id,
+        filename: "missing-legacy-exact.pdf",
+        originalFilename: "missing-legacy-exact.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 14,
+        storagePath: "uploads/missing-legacy-exact-content",
+        sha256: "missing-legacy-exact"
+      }
+    });
+
+    const downloadResponse = await request(`/documents/${document.id}/file`, {
+      cookie
+    });
+    assert.equal(downloadResponse.status, 404);
+    const downloadPayload = (await downloadResponse.json()) as { errorCode?: string };
+    assert.equal(downloadPayload.errorCode, "FILE_MISSING");
+
+    const deleteResponse = await request(`/documents/${document.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(deleteResponse.status, 200);
+
+    const archivedRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: document.id
+      }
+    });
+    assert.equal(archivedRecord.isArchived, true);
+  });
+
+  it("keeps active metadata and the file when document archive fails during delete", async () => {
+    const user = await createUser("docs-delete-db-failure@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocument(cookie, "PROJECT", project.id, "delete-db-failure.pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    const record = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    const filePath = resolveTestDocumentPath(record.storagePath);
+    assert.equal(await fs.readFile(filePath, "utf8"), "test-pdf-content");
+
+    const originalUpdate = prisma.document.update.bind(prisma.document) as (args: unknown) => Promise<unknown>;
+    (prisma.document as unknown as { update: (args: unknown) => Promise<unknown> }).update = async (args: unknown) => {
+      const updateArgs = args as { where?: { id?: string }; data?: { isArchived?: unknown } };
+      if (updateArgs.where?.id === uploadPayload.document.id && updateArgs.data?.isArchived === true) {
+        throw new Error("mock document archive failure");
+      }
+      return originalUpdate(args);
+    };
+
+    let deleteResponse: Response;
+    try {
+      deleteResponse = await request(`/documents/${uploadPayload.document.id}`, {
+        method: "DELETE",
+        cookie
+      });
+    } finally {
+      (prisma.document as unknown as { update: (args: unknown) => Promise<unknown> }).update = originalUpdate;
+    }
+    assert.equal(deleteResponse.status, 500);
+
+    const currentRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    assert.equal(currentRecord.isArchived, false);
+    assert.equal(currentRecord.storagePath, record.storagePath);
+    assert.equal(await fs.readFile(filePath, "utf8"), "test-pdf-content");
+
+    const downloadResponse = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie
+    });
+    assert.equal(downloadResponse.status, 200);
+    assert.equal(await downloadResponse.text(), "test-pdf-content");
+  });
+
+  it("keeps delete successful when file cleanup fails after archive", async (t) => {
+    const user = await createUser("docs-delete-unlink-failure@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocument(cookie, "PROJECT", project.id, "delete-unlink-failure.pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    const record = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    const filePath = resolveTestDocumentPath(record.storagePath);
+
+    const originalUnlink = fs.unlink.bind(fs) as (...args: unknown[]) => Promise<void>;
+    t.mock.method(fs, "unlink", async (...args: unknown[]) => {
+      if (path.resolve(String(args[0] ?? "")) === filePath) {
+        throw new Error("mock unlink failure");
+      }
+      return originalUnlink(...args);
+    });
+
+    const deleteResponse = await request(`/documents/${uploadPayload.document.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(deleteResponse.status, 200);
+
+    const archivedRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    assert.equal(archivedRecord.isArchived, true);
+    assert.equal(await fs.readFile(filePath, "utf8"), "test-pdf-content");
+
+    const listResponse = await request(`/documents?ownerType=PROJECT&ownerId=${encodeURIComponent(project.id)}`, {
+      cookie
+    });
+    assert.equal(listResponse.status, 200);
+    const listPayload = (await listResponse.json()) as { items: Array<{ id: string }> };
+    assert.equal(listPayload.items.some((item) => item.id === uploadPayload.document.id), false);
+
+    const downloadResponse = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie
+    });
+    assert.equal(downloadResponse.status, 404);
+    const downloadPayload = (await downloadResponse.json()) as { errorCode?: string };
+    assert.equal(downloadPayload.errorCode, "DOCUMENT_NOT_FOUND");
   });
 
   it("scopes document reads and downloads by stored owner type", async () => {
@@ -583,6 +1612,42 @@ describe("Documents API", () => {
     assert.equal(unsupportedUpload.status, 400);
   });
 
+  it("requires owner write permission for delete and replace", async () => {
+    await createRole("PROJECT_DOC_DELETE_VIEWER", ["projects.view"]);
+    await createRole("PROJECT_DOC_DELETE_EDITOR", ["projects.view", "projects.edit"]);
+
+    const viewer = await createUser("docs-delete-viewer@example.com", "ValidPassword1!", {
+      role: "PROJECT_DOC_DELETE_VIEWER"
+    });
+    const editor = await createUser("docs-delete-editor@example.com", "ValidPassword1!", {
+      role: "PROJECT_DOC_DELETE_EDITOR"
+    });
+    const project = await seedProject();
+    await grantProjectAccess(project.id, viewer.id, "PROJECT_VIEWER");
+    await grantProjectAccess(project.id, editor.id, "PROJECT_EDITOR");
+
+    const viewerCookie = await login(viewer.email, "ValidPassword1!");
+    const editorCookie = await login(editor.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocument(editorCookie, "PROJECT", project.id, "managed.pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+
+    const replaceResponse = await replaceDocumentFile(viewerCookie, uploadPayload.document.id, "blocked.pdf");
+    assert.equal(replaceResponse.status, 403);
+
+    const deleteResponse = await request(`/documents/${uploadPayload.document.id}`, {
+      method: "DELETE",
+      cookie: viewerCookie
+    });
+    assert.equal(deleteResponse.status, 403);
+
+    const downloadResponse = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie: editorCookie
+    });
+    assert.equal(downloadResponse.status, 200);
+  });
+
   it("keeps direct task evidence document writes on tasks.edit", async () => {
     await createRole("TASK_EVIDENCE_EDIT_ONLY", [
       "projects.view",
@@ -626,6 +1691,64 @@ describe("Documents API", () => {
       "task-blocked.pdf"
     );
     assert.equal(completeOnlyTaskEvidenceUpload.status, 403);
+  });
+
+  it("blocks direct task evidence delete and replace fail-closed", async () => {
+    await createRole("TASK_EVIDENCE_MANAGER", [
+      "projects.view",
+      "projects.edit",
+      "tasks.view",
+      "tasks.edit"
+    ]);
+    await createRole("TASK_EVIDENCE_READ_ONLY", ["projects.view", "tasks.view"]);
+    const user = await createUser("docs-task-evidence-delete@example.com", "ValidPassword1!", {
+      role: "TASK_EVIDENCE_MANAGER"
+    });
+    const readOnlyUser = await createUser("docs-task-evidence-read-only-delete@example.com", "ValidPassword1!", {
+      role: "TASK_EVIDENCE_READ_ONLY"
+    });
+    const bundle = await seedOwnerBundle(user.id, "PROJECT_EDITOR");
+    await grantProjectAccess(bundle.project.id, readOnlyUser.id, "PROJECT_VIEWER");
+    const cookie = await login(user.email, "ValidPassword1!");
+    const readOnlyCookie = await login(readOnlyUser.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocument(cookie, "TASK_EVIDENCE", bundle.taskOwnerId, "task-evidence.pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+
+    const readOnlyDeleteResponse = await request(`/documents/${uploadPayload.document.id}`, {
+      method: "DELETE",
+      cookie: readOnlyCookie
+    });
+    assert.equal(readOnlyDeleteResponse.status, 403);
+
+    const readOnlyReplaceResponse = await replaceDocumentFile(
+      readOnlyCookie,
+      uploadPayload.document.id,
+      "task-read-only-replacement.pdf"
+    );
+    assert.equal(readOnlyReplaceResponse.status, 403);
+
+    await prisma.taskStateEntry.create({
+      data: {
+        taskInstanceId: bundle.taskOwnerId,
+        status: "DONE",
+        evidence: []
+      }
+    });
+
+    const deleteResponse = await request(`/documents/${uploadPayload.document.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(deleteResponse.status, 409);
+    const deletePayload = (await deleteResponse.json()) as { errorCode?: string };
+    assert.equal(deletePayload.errorCode, "TASK_EVIDENCE_DELETE_BLOCKED");
+
+    const replaceResponse = await replaceDocumentFile(cookie, uploadPayload.document.id, "task-replacement.pdf");
+    assert.equal(replaceResponse.status, 409);
+    const replacePayload = (await replaceResponse.json()) as { errorCode?: string };
+    assert.equal(replacePayload.errorCode, "TASK_EVIDENCE_DELETE_BLOCKED");
   });
 
   it("admin can access all supported document owner domains", async () => {

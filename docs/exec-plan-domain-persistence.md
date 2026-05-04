@@ -539,6 +539,48 @@
 - Nicht-Ziele:
 - keine neuen Auflagen-Workflows, keine UI-Aenderungen, keine neuen Dependencies, keine Azure-Aenderungen und keine Massencascade.
 
+## 2y. Gezielter Dokument-Storage-/Repair-Fixlauf 2026-05-04
+- Dies ist keine neue Persistenzphase, keine Azure-Arbeit und keine Recovery-Architektur.
+- Ziel dieses Laufs ist ausschliesslich, dass serverseitige Dokumentdateien dauerhaft aus dem konfigurierten Upload-Root gelesen und geschrieben werden und defekte Einzeleintraege sicher repariert oder entfernt werden koennen.
+- `UPLOAD_DIR` ist der bevorzugte Upload-Root; `DOCUMENTS_STORAGE_DIR` bleibt als Kompatibilitaetsalias nutzbar. In Produktion faellt der Upload-Root ohne explizite Konfiguration sicher auf `/data/uploads` zurueck.
+- Neue Dokumente speichern einen relativen Storage-Key unterhalb des Upload-Roots. Download, Preview, Delete und Replace loesen denselben Key gegen denselben Upload-Root auf.
+- Legacy-Storage-Keys werden nur sicher unterhalb des Upload-Roots gelesen; absolute Pfade werden nur akzeptiert, wenn sie nach Normalisierung innerhalb des Upload-Roots liegen.
+- Fehlende Dateien liefern einen maschinenlesbaren `FILE_MISSING`-Fehler. Fehlende Metadaten liefern `DOCUMENT_NOT_FOUND`.
+- Einzel-Delete archiviert den Dokumenteintrag und loescht die Datei nur, wenn sie sicher innerhalb des Upload-Roots liegt. Fehlende Dateien blockieren die Metadatenbereinigung nicht.
+- Datei-Replace fuer vorhandene Dokumenteintraege prueft dieselben ownerType-/Projekt-Schreibrechte wie Upload, schreibt die neue Datei sicher unterhalb des Upload-Roots und entfernt die alte Datei nur sicher.
+- `TASK_EVIDENCE` bleibt fuer direkte Delete-/Replace-Aktionen fail-closed, damit Pflichtnachweise nicht still inkonsistent werden.
+- Nicht-Ziele:
+- keine Bulk-Loeschung, kein Bulk-Repair, kein DB-Script, kein Diagnose-Endpunkt, keine Snapshot-/Recovery-Reaktivierung, keine RBAC-Lockerung und keine neuen Dependencies.
+
+## 2z. P2-Fixlauf 2026-05-04 fuer Dokument-Storage-Edge-Cases
+- Dies ist kein neuer Dokument-Featurelauf, keine Azure-Arbeit und keine Recovery-Architektur.
+- Ziel dieses Laufs ist ausschliesslich die Behebung der drei P2-Review-Findings zum Dokument-Storage.
+- Neue Storage-Keys duerfen keinen langen Original-Dateinamen mehr als Pfadkomponente verwenden; Original-Dateinamen bleiben nur in den Dokument-Metadaten und im Download-Header erhalten.
+- `TASK_EVIDENCE` Delete/Replace prueft zuerst die erforderlichen ownerType-/Projekt-Schreibrechte und gibt erst danach fuer berechtigte Writer die fachliche 409-Blockade zurueck.
+- Datei-Replace schreibt immer auf einen neuen eindeutigen Storage-Key und aktualisiert die DB erst nach erfolgreichem File-Write; alte Dateien werden erst nach erfolgreichem DB-Update geloescht.
+- Nicht-Ziele:
+- keine UI-Neugestaltung, keine neue Permission, keine TASK_EVIDENCE-Lockerung, keine Bulk-Operationen, keine neuen Dependencies und keine Azure-Aenderungen.
+
+## 2za. P2-Fixlauf 2026-05-04 fuer Dokument-Delete-Reihenfolge
+- Dies ist kein neuer Dokument-Featurelauf, keine Azure-Arbeit und keine Recovery-Architektur.
+- Ziel dieses Laufs ist ausschliesslich die Behebung des P2-Review-Findings zum Dokument-Delete-Sicherheitsfluss.
+- `DELETE /documents/:id` archiviert den Dokumenteintrag zuerst serverseitig und entfernt die physische Datei erst danach best effort.
+- Wenn die DB-Archivierung fehlschlaegt, bleibt die Datei unangetastet und der aktive Dokumenteintrag zeigt weiter auf vorhandenen Inhalt.
+- Wenn File-Cleanup nach erfolgreicher Archivierung fehlschlaegt, bleibt der Delete serverseitig wirksam; die Datei kann als orphan im Storage verbleiben.
+- Nicht-Ziele:
+- keine Upload-/Replace-Aenderung, keine neue Permission, keine TASK_EVIDENCE-Lockerung, keine Bulk-Operationen, keine neuen Dependencies und keine Azure-Aenderungen.
+
+## 2zb. P2-Fixlauf 2026-05-04 fuer Dokument-Storage-Kompatibilitaet und Replace-Cleanup
+- Dies ist kein neuer Dokument-Featurelauf, keine Azure-Arbeit und keine Recovery-Architektur.
+- Ziel dieses Laufs ist ausschliesslich die Behebung der zwei P2-Review-Findings zu Legacy-Storage-Aufloesung und Replace-Cleanup.
+- `UPLOAD_DIR` bleibt der neue Upload-Root. `DOCUMENTS_STORAGE_DIR` wird zusaetzlich als Legacy-Root fuer alte relative Storage-Layouts erhalten.
+- Gespeicherte Dokumentpfade werden als sichere Kandidaten aufgeloest: aktuelles Upload-Layout, Legacy-Root exakt relativ zum gespeicherten `storagePath`, danach bestehende stripped-`uploads/`-Kompatibilitaet.
+- Alte Rows wie `uploads/<id>` bleiben lesbar, wenn die Datei im Legacy-Layout unter `<DOCUMENTS_STORAGE_DIR>/uploads/<id>` liegt.
+- Delete archiviert weiterhin zuerst DB-seitig und bereinigt danach best effort alle sicher zuordenbaren existierenden Storage-Kandidaten.
+- Replace meldet nach erfolgreichem DB-Update Erfolg, auch wenn die alte Datei danach nicht bereinigt werden kann; dieser Cleanup bleibt best effort.
+- Nicht-Ziele:
+- keine UI-Aenderung, keine neue Permission, keine RBAC-Lockerung, keine Bulk-Operationen, keine neuen Dependencies und keine Azure-Aenderungen.
+
 ## 3. Ist-Zustand
 - Browser-persistiert fachlich aktiv ist aktuell nur noch `taskState`; zusätzliche UI-/Recovery-Daten liegen weiterhin via `apps/web/src/state/persistence.ts` lokal.
 - `ScopesStore`, `AuthoritiesStore`, `ProjectsStore`, `LegalDocsStore`, `ObligationsStore` und `DeadlinesStore` sind bereits API-backed und löschen ihre alten Domänen-Storage-Keys aktiv.

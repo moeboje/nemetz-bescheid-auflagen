@@ -255,6 +255,38 @@ describe("database URL resolution", () => {
   });
 });
 
+describe("document storage config", () => {
+  it("keeps UPLOAD_DIR separate from DOCUMENTS_STORAGE_DIR", () => {
+    const config = loadConfig(
+      makeEnv({
+        NODE_ENV: "development",
+        UPLOAD_DIR: "/mnt/documents",
+        DOCUMENTS_STORAGE_DIR: "/mnt/legacy-documents",
+        COOKIE_SECURE: "false"
+      })
+    );
+
+    assert.equal(config.uploadDir, "/mnt/documents");
+    assert.equal(config.documentsStorageDir, "/mnt/legacy-documents");
+    assert.equal(config.legacyDocumentsStorageDir, "/mnt/legacy-documents");
+  });
+
+  it("uses DOCUMENTS_STORAGE_DIR as the legacy fallback when UPLOAD_DIR is absent", () => {
+    const config = loadConfig(
+      makeEnv({
+        NODE_ENV: "development",
+        UPLOAD_DIR: undefined,
+        DOCUMENTS_STORAGE_DIR: "/mnt/legacy-documents",
+        COOKIE_SECURE: "false"
+      })
+    );
+
+    assert.equal(config.uploadDir, undefined);
+    assert.equal(config.documentsStorageDir, "/mnt/legacy-documents");
+    assert.equal(config.legacyDocumentsStorageDir, "/mnt/legacy-documents");
+  });
+});
+
 describe("Entra redirect URI resolution", () => {
   const enabledEntraEnv = {
     AUTH_ENABLE_ENTRA: "true",

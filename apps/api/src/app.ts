@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import cors from "cors";
@@ -129,6 +129,11 @@ const BRANDING_ASSET_CONFIG = {
 const DEFAULT_EXTERNAL_ORG_TYPE = "Firma";
 const MAX_COMMENT_ENTITY_ID_LENGTH = 200;
 const MAX_COMMENT_BODY_LENGTH = 10_000;
+const LEGACY_DOCUMENT_STORAGE_PREFIX = "uploads/";
+const DOCUMENT_NOT_FOUND_ERROR_CODE = "DOCUMENT_NOT_FOUND";
+const DOCUMENT_FILE_MISSING_ERROR_CODE = "FILE_MISSING";
+const INVALID_DOCUMENT_STORAGE_PATH_ERROR_CODE = "INVALID_STORAGE_PATH";
+const TASK_EVIDENCE_DELETE_BLOCKED_ERROR_CODE = "TASK_EVIDENCE_DELETE_BLOCKED";
 
 type UserRole = string;
 type UserType = (typeof USER_TYPES)[number];
@@ -1021,26 +1026,164 @@ function canManageComment(user: PrismaUser, comment: { authorUserId: string }) {
   );
 }
 
-function resolveStorageRoot(config: AppConfig) {
-  if (path.isAbsolute(config.documentsStorageDir)) {
-    return path.resolve(config.documentsStorageDir);
-  }
-  return path.resolve(process.cwd(), config.documentsStorageDir);
+function resolveConfiguredStorageRoot(configured: string) {
+  return path.isAbsolute(configured)
+    ? path.resolve(configured)
+    : path.resolve(process.cwd(), configured);
 }
 
 function resolveUploadDir(config: AppConfig) {
-  return path.resolve(resolveStorageRoot(config), "uploads");
+  const explicitUploadRoot = config.uploadDir?.trim();
+  if (explicitUploadRoot) {
+    return resolveConfiguredStorageRoot(explicitUploadRoot);
+  }
+
+  const configured = config.documentsStorageDir.trim() || (config.nodeEnv === "production" ? "/data/uploads" : "storage/uploads");
+  const resolved = resolveConfiguredStorageRoot(configured);
+
+  return path.basename(resolved) === "uploads" ? resolved : path.resolve(resolved, "uploads");
+}
+
+function resolveLegacyDocumentsStorageRoot(config: AppConfig) {
+  const configured = config.legacyDocumentsStorageDir?.trim();
+  return configured ? resolveConfiguredStorageRoot(configured) : null;
+}
+
+function isPathInsideDirectory(candidatePath: string, rootPath: string) {
+  const relative = path.relative(rootPath, candidatePath);
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function safeDocumentStorageKeySegment(value: string) {
+  return value
+    .replace(/\\/g, "_")
+    .replace(/\//g, "_")
+    .replace(/\0/g, "")
+    .replace(/\s+/g, " ")
+    .trim() || "document";
+}
+
+function createDocumentStoragePath(documentId: string, createdAt = new Date()) {
+  const year = String(createdAt.getUTCFullYear());
+  const month = String(createdAt.getUTCMonth() + 1).padStart(2, "0");
+  const safeDocumentId = safeDocumentStorageKeySegment(documentId).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80);
+  return path.posix.join(
+    "documents",
+    year,
+    month,
+    `${safeDocumentId || "document"}-${randomUUID()}`
+  );
+}
+
+function normalizeStoredDocumentStorageKey(storagePath: string, options: { stripLegacyPrefix: boolean }) {
+  const trimmed = storagePath.replace(/\0/g, "").trim();
+  if (!trimmed || path.isAbsolute(trimmed)) {
+    return null;
+  }
+
+  const posixPath = trimmed.replace(/\\/g, "/");
+  const segments = posixPath.split("/").filter(Boolean);
+  if (segments.length === 0 || segments.some((segment) => segment === "." || segment === "..")) {
+    return null;
+  }
+
+  const normalized = path.posix.normalize(segments.join("/"));
+  if (normalized === "." || normalized.startsWith("../") || normalized.includes("/../")) {
+    return null;
+  }
+
+  return options.stripLegacyPrefix && normalized.startsWith(LEGACY_DOCUMENT_STORAGE_PREFIX)
+    ? normalized.slice(LEGACY_DOCUMENT_STORAGE_PREFIX.length)
+    : normalized;
+}
+
+function addSafeDocumentPathCandidate(candidates: string[], candidatePath: string, rootPath: string) {
+  const resolvedCandidate = path.resolve(candidatePath);
+  if (!isPathInsideDirectory(resolvedCandidate, rootPath)) {
+    return;
+  }
+
+  if (!candidates.includes(resolvedCandidate)) {
+    candidates.push(resolvedCandidate);
+  }
+}
+
+function resolveStoredDocumentPathCandidates(config: AppConfig, storagePath: string) {
+  const uploadRoot = resolveUploadDir(config);
+  const legacyRoot = resolveLegacyDocumentsStorageRoot(config);
+  const candidates: string[] = [];
+
+  if (path.isAbsolute(storagePath)) {
+    const absolutePath = path.resolve(storagePath);
+    addSafeDocumentPathCandidate(candidates, absolutePath, uploadRoot);
+    if (legacyRoot) {
+      addSafeDocumentPathCandidate(candidates, absolutePath, legacyRoot);
+    }
+
+    return {
+      isSafe: candidates.length > 0,
+      candidates
+    };
+  }
+
+  const currentStorageKey = normalizeStoredDocumentStorageKey(storagePath, { stripLegacyPrefix: true });
+  const legacyExactStorageKey = normalizeStoredDocumentStorageKey(storagePath, { stripLegacyPrefix: false });
+  if (!currentStorageKey || !legacyExactStorageKey) {
+    return {
+      isSafe: false,
+      candidates
+    };
+  }
+
+  addSafeDocumentPathCandidate(candidates, path.resolve(uploadRoot, legacyExactStorageKey), uploadRoot);
+  if (currentStorageKey !== legacyExactStorageKey) {
+    addSafeDocumentPathCandidate(candidates, path.resolve(uploadRoot, currentStorageKey), uploadRoot);
+  }
+
+  if (legacyRoot) {
+    addSafeDocumentPathCandidate(candidates, path.resolve(legacyRoot, legacyExactStorageKey), legacyRoot);
+    addSafeDocumentPathCandidate(candidates, path.resolve(legacyRoot, currentStorageKey), legacyRoot);
+  }
+
+  return {
+    isSafe: true,
+    candidates
+  };
 }
 
 function resolveStoredDocumentPath(config: AppConfig, storagePath: string) {
-  const storageRoot = resolveStorageRoot(config);
-  const uploadRoot = resolveUploadDir(config);
-  const absolutePath = path.resolve(storageRoot, storagePath);
-  const normalizedUploadRoot = `${uploadRoot}${path.sep}`;
-  if (!absolutePath.startsWith(normalizedUploadRoot)) {
-    return null;
+  const resolution = resolveStoredDocumentPathCandidates(config, storagePath);
+  return resolution.isSafe ? resolution.candidates[0] ?? null : null;
+}
+
+async function resolveExistingStoredDocumentPath(config: AppConfig, storagePath: string) {
+  const resolution = resolveStoredDocumentPathCandidates(config, storagePath);
+  if (!resolution.isSafe) {
+    return {
+      isSafe: false,
+      absoluteFilePath: null
+    };
   }
-  return absolutePath;
+
+  for (const candidate of resolution.candidates) {
+    try {
+      await fs.stat(candidate);
+      return {
+        isSafe: true,
+        absoluteFilePath: candidate
+      };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        throw error;
+      }
+    }
+  }
+
+  return {
+    isSafe: true,
+    absoluteFilePath: null
+  };
 }
 
 function sanitizeFilename(filename: string | undefined) {
@@ -1784,6 +1927,80 @@ async function assertCanWriteDocumentOwner(
     domain,
     permission,
     res
+  });
+}
+
+function sendDocumentNotFound(res: Response) {
+  res.status(404).json({
+    ok: false,
+    errorCode: DOCUMENT_NOT_FOUND_ERROR_CODE,
+    message: "Document not found."
+  });
+}
+
+function sendDocumentFileMissing(res: Response) {
+  res.status(404).json({
+    ok: false,
+    errorCode: DOCUMENT_FILE_MISSING_ERROR_CODE,
+    message: "Document content missing."
+  });
+}
+
+function sendInvalidDocumentStoragePath(res: Response) {
+  res.status(400).json({
+    ok: false,
+    errorCode: INVALID_DOCUMENT_STORAGE_PATH_ERROR_CODE,
+    message: "Invalid document storage path."
+  });
+}
+
+function sendTaskEvidenceDeleteBlocked(res: Response) {
+  res.status(409).json({
+    ok: false,
+    errorCode: TASK_EVIDENCE_DELETE_BLOCKED_ERROR_CODE,
+    message: "Task evidence is linked to a task and cannot be deleted directly."
+  });
+}
+
+async function assertCanModifyDocument(
+  req: AuthenticatedRequest,
+  res: Response,
+  document: {
+    ownerType: string;
+    ownerId: string;
+  }
+) {
+  if (!(await assertCanReadDocumentOwner(req, res, document.ownerType, document.ownerId))) {
+    return false;
+  }
+
+  if (!(await assertCanWriteDocumentOwner(req, res, document.ownerType, document.ownerId))) {
+    return false;
+  }
+
+  if (document.ownerType.trim().toUpperCase() === "TASK_EVIDENCE") {
+    sendTaskEvidenceDeleteBlocked(res);
+    return false;
+  }
+
+  return true;
+}
+
+async function unlinkIfExists(absoluteFilePath: string) {
+  try {
+    await fs.unlink(absoluteFilePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+function logDocumentPostCommitFailure(message: string, documentId: string, error: unknown) {
+  const errorName = error instanceof Error && error.name ? error.name : "Error";
+  console.warn(message, {
+    documentId,
+    error: errorName
   });
 }
 
@@ -2811,13 +3028,13 @@ export function createApp(config: AppConfig = loadConfig()) {
             originalFilename: originalFilename ?? null,
             mimeType,
             sizeBytes: fileData.length,
-            storagePath: "uploads/pending",
+            storagePath: "documents/pending",
             sha256,
             createdByUserId: req.authUser.id
           }
         });
 
-        const storagePath = path.posix.join("uploads", created.id);
+        const storagePath = createDocumentStoragePath(created.id, created.createdAt);
         const absoluteFilePath = resolveStoredDocumentPath(config, storagePath);
         if (!absoluteFilePath) {
           await prisma.document.delete({
@@ -2825,7 +3042,11 @@ export function createApp(config: AppConfig = loadConfig()) {
               id: created.id
             }
           });
-          res.status(400).json({ ok: false, message: "Invalid storage path." });
+          res.status(400).json({
+            ok: false,
+            errorCode: INVALID_DOCUMENT_STORAGE_PATH_ERROR_CODE,
+            message: "Invalid storage path."
+          });
           return;
         }
 
@@ -2924,7 +3145,7 @@ export function createApp(config: AppConfig = loadConfig()) {
       });
 
       if (!document) {
-        res.status(404).json({ ok: false, message: "Document not found." });
+        sendDocumentNotFound(res);
         return;
       }
 
@@ -2939,6 +3160,204 @@ export function createApp(config: AppConfig = loadConfig()) {
       next(error);
     }
   });
+
+  router.delete("/documents/:id", authMiddleware, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      if (!assertCanUseDocumentEndpoints(req, res)) {
+        return;
+      }
+
+      const document = await prisma.document.findFirst({
+        where: {
+          id: req.params.id,
+          isArchived: false
+        }
+      });
+
+      if (!document) {
+        sendDocumentNotFound(res);
+        return;
+      }
+
+      if (!(await assertCanModifyDocument(req, res, document))) {
+        return;
+      }
+
+      const fileCleanupPaths = resolveStoredDocumentPathCandidates(config, document.storagePath).candidates;
+
+      await prisma.document.update({
+        where: {
+          id: document.id
+        },
+        data: {
+          isArchived: true
+        }
+      });
+
+      let fileCleanupFailed = false;
+      if (fileCleanupPaths.length > 0) {
+        try {
+          await Promise.all(fileCleanupPaths.map((filePath) => unlinkIfExists(filePath)));
+        } catch {
+          fileCleanupFailed = true;
+        }
+      }
+
+      await audit({
+        actorUserId: req.authUser.id,
+        action: "DOCUMENT_DELETED",
+        req,
+        metadata: {
+          documentId: document.id,
+          ownerType: document.ownerType,
+          ownerId: document.ownerId,
+          fileCleanupAttempted: fileCleanupPaths.length > 0,
+          fileCleanupFailed
+        }
+      });
+
+      res.json({ ok: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.put(
+    "/documents/:id/file",
+    authMiddleware,
+    express.raw({ type: "multipart/form-data", limit: config.documentsMaxUploadBytes }),
+    async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+      try {
+        if (!assertCanUseDocumentEndpoints(req, res)) {
+          return;
+        }
+
+        if (!Buffer.isBuffer(req.body)) {
+          res.status(400).json({ ok: false, message: "Multipart payload is required." });
+          return;
+        }
+
+        const document = await prisma.document.findFirst({
+          where: {
+            id: req.params.id,
+            isArchived: false
+          }
+        });
+
+        if (!document) {
+          sendDocumentNotFound(res);
+          return;
+        }
+
+        if (!(await assertCanModifyDocument(req, res, document))) {
+          return;
+        }
+
+        const parsed = parseMultipartFormData(req.headers["content-type"], req.body);
+        if (!parsed || !parsed.file) {
+          res.status(400).json({ ok: false, message: "file is required." });
+          return;
+        }
+
+        const fileData = parsed.file.data;
+        if (!fileData.length) {
+          res.status(400).json({ ok: false, message: "file is required." });
+          return;
+        }
+
+        if (fileData.length > config.documentsMaxUploadBytes) {
+          res.status(413).json({ ok: false, message: "File exceeds upload size limit." });
+          return;
+        }
+
+        const originalFilename = parsed.file.filename?.trim() || undefined;
+        const safeFilename = sanitizeFilename(originalFilename);
+        const mimeType = inferMimeType(safeFilename, parsed.file.contentType);
+        const sha256 = createHash("sha256").update(fileData).digest("hex");
+        const storagePath = createDocumentStoragePath(document.id);
+        const absoluteFilePath = resolveStoredDocumentPath(config, storagePath);
+        if (!absoluteFilePath) {
+          sendInvalidDocumentStoragePath(res);
+          return;
+        }
+
+        const previousFilePaths = resolveStoredDocumentPathCandidates(config, document.storagePath).candidates;
+        const temporaryFilePath = `${absoluteFilePath}.tmp-${randomUUID()}`;
+        let newFileFinalized = false;
+
+        try {
+          await fs.mkdir(path.dirname(absoluteFilePath), { recursive: true });
+          await fs.writeFile(temporaryFilePath, fileData);
+          await fs.rename(temporaryFilePath, absoluteFilePath);
+          newFileFinalized = true;
+        } catch (error) {
+          await unlinkIfExists(temporaryFilePath);
+          if (newFileFinalized) {
+            await unlinkIfExists(absoluteFilePath);
+          }
+          throw error;
+        }
+
+        let updated: typeof document;
+        try {
+          updated = await prisma.document.update({
+            where: {
+              id: document.id
+            },
+            data: {
+              filename: safeFilename,
+              originalFilename: originalFilename ?? null,
+              mimeType,
+              sizeBytes: fileData.length,
+              storagePath,
+              sha256
+            }
+          });
+        } catch (error) {
+          await unlinkIfExists(temporaryFilePath);
+          await unlinkIfExists(absoluteFilePath);
+          throw error;
+        }
+
+        const previousFileCleanupPaths = previousFilePaths.filter((previousFilePath) => previousFilePath !== absoluteFilePath);
+        let previousFileCleanupFailed = false;
+        if (previousFileCleanupPaths.length > 0) {
+          try {
+            await Promise.all(previousFileCleanupPaths.map((previousFilePath) => unlinkIfExists(previousFilePath)));
+          } catch (error) {
+            previousFileCleanupFailed = true;
+            logDocumentPostCommitFailure("Document replace old-file cleanup failed after commit.", updated.id, error);
+          }
+        }
+
+        try {
+          await audit({
+            actorUserId: req.authUser.id,
+            action: "DOCUMENT_FILE_REPLACED",
+            req,
+            metadata: {
+              documentId: updated.id,
+              ownerType: updated.ownerType,
+              ownerId: updated.ownerId,
+              mimeType: updated.mimeType,
+              sizeBytes: updated.sizeBytes,
+              previousFileCleanupAttempted: previousFileCleanupPaths.length > 0,
+              previousFileCleanupFailed
+            }
+          });
+        } catch (error) {
+          logDocumentPostCommitFailure("Document replace audit failed after commit.", updated.id, error);
+        }
+
+        res.json({
+          ok: true,
+          document: toDocumentDto(updated)
+        });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
 
   router.get("/documents/:id/file", authMiddleware, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
@@ -2955,7 +3374,7 @@ export function createApp(config: AppConfig = loadConfig()) {
       });
 
       if (!document) {
-        res.status(404).json({ ok: false, message: "Document not found." });
+        sendDocumentNotFound(res);
         return;
       }
 
@@ -2963,18 +3382,22 @@ export function createApp(config: AppConfig = loadConfig()) {
         return;
       }
 
-      const absoluteFilePath = resolveStoredDocumentPath(config, document.storagePath);
-      if (!absoluteFilePath) {
-        res.status(400).json({ ok: false, message: "Invalid document storage path." });
+      const storageResolution = await resolveExistingStoredDocumentPath(config, document.storagePath);
+      if (!storageResolution.isSafe) {
+        sendInvalidDocumentStoragePath(res);
+        return;
+      }
+      if (!storageResolution.absoluteFilePath) {
+        sendDocumentFileMissing(res);
         return;
       }
 
       let content: Buffer;
       try {
-        content = await fs.readFile(absoluteFilePath);
+        content = await fs.readFile(storageResolution.absoluteFilePath);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          res.status(404).json({ ok: false, message: "Document content missing." });
+          sendDocumentFileMissing(res);
           return;
         }
         throw error;

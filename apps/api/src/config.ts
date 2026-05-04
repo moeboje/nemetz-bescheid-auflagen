@@ -30,7 +30,9 @@ export type AppConfig = {
   entraAllowedDomains: string[];
   entraAutoProvision: boolean;
   entraScopes: string[];
+  uploadDir?: string;
   documentsStorageDir: string;
+  legacyDocumentsStorageDir?: string;
   documentsMaxUploadBytes: number;
 };
 
@@ -645,7 +647,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     entraAllowedDomains: toList(env.ENTRA_ALLOWED_DOMAINS, ["nemetz-ag.at"]),
     entraAutoProvision: toBoolean(env.ENTRA_AUTO_PROVISION, false),
     entraScopes: toList(env.ENTRA_SCOPES, ["openid", "profile", "email"]),
-    documentsStorageDir: env.DOCUMENTS_STORAGE_DIR?.trim() || "storage",
+    uploadDir: env.UPLOAD_DIR?.trim() || undefined,
+    documentsStorageDir:
+      env.DOCUMENTS_STORAGE_DIR?.trim() ||
+      (nodeEnv === "production" ? "/data/uploads" : "storage/uploads"),
+    legacyDocumentsStorageDir: env.DOCUMENTS_STORAGE_DIR?.trim() || undefined,
     documentsMaxUploadBytes: toInteger(env.DOCUMENTS_MAX_UPLOAD_MB, 20) * 1024 * 1024
   };
 

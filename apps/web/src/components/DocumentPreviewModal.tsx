@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from "react";
 import { Button, Modal } from "@nemetz/ui";
-import { fetchDocumentBlob } from "../api/documents";
+import { fetchDocumentBlob, getDocumentApiErrorCode } from "../api/documents";
 import { t } from "../i18n";
 import type { DocumentDto } from "../api/documents";
 import PdfViewer from "./PdfViewer";
@@ -10,6 +10,7 @@ type DocumentPreviewModalProps = {
   document?: DocumentDto;
   onClose: () => void;
   onDownload: (document: DocumentDto) => void;
+  onFileMissing?: (document: DocumentDto) => void;
 };
 
 function isPdf(mimeType: string) {
@@ -28,10 +29,12 @@ export default function DocumentPreviewModal({
   open,
   document,
   onClose,
-  onDownload
+  onDownload,
+  onFileMissing
 }: DocumentPreviewModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [fileMissing, setFileMissing] = useState(false);
   const [objectUrl, setObjectUrl] = useState("");
 
   React.useEffect(() => {
@@ -44,6 +47,7 @@ export default function DocumentPreviewModal({
       });
       setLoading(false);
       setError(false);
+      setFileMissing(false);
       return;
     }
 
@@ -52,6 +56,7 @@ export default function DocumentPreviewModal({
 
     setLoading(true);
     setError(false);
+    setFileMissing(false);
 
     void fetchDocumentBlob(document.id)
       .then((blob) => {
@@ -66,9 +71,13 @@ export default function DocumentPreviewModal({
           return nextObjectUrl;
         });
       })
-      .catch(() => {
+      .catch((error) => {
         if (isCancelled) {
           return;
+        }
+        if (getDocumentApiErrorCode(error) === "FILE_MISSING") {
+          setFileMissing(true);
+          onFileMissing?.(document);
         }
         setError(true);
       })
@@ -84,7 +93,7 @@ export default function DocumentPreviewModal({
         URL.revokeObjectURL(nextObjectUrl);
       }
     };
-  }, [document, open]);
+  }, [document, onFileMissing, open]);
 
   React.useEffect(
     () => () => {
@@ -108,6 +117,10 @@ export default function DocumentPreviewModal({
       return <p className="placeholderText">{t("documents.loading")}</p>;
     }
 
+    if (fileMissing) {
+      return <p className="placeholderText">{t("documents.fileMissingDetails")}</p>;
+    }
+
     if (error || !objectUrl) {
       return <p className="placeholderText">{t("documents.error")}</p>;
     }
@@ -127,7 +140,7 @@ export default function DocumentPreviewModal({
     }
 
     return <p className="placeholderText">{t("documents.noPreview")}</p>;
-  }, [document, error, loading, objectUrl]);
+  }, [document, error, fileMissing, loading, objectUrl]);
 
   return (
     <Modal
