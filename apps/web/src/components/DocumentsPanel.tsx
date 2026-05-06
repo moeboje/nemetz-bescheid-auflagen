@@ -21,6 +21,9 @@ type DocumentsPanelProps = {
   titleKey?: I18nKey;
   allowUpload?: boolean;
   allowManage?: boolean;
+  showManageActions?: boolean;
+  refreshKey?: string | number;
+  onChanged?: () => void;
   legacyItems?: Attachment[];
 };
 
@@ -69,6 +72,9 @@ export default function DocumentsPanel({
   titleKey = "documents.title",
   allowUpload = true,
   allowManage,
+  showManageActions = false,
+  refreshKey,
+  onChanged,
   legacyItems
 }: DocumentsPanelProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -111,7 +117,7 @@ export default function DocumentsPanel({
 
   React.useEffect(() => {
     void loadDocuments();
-  }, [loadDocuments]);
+  }, [loadDocuments, refreshKey]);
 
   const previewableById = useMemo(
     () =>
@@ -135,6 +141,7 @@ export default function DocumentsPanel({
         await uploadDocument(ownerType, ownerId, file);
       }
       await loadDocuments();
+      onChanged?.();
     } catch {
       setError(true);
     } finally {
@@ -146,6 +153,17 @@ export default function DocumentsPanel({
     setBrokenIds((previous) => new Set(previous).add(document.id));
     setActionError(t("documents.fileMissingDetails"));
   }, []);
+
+  const markDocumentNotFound = React.useCallback((document: DocumentDto) => {
+    setItems((previous) => previous.filter((item) => item.id !== document.id));
+    setBrokenIds((previous) => {
+      const next = new Set(previous);
+      next.delete(document.id);
+      return next;
+    });
+    setActionError(t("documents.notFoundRefresh"));
+    void loadDocuments();
+  }, [loadDocuments]);
 
   const handleDownload = async (document: DocumentDto) => {
     setActionError("");
@@ -159,8 +177,13 @@ export default function DocumentsPanel({
       link.click();
       URL.revokeObjectURL(objectUrl);
     } catch (downloadError) {
-      if (getDocumentApiErrorCode(downloadError) === "FILE_MISSING") {
+      const errorCode = getDocumentApiErrorCode(downloadError);
+      if (errorCode === "FILE_MISSING") {
         markFileMissing(document);
+        return;
+      }
+      if (errorCode === "DOCUMENT_NOT_FOUND") {
+        markDocumentNotFound(document);
         return;
       }
       setActionError(getActionErrorMessage(downloadError, "documents.error"));
@@ -191,6 +214,7 @@ export default function DocumentsPanel({
         return next;
       });
       setActionMessage(t("documents.replaceSuccess"));
+      onChanged?.();
     } catch (replaceError) {
       setActionError(getActionErrorMessage(replaceError, "documents.replaceError"));
     } finally {
@@ -217,6 +241,7 @@ export default function DocumentsPanel({
       });
       setDeleteTarget(undefined);
       setActionMessage(t("documents.removeSuccess"));
+      onChanged?.();
     } catch (deleteError) {
       setActionError(getActionErrorMessage(deleteError, "documents.removeError"));
     } finally {
@@ -234,7 +259,7 @@ export default function DocumentsPanel({
             disabled={uploading}
             onClick={() => inputRef.current?.click()}
           >
-            {uploading ? t("documents.loading") : t("documents.upload")}
+            {uploading ? t("documents.loading") : items.length ? t("documents.upload") : t("documents.addFile")}
           </Button>
           <input
             ref={inputRef}
@@ -278,6 +303,7 @@ export default function DocumentsPanel({
           <div className="fileList">
             {items.map((item) => {
               const isBroken = brokenIds.has(item.id);
+              const canShowManageActions = canManageDocuments && (showManageActions || isBroken);
               return (
                 <div key={item.id} className="documentsItem">
                   <div className="documentsItemMeta">
@@ -300,7 +326,7 @@ export default function DocumentsPanel({
                     <Button size="sm" variant="secondary" onClick={() => void handleDownload(item)}>
                       {t("documents.download")}
                     </Button>
-                    {isBroken && canManageDocuments ? (
+                    {canShowManageActions ? (
                       <>
                         <Button
                           size="sm"
@@ -355,6 +381,7 @@ export default function DocumentsPanel({
         onClose={() => setPreviewDocument(undefined)}
         onDownload={(document) => void handleDownload(document)}
         onFileMissing={markFileMissing}
+        onDocumentNotFound={markDocumentNotFound}
       />
       <Modal
         open={Boolean(deleteTarget)}

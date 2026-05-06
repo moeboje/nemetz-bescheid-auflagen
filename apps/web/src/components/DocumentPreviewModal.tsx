@@ -11,6 +11,7 @@ type DocumentPreviewModalProps = {
   onClose: () => void;
   onDownload: (document: DocumentDto) => void;
   onFileMissing?: (document: DocumentDto) => void;
+  onDocumentNotFound?: (document: DocumentDto) => void;
 };
 
 function isPdf(mimeType: string) {
@@ -30,7 +31,8 @@ export default function DocumentPreviewModal({
   document,
   onClose,
   onDownload,
-  onFileMissing
+  onFileMissing,
+  onDocumentNotFound
 }: DocumentPreviewModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -75,9 +77,12 @@ export default function DocumentPreviewModal({
         if (isCancelled) {
           return;
         }
-        if (getDocumentApiErrorCode(error) === "FILE_MISSING") {
+        const errorCode = getDocumentApiErrorCode(error);
+        if (errorCode === "FILE_MISSING") {
           setFileMissing(true);
           onFileMissing?.(document);
+        } else if (errorCode === "DOCUMENT_NOT_FOUND") {
+          onDocumentNotFound?.(document);
         }
         setError(true);
       })
@@ -93,7 +98,7 @@ export default function DocumentPreviewModal({
         URL.revokeObjectURL(nextObjectUrl);
       }
     };
-  }, [document, onFileMissing, open]);
+  }, [document, onDocumentNotFound, onFileMissing, open]);
 
   React.useEffect(
     () => () => {

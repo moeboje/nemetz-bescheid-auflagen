@@ -20,6 +20,7 @@ import {
   updateLegacyDecision,
   type LegacyDecisionInput
 } from "../api/legacyDecisions";
+import { uploadDocument } from "../api/documents";
 import {
   listProjectAccess,
   removeProjectAccess,
@@ -163,8 +164,11 @@ type LegacyDecisionModalProps = {
   projectId: string;
   authorities: { id: string; name: string; isArchived?: boolean }[];
   legalDocs: { id: string; title: string; isArchived?: boolean; archivedAt?: string }[];
+  canManageDocuments: boolean;
+  documentsRefreshKey: number;
+  onDocumentsChanged: () => void;
   onClose: () => void;
-  onSave: (input: LegacyDecisionInput) => Promise<boolean>;
+  onSave: (input: LegacyDecisionInput, file?: File) => Promise<boolean>;
 };
 
 function LegacyDecisionModal({
@@ -173,6 +177,9 @@ function LegacyDecisionModal({
   projectId,
   authorities,
   legalDocs,
+  canManageDocuments,
+  documentsRefreshKey,
+  onDocumentsChanged,
   onClose,
   onSave
 }: LegacyDecisionModalProps) {
@@ -181,6 +188,7 @@ function LegacyDecisionModal({
     legacyStatus: "ARCHIVE_ONLY",
     reviewStatus: "NOT_REVIEWED"
   });
+  const [selectedFile, setSelectedFile] = React.useState<File | undefined>(undefined);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [error, setError] = React.useState("");
 
@@ -203,8 +211,15 @@ function LegacyDecisionModal({
       linkedLegalDocId: legacyDecision?.linkedLegalDocId ?? "",
       supersededByLegalDocId: legacyDecision?.supersededByLegalDocId ?? ""
     });
+    setSelectedFile(undefined);
     setError("");
   }, [legacyDecision, open, projectId]);
+
+  React.useEffect(() => {
+    if (!canManageDocuments) {
+      setSelectedFile(undefined);
+    }
+  }, [canManageDocuments]);
 
   const update = (key: keyof LegacyDecisionInput, value: string) => {
     setForm((prev) => ({
@@ -221,11 +236,14 @@ function LegacyDecisionModal({
 
     setIsSubmitting(true);
     setError("");
-    const ok = await onSave({
-      ...form,
-      projectId,
-      title: form.title.trim()
-    });
+    const ok = await onSave(
+      {
+        ...form,
+        projectId,
+        title: form.title.trim()
+      },
+      canManageDocuments ? selectedFile : undefined
+    );
     setIsSubmitting(false);
     if (ok) {
       onClose();
@@ -322,6 +340,32 @@ function LegacyDecisionModal({
             onChange={(event) => update("relevanceNote", event.target.value)}
           />
         </label>
+        {!legacyDecision && canManageDocuments ? (
+          <label className="formField">
+            <span className="fieldLabel">{t("legacyDecisions.fields.file")}</span>
+            <input
+              type="file"
+              accept=".pdf,image/*,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+              onChange={(event) => setSelectedFile(event.target.files?.[0])}
+            />
+            <span className="placeholderText">
+              {selectedFile ? selectedFile.name : t("legacyDecisions.fileOptional")}
+            </span>
+          </label>
+        ) : !legacyDecision ? (
+          <p className="placeholderText">{t("legacyDecisions.fileUploadPermissionHint")}</p>
+        ) : (
+          <DocumentsPanel
+            ownerType="LEGACY_DECISION"
+            ownerId={legacyDecision.id}
+            titleKey="legacyDecisions.documents"
+            allowUpload={canManageDocuments}
+            allowManage={canManageDocuments}
+            showManageActions
+            refreshKey={documentsRefreshKey}
+            onChanged={onDocumentsChanged}
+          />
+        )}
         <p className="placeholderText">{t("legacyDecisions.noAutomaticObligations")}</p>
         {error ? <p className="validationText">{error}</p> : null}
       </div>
@@ -387,6 +431,7 @@ export default function ProjectDetailPage() {
   const [selectedLegacyDecisionId, setSelectedLegacyDecisionId] = useState<string | null>(null);
   const [showArchivedLegacyDecisions, setShowArchivedLegacyDecisions] = useState(false);
   const [legacyError, setLegacyError] = useState("");
+  const [legacyDocumentsRefreshKey, setLegacyDocumentsRefreshKey] = useState(0);
   const checklistTabEnabled = runtimeConfig.features.enableProjectChecklists;
 
   const project = useMemo(() => projects.find((item) => item.id === id), [id, projects]);
@@ -404,6 +449,7 @@ export default function ProjectDetailPage() {
       hasPermission("legalDocs.export"));
   const canViewLegacyDecisionsTab = Boolean(project && canView && canReadLegacyDecisions);
   const canArchiveLegacyDecisions = canWriteProject && permissions.canArchiveLegalDocs;
+  const canManageLegacyDecisionDocuments = canWriteProject && permissions.canEditLegalDocs;
   const scopeLabel = project
     ? getScopeLabel(project.companyId, project.siteId, project.facilityId)
     : "";
@@ -987,16 +1033,32 @@ export default function ProjectDetailPage() {
     }
   ];
 
-  const saveLegacyDecision = async (input: LegacyDecisionInput) => {
+  const refreshLegacyDocuments = () => {
+    setLegacyDocumentsRefreshKey((value) => value + 1);
+  };
+
+  const saveLegacyDecision = async (input: LegacyDecisionInput, file?: File) => {
     try {
+      let saved: LegacyDecision;
       if (editingLegacyDecision) {
-        await updateLegacyDecision(editingLegacyDecision.id, input);
+        saved = await updateLegacyDecision(editingLegacyDecision.id, input);
       } else {
-        await createLegacyDecision(project.id, input);
+        saved = await createLegacyDecision(project.id, input);
+      }
+      let uploadFailed = false;
+      const fileToUpload = canManageLegacyDecisionDocuments ? file : undefined;
+      if (fileToUpload) {
+        try {
+          await uploadDocument("LEGACY_DECISION", saved.id, fileToUpload);
+          refreshLegacyDocuments();
+        } catch {
+          uploadFailed = true;
+        }
       }
       setLegacyDecisions(await listProjectLegacyDecisions(project.id));
       setEditingLegacyDecisionId(null);
-      setLegacyError("");
+      setSelectedLegacyDecisionId(saved.id);
+      setLegacyError(uploadFailed ? t("legacyDecisions.documentUploadError") : "");
       return true;
     } catch {
       setLegacyError(t("legacyDecisions.saveError"));
@@ -1379,7 +1441,7 @@ export default function ProjectDetailPage() {
                 <span>{t("common.showArchived")}</span>
               </label>
               <Button disabled={!permissions.canCreateLegalDocs || !canWriteProject} onClick={() => setLegacyModalOpen(true)}>
-                {t("legacyDecisions.upload")}
+                {t("legacyDecisions.create")}
               </Button>
             </div>
           </div>
@@ -1463,7 +1525,11 @@ export default function ProjectDetailPage() {
                 ownerType="LEGACY_DECISION"
                 ownerId={selectedLegacyDecision.id}
                 titleKey="legacyDecisions.documents"
-                allowUpload={permissions.canEditLegalDocs && canWriteProject}
+                allowUpload={canManageLegacyDecisionDocuments}
+                allowManage={canManageLegacyDecisionDocuments}
+                showManageActions
+                refreshKey={legacyDocumentsRefreshKey}
+                onChanged={refreshLegacyDocuments}
               />
             </Card>
           ) : null}
@@ -1839,6 +1905,9 @@ export default function ProjectDetailPage() {
         projectId={project.id}
         authorities={authorities}
         legalDocs={projectAllDocs}
+        canManageDocuments={canManageLegacyDecisionDocuments}
+        documentsRefreshKey={legacyDocumentsRefreshKey}
+        onDocumentsChanged={refreshLegacyDocuments}
         onSave={saveLegacyDecision}
       />
 

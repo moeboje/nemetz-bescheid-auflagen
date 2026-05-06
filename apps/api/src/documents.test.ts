@@ -2006,6 +2006,212 @@ describe("Documents API", () => {
     }
   });
 
+  it("uploads and downloads legacy decision documents across sessions", async () => {
+    await createRole("LEGACY_DECISION_DOCUMENT_EDITOR", ["legalDocs.view", "legalDocs.edit"]);
+    const user = await createUser("docs-legacy-upload@example.com", "ValidPassword1!", {
+      role: "LEGACY_DECISION_DOCUMENT_EDITOR"
+    });
+    const bundle = await seedOwnerBundle(user.id, "PROJECT_EDITOR");
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocument(
+      cookie,
+      "LEGACY_DECISION",
+      bundle.legacyDecision.id,
+      "legacy-decision.pdf"
+    );
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as {
+      document: { id: string; ownerType: string; ownerId: string; filename: string };
+    };
+    assert.equal(uploadPayload.document.ownerType, "LEGACY_DECISION");
+    assert.equal(uploadPayload.document.ownerId, bundle.legacyDecision.id);
+    assert.equal(uploadPayload.document.filename, "legacy-decision.pdf");
+
+    const firstDownload = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie
+    });
+    assert.equal(firstDownload.status, 200);
+    assert.equal(await firstDownload.text(), "test-pdf-content");
+
+    const reloadCookie = await login(user.email, "ValidPassword1!");
+    const reloadDownload = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie: reloadCookie
+    });
+    assert.equal(reloadDownload.status, 200);
+    assert.equal(await reloadDownload.text(), "test-pdf-content");
+  });
+
+  it("repairs and removes missing-file legacy decision document entries", async () => {
+    await createRole("LEGACY_DECISION_DOCUMENT_REPAIR", ["legalDocs.view", "legalDocs.edit"]);
+    const user = await createUser("docs-legacy-repair@example.com", "ValidPassword1!", {
+      role: "LEGACY_DECISION_DOCUMENT_REPAIR"
+    });
+    const bundle = await seedOwnerBundle(user.id, "PROJECT_EDITOR");
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const missingDocument = await prisma.document.create({
+      data: {
+        ownerType: "LEGACY_DECISION",
+        ownerId: bundle.legacyDecision.id,
+        filename: "legacy-missing.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 12,
+        storagePath: "documents/2026/05/legacy-missing.pdf",
+        sha256: "legacy-missing"
+      }
+    });
+
+    const missingDownload = await request(`/documents/${missingDocument.id}/file`, {
+      cookie
+    });
+    assert.equal(missingDownload.status, 404);
+    const missingPayload = (await missingDownload.json()) as { errorCode?: string };
+    assert.equal(missingPayload.errorCode, "FILE_MISSING");
+
+    const replaceResponse = await replaceDocumentFile(
+      cookie,
+      missingDocument.id,
+      "legacy-repaired.pdf",
+      "legacy-repaired-content"
+    );
+    assert.equal(replaceResponse.status, 200);
+    const replacePayload = (await replaceResponse.json()) as { document: { id: string; filename: string } };
+    assert.equal(replacePayload.document.id, missingDocument.id);
+    assert.equal(replacePayload.document.filename, "legacy-repaired.pdf");
+
+    const repairedDownload = await request(`/documents/${missingDocument.id}/file`, {
+      cookie
+    });
+    assert.equal(repairedDownload.status, 200);
+    assert.equal(await repairedDownload.text(), "legacy-repaired-content");
+
+    const defectiveDocument = await prisma.document.create({
+      data: {
+        ownerType: "LEGACY_DECISION",
+        ownerId: bundle.legacyDecision.id,
+        filename: "legacy-defective.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 12,
+        storagePath: "documents/2026/05/legacy-defective.pdf",
+        sha256: "legacy-defective"
+      }
+    });
+
+    const deleteResponse = await request(`/documents/${defectiveDocument.id}`, {
+      method: "DELETE",
+      cookie
+    });
+    assert.equal(deleteResponse.status, 200);
+    const archivedDocument = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: defectiveDocument.id
+      }
+    });
+    assert.equal(archivedDocument.isArchived, true);
+
+    const deletedDownload = await request(`/documents/${defectiveDocument.id}/file`, {
+      cookie
+    });
+    assert.equal(deletedDownload.status, 404);
+    const deletedPayload = (await deletedDownload.json()) as { errorCode?: string };
+    assert.equal(deletedPayload.errorCode, "DOCUMENT_NOT_FOUND");
+  });
+
+  it("enforces legacy decision document read and write permissions", async () => {
+    await createRole("LEGACY_DECISION_DOC_WRITER", ["legalDocs.view", "legalDocs.edit"]);
+    await createRole("LEGACY_DECISION_DOC_VIEWER", ["legalDocs.view"]);
+    await createRole("LEGACY_DECISION_PROJECT_ONLY", ["projects.view"]);
+
+    const writer = await createUser("docs-legacy-writer@example.com", "ValidPassword1!", {
+      role: "LEGACY_DECISION_DOC_WRITER"
+    });
+    const viewer = await createUser("docs-legacy-viewer@example.com", "ValidPassword1!", {
+      role: "LEGACY_DECISION_DOC_VIEWER"
+    });
+    const projectViewerWriter = await createUser("docs-legacy-project-viewer-writer@example.com", "ValidPassword1!", {
+      role: "LEGACY_DECISION_DOC_WRITER"
+    });
+    const projectOnly = await createUser("docs-legacy-project-only@example.com", "ValidPassword1!", {
+      role: "LEGACY_DECISION_PROJECT_ONLY"
+    });
+    const external = await createUser("docs-legacy-external@example.com", "ValidPassword1!", {
+      role: "EXTERNAL",
+      type: "EXTERNAL"
+    });
+
+    const bundle = await seedOwnerBundle(writer.id, "PROJECT_EDITOR");
+    await grantProjectAccess(bundle.project.id, viewer.id, "PROJECT_VIEWER");
+    await grantProjectAccess(bundle.project.id, projectViewerWriter.id, "PROJECT_VIEWER");
+    await grantProjectAccess(bundle.project.id, projectOnly.id, "PROJECT_VIEWER");
+    await prisma.projectAccess.create({
+      data: {
+        projectId: bundle.project.id,
+        userId: external.id,
+        accessRole: "EXTERNAL_PROJECT_VIEWER"
+      }
+    });
+
+    const writerCookie = await login(writer.email, "ValidPassword1!");
+    const viewerCookie = await login(viewer.email, "ValidPassword1!");
+    const projectViewerWriterCookie = await login(projectViewerWriter.email, "ValidPassword1!");
+    const projectOnlyCookie = await login(projectOnly.email, "ValidPassword1!");
+    const externalCookie = await login(external.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocument(
+      writerCookie,
+      "LEGACY_DECISION",
+      bundle.legacyDecision.id,
+      "legacy-managed.pdf"
+    );
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+
+    const viewerDownload = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie: viewerCookie
+    });
+    assert.equal(viewerDownload.status, 200);
+
+    const viewerReplace = await replaceDocumentFile(
+      viewerCookie,
+      uploadPayload.document.id,
+      "viewer-blocked.pdf"
+    );
+    assert.equal(viewerReplace.status, 403);
+    const viewerDelete = await request(`/documents/${uploadPayload.document.id}`, {
+      method: "DELETE",
+      cookie: viewerCookie
+    });
+    assert.equal(viewerDelete.status, 403);
+
+    const projectViewerReplace = await replaceDocumentFile(
+      projectViewerWriterCookie,
+      uploadPayload.document.id,
+      "project-viewer-blocked.pdf"
+    );
+    assert.equal(projectViewerReplace.status, 403);
+    const projectViewerDelete = await request(`/documents/${uploadPayload.document.id}`, {
+      method: "DELETE",
+      cookie: projectViewerWriterCookie
+    });
+    assert.equal(projectViewerDelete.status, 403);
+
+    const projectOnlyDownload = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie: projectOnlyCookie
+    });
+    assert.equal(projectOnlyDownload.status, 403);
+
+    const externalDownload = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie: externalCookie
+    });
+    assert.equal(externalDownload.status, 403);
+
+    const writerDownload = await request(`/documents/${uploadPayload.document.id}/file`, {
+      cookie: writerCookie
+    });
+    assert.equal(writerDownload.status, 200);
+  });
+
   it("external users are forbidden from document endpoints", async () => {
     const internalUser = await createUser("docs-internal@example.com", "ValidPassword1!");
     const externalUser = await createUser("docs-external@example.com", "ValidPassword1!", {

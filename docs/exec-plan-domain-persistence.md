@@ -591,6 +591,17 @@
 - Nicht-Ziele:
 - keine UI-Aenderung, keine neue Permission, keine RBAC-Lockerung, keine Bulk-/Recovery-Pfade, keine neuen Dependencies und keine Azure-Aenderungen.
 
+## 2zd. Gezielter UI-/Dokument-Fixlauf 2026-05-04 fuer Altbescheide
+- Dies ist keine neue Feature-Phase, keine Persistenzphase, keine Azure-Arbeit und keine Recovery-Architektur.
+- Ziel dieses Laufs ist ausschliesslich, die bereits vorhandene sichere Document-API fuer `LEGACY_DECISION` in der Altbescheid-UI vollstaendig sichtbar zu verdrahten.
+- Beim Anlegen eines Altbescheids kann optional eine Datei ausgewaehlt werden; nach erfolgreichem LegacyDecision-Create wird sie ueber `POST /documents` mit `ownerType=LEGACY_DECISION` und `ownerId=<LegacyDecision-ID>` hochgeladen.
+- Beim Bearbeiten und Anzeigen eines Altbescheids wird die bestehende `DocumentsPanel`-Verwaltung verwendet: Dateiname, Vorschau, Download, Datei ersetzen und Dokumenteintrag entfernen.
+- `FILE_MISSING` wird UI-seitig als `Datei fehlt` markiert; berechtigte Nutzer koennen die Datei ersetzen oder den defekten Dokumenteintrag entfernen.
+- `DOCUMENT_NOT_FOUND` aktualisiert die Dokumentliste, ohne alte Bulk-/Recovery-Pfade oder direkte LegacyDecision-Dateispeicherung zu reaktivieren.
+- Serverseitige Document-RBAC-Regeln bleiben finale Autoritaet: Lesen und Schreiben laufen weiter ueber ownerType-/Projekt-Kontext und die bestehenden LegalDoc-/Projekt-Rechte.
+- Nicht-Ziele:
+- keine Prisma-Schema-Aenderung, keine neue Storage-Architektur, keine neuen Dependencies, keine RBAC-Lockerung, keine Azure-Aenderung und keine Reaktivierung alter Bulk-/Recovery-Pfade.
+
 ## 3. Ist-Zustand
 - Browser-persistiert fachlich aktiv ist aktuell nur noch `taskState`; zusätzliche UI-/Recovery-Daten liegen weiterhin via `apps/web/src/state/persistence.ts` lokal.
 - `ScopesStore`, `AuthoritiesStore`, `ProjectsStore`, `LegalDocsStore`, `ObligationsStore` und `DeadlinesStore` sind bereits API-backed und löschen ihre alten Domänen-Storage-Keys aktiv.
