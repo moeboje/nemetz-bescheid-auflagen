@@ -242,11 +242,10 @@ export default function AdminUsersPage() {
     setMfaEnforced,
     resetMfa,
     requestReset,
-    unlockUser,
-    reloadUsers
+    unlockUser
   } = useUsers();
-  const { roles, reloadRoles } = useRoles();
-  const { externalOrgs, reloadExternalOrgs, createExternalOrg } = useExternalOrgs();
+  const { roles } = useRoles();
+  const { externalOrgs, createExternalOrg } = useExternalOrgs();
 
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<string | "ALL">("ALL");
@@ -413,15 +412,6 @@ export default function AdminUsersPage() {
   useEffect(() => {
     void fetchUsers();
   }, [fetchUsers]);
-
-  useEffect(() => {
-    void reloadRoles().catch(() => {
-      // no-op; page renders fallback options
-    });
-    void reloadExternalOrgs().catch(() => {
-      // no-op; select remains empty
-    });
-  }, [reloadExternalOrgs, reloadRoles]);
 
   useEffect(() => {
     if (!canManageUsers) {
@@ -595,7 +585,7 @@ export default function AdminUsersPage() {
         );
       }
 
-      await Promise.all([fetchUsers(), reloadUsers()]);
+      await fetchUsers();
       closeModal();
     } catch (error) {
       setFormError(
@@ -626,7 +616,7 @@ export default function AdminUsersPage() {
         setSuccessMessage(t("admin.users.success.restored"));
       }
 
-      await Promise.all([fetchUsers(), reloadUsers()]);
+      await fetchUsers();
       setConfirmation(null);
     } catch (error) {
       setLoadError(extractUserAdminErrorMessage(error, "admin.users.error.action"));
@@ -735,7 +725,7 @@ export default function AdminUsersPage() {
 
       if (resetState.passwordMode === "direct") {
         setSuccessMessage(t("admin.users.reset.success"));
-        await Promise.all([fetchUsers(), reloadUsers()]);
+        await fetchUsers();
         closeResetModal();
         return;
       }
@@ -750,7 +740,7 @@ export default function AdminUsersPage() {
             : t("admin.users.reset.success")
       );
 
-      await Promise.all([fetchUsers(), reloadUsers()]);
+      await fetchUsers();
     } catch (error) {
       setResetError(extractUserAdminErrorMessage(error, "admin.users.reset.error"));
     } finally {
@@ -765,7 +755,7 @@ export default function AdminUsersPage() {
     try {
       await unlockUser(userId);
       setSuccessMessage(t("admin.users.success.unlocked"));
-      await Promise.all([fetchUsers(), reloadUsers()]);
+      await fetchUsers();
     } catch (error) {
       setLoadError(extractUserAdminErrorMessage(error, "admin.users.error.action"));
     }
@@ -778,7 +768,7 @@ export default function AdminUsersPage() {
     try {
       await setMfaEnforced(userId, enforced);
       setSuccessMessage(enforced ? t("admin.users.mfa.enforcedOn") : t("admin.users.mfa.enforcedOff"));
-      await Promise.all([fetchUsers(), reloadUsers()]);
+      await fetchUsers();
     } catch (error) {
       setLoadError(extractUserAdminErrorMessage(error, "admin.users.error.action"));
     }
@@ -791,7 +781,7 @@ export default function AdminUsersPage() {
     try {
       await resetMfa(userId);
       setSuccessMessage(t("admin.users.mfa.resetSuccess"));
-      await Promise.all([fetchUsers(), reloadUsers()]);
+      await fetchUsers();
     } catch (error) {
       setLoadError(extractUserAdminErrorMessage(error, "admin.users.error.action"));
     }
@@ -852,7 +842,6 @@ export default function AdminUsersPage() {
         address: externalOrgQuickForm.address.trim() || undefined
       });
 
-      await reloadExternalOrgs();
       setForm((prev) => ({ ...prev, externalOrgId: created.id }));
       setExternalOrgQuickModalOpen(false);
       setSuccessMessage(t("admin.users.externalOrg.quickAddSuccess"));

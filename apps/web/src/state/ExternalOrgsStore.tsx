@@ -40,6 +40,7 @@ type ExternalOrgsContextValue = {
 };
 
 const ExternalOrgsContext = createContext<ExternalOrgsContextValue | undefined>(undefined);
+let externalOrgsLookupInFlight: Promise<ExternalOrganization[]> | null = null;
 
 function sortExternalOrgs(rows: ExternalOrganization[]) {
   return [...rows].sort((left, right) => left.name.localeCompare(right.name));
@@ -66,8 +67,15 @@ export function ExternalOrgsProvider({ children }: { children: React.ReactNode }
       return [];
     }
 
-    const payload = await listExternalOrganizationsLookup();
-    const next = sortExternalOrgs(payload.items);
+    if (!externalOrgsLookupInFlight) {
+      externalOrgsLookupInFlight = listExternalOrganizationsLookup()
+        .then((payload) => sortExternalOrgs(payload.items))
+        .finally(() => {
+          externalOrgsLookupInFlight = null;
+        });
+    }
+
+    const next = await externalOrgsLookupInFlight;
     setExternalOrgs(next);
     return next;
   }, [canLookupExternalOrgs, user]);
@@ -92,10 +100,12 @@ export function ExternalOrgsProvider({ children }: { children: React.ReactNode }
       address?: string;
     }) => {
       const created = await createExternalOrganization(input);
-      await reloadExternalOrgs();
+      if (!created.isArchived) {
+        setExternalOrgs((prev) => sortExternalOrgs([created, ...prev.filter((row) => row.id !== created.id)]));
+      }
       return created;
     },
-    [reloadExternalOrgs]
+    []
   );
 
   const updateExternalOrgEntry = useCallback(
@@ -110,28 +120,32 @@ export function ExternalOrgsProvider({ children }: { children: React.ReactNode }
       }>
     ) => {
       const updated = await updateExternalOrganization(id, input);
-      await reloadExternalOrgs();
+      setExternalOrgs((prev) =>
+        updated.isArchived
+          ? prev.filter((row) => row.id !== updated.id)
+          : sortExternalOrgs([updated, ...prev.filter((row) => row.id !== updated.id)])
+      );
       return updated;
     },
-    [reloadExternalOrgs]
+    []
   );
 
   const archiveExternalOrgEntry = useCallback(
     async (id: string) => {
       const updated = await archiveExternalOrganization(id);
-      await reloadExternalOrgs();
+      setExternalOrgs((prev) => prev.filter((row) => row.id !== updated.id));
       return updated;
     },
-    [reloadExternalOrgs]
+    []
   );
 
   const restoreExternalOrgEntry = useCallback(
     async (id: string) => {
       const updated = await restoreExternalOrganization(id);
-      await reloadExternalOrgs();
+      setExternalOrgs((prev) => sortExternalOrgs([updated, ...prev.filter((row) => row.id !== updated.id)]));
       return updated;
     },
-    [reloadExternalOrgs]
+    []
   );
 
   const getExternalOrgById = useCallback(

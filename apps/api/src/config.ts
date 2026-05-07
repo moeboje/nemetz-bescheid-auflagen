@@ -14,6 +14,7 @@ export type AppConfig = {
   notificationMaxAttempts: number;
   notificationDispatchBatchSize: number;
   notificationDispatchTimeoutMs: number;
+  perfLoggingEnabled?: boolean;
   notificationClaimLeaseSeconds: number;
   notificationTimeZone: string;
   sessionSecret: string;
@@ -46,6 +47,7 @@ const MIN_PRODUCTION_SESSION_SECRET_DISTINCT_CHARACTERS = 5;
 const MIN_OBVIOUS_SEQUENCE_SEGMENT_LENGTH = 6;
 const MAX_OBVIOUS_SEQUENCE_SEGMENTS = 3;
 const MAX_OBVIOUS_SEQUENCE_SUFFIX_LENGTH = 6;
+const MAX_NOTIFICATION_DISPATCH_TIMEOUT_MS = 15_000;
 const INSECURE_SESSION_SECRET_VALUES = new Set([
   DEV_SESSION_SECRET,
   "replace-me-with-long-random-secret",
@@ -627,7 +629,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     powerAutomateNotificationSecret: env.POWER_AUTOMATE_NOTIFICATION_SECRET?.trim() || "",
     notificationMaxAttempts: toInteger(env.NOTIFICATION_MAX_ATTEMPTS, 5),
     notificationDispatchBatchSize: toInteger(env.NOTIFICATION_DISPATCH_BATCH_SIZE, 25),
-    notificationDispatchTimeoutMs: toInteger(env.NOTIFICATION_DISPATCH_TIMEOUT_MS, 15_000),
+    notificationDispatchTimeoutMs: Math.min(
+      toInteger(env.NOTIFICATION_DISPATCH_TIMEOUT_MS, 15_000),
+      MAX_NOTIFICATION_DISPATCH_TIMEOUT_MS
+    ),
+    perfLoggingEnabled: toBoolean(env.PERF_LOGGING_ENABLED, false),
     notificationClaimLeaseSeconds: toInteger(env.NOTIFICATION_CLAIM_LEASE_SECONDS, 300),
     notificationTimeZone: env.NOTIFICATION_TIMEZONE?.trim() || "Europe/Vienna",
     sessionSecret: resolveSessionSecret(env.SESSION_SECRET, nodeEnv),

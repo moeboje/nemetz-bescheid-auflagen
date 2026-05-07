@@ -270,6 +270,7 @@ export default function AdminPage() {
     updateContact,
     archiveContact,
     restoreContact,
+    reloadAuthorities,
     replaceAuthorities,
     resetAuthorities
   } = useAuthorities();
@@ -277,6 +278,7 @@ export default function AdminPage() {
     companies,
     sites,
     facilities,
+    reloadScopes,
     replaceScopes,
     resetScopes
   } = useScopes();
@@ -287,20 +289,23 @@ export default function AdminPage() {
     archiveUser,
     restoreUser,
     searchUsers,
+    reloadUsersForLegacyAdmin,
     resetUsers
   } = useUsers();
-  const { projects, updateProject, replaceProjects, resetProjects } = useProjects();
-  const { legalDocs, updateLegalDoc, replaceLegalDocs, resetLegalDocs } = useLegalDocs();
-  const { obligations, updateObligation, replaceObligations, resetObligations } = useObligations();
+  const { projects, updateProject, reloadProjects, replaceProjects, resetProjects } = useProjects();
+  const { legalDocs, updateLegalDoc, reloadLegalDocs, replaceLegalDocs, resetLegalDocs } = useLegalDocs();
+  const { obligations, updateObligation, reloadObligations, replaceObligations, resetObligations } = useObligations();
   const {
     deadlines,
     updateDeadline,
+    reloadDeadlines,
     replaceDeadlines,
     resetDeadlines,
     markDeadlineAttachmentUnavailable
   } = useDeadlines();
   const {
     taskState,
+    reloadTaskState,
     replaceTaskState,
     resetTaskState,
     cleanupOld,
@@ -350,6 +355,28 @@ export default function AdminPage() {
   const [attachmentDiagnosticsFindings, setAttachmentDiagnosticsFindings] = useState<
     IntegrityFinding[]
   >([]);
+
+  useEffect(() => {
+    void Promise.allSettled([
+      reloadAuthorities(),
+      reloadScopes(),
+      reloadUsersForLegacyAdmin(),
+      reloadProjects(),
+      reloadLegalDocs(),
+      reloadObligations(),
+      reloadDeadlines(),
+      reloadTaskState()
+    ]);
+  }, [
+    reloadAuthorities,
+    reloadDeadlines,
+    reloadLegalDocs,
+    reloadObligations,
+    reloadProjects,
+    reloadScopes,
+    reloadTaskState,
+    reloadUsersForLegacyAdmin
+  ]);
 
   const visibleAuthorities = useMemo(
     () =>

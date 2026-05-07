@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import {
   DEFAULT_OBLIGATION_EVIDENCE_REQUIREMENTS,
   obligations as initialObligations,
@@ -19,6 +20,7 @@ import {
   restoreObligation as apiRestoreObligation,
   updateObligation as apiUpdateObligation
 } from "../api/obligations";
+import { shouldAutoLoadDomainStore } from "./routeLoading";
 
 type ObligationCreateInput = Omit<
   Obligation,
@@ -202,9 +204,11 @@ function getDeleteErrorMessage(error: unknown) {
 
 export function ObligationsProvider({ children }: { children: React.ReactNode }) {
   const { user: authUser } = useAuth();
+  const location = useLocation();
   const { logEvent } = useAuditLog();
   const [obligations, setObligations] = useState<Obligation[]>([]);
   const [mutationError, setMutationError] = useState<string | undefined>();
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
 
   const clearMutationError = useCallback(() => {
     setMutationError(undefined);
@@ -229,12 +233,15 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
       clearPersistedValue(OBLIGATIONS_STORAGE_KEY);
       return;
     }
+    if (!shouldAutoLoad) {
+      return;
+    }
 
     void reloadObligations().catch(() => {
       setObligations([]);
       clearPersistedValue(OBLIGATIONS_STORAGE_KEY);
     });
-  }, [authUser, reloadObligations]);
+  }, [authUser, reloadObligations, shouldAutoLoad]);
 
   const addObligation = useCallback(
     async (

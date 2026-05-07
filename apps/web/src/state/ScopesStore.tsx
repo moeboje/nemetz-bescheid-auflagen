@@ -1,7 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { scopes as initialScopes } from "../data/scopes";
 import { useAuth } from "./AuthStore";
 import { clearPersistedValue, makeStorageKey } from "./persistence";
+import { shouldAutoLoadDomainStore } from "./routeLoading";
 import {
   archiveCompany as apiArchiveCompany,
   archiveFacility as apiArchiveFacility,
@@ -240,6 +242,7 @@ function mergeFacility(existing: ScopeFacility, incoming: ScopeFacility) {
 
 export function ScopesProvider({ children }: { children: React.ReactNode }) {
   const { user: authUser } = useAuth();
+  const location = useLocation();
   const [scopeData, setScopeData] = useState<ScopesSnapshot>({
     companies: [],
     sites: [],
@@ -247,6 +250,7 @@ export function ScopesProvider({ children }: { children: React.ReactNode }) {
   });
 
   const { companies, sites, facilities } = scopeData;
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
 
   const reloadScopes = useCallback(async () => {
     if (!authUser || authUser.type === "EXTERNAL") {
@@ -268,12 +272,15 @@ export function ScopesProvider({ children }: { children: React.ReactNode }) {
       clearPersistedValue(SCOPES_STORAGE_KEY);
       return;
     }
+    if (!shouldAutoLoad) {
+      return;
+    }
 
     void reloadScopes().catch(() => {
       setScopeData({ companies: [], sites: [], facilities: [] });
       clearPersistedValue(SCOPES_STORAGE_KEY);
     });
-  }, [authUser, reloadScopes]);
+  }, [authUser, reloadScopes, shouldAutoLoad]);
 
   const getCompany = useCallback(
     (id: string) => companies.find((company) => company.id === id),

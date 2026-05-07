@@ -19,6 +19,7 @@ export type AuthContextValue = {
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+let loadMeInFlight: Promise<User | null> | null = null;
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -27,7 +28,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loadMe = useCallback(async () => {
     setIsLoading(true);
     try {
-      const nextUser = await me();
+      if (!loadMeInFlight) {
+        loadMeInFlight = me().finally(() => {
+          loadMeInFlight = null;
+        });
+      }
+      const nextUser = await loadMeInFlight;
       setUser(nextUser);
       return nextUser;
     } catch (error) {

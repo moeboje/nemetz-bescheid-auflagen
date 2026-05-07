@@ -15,6 +15,7 @@ export type BrandingContextValue = {
 };
 
 const BrandingContext = createContext<BrandingContextValue | undefined>(undefined);
+let brandingInFlight: Promise<BrandingConfig> | null = null;
 
 export function BrandingProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
@@ -33,7 +34,12 @@ export function BrandingProvider({ children }: { children: React.ReactNode }) {
 
     setIsLoading(true);
     try {
-      const nextBranding = await getBrandingConfig();
+      if (!brandingInFlight) {
+        brandingInFlight = getBrandingConfig().finally(() => {
+          brandingInFlight = null;
+        });
+      }
+      const nextBranding = await brandingInFlight;
       setBrandingState(nextBranding);
       return nextBranding;
     } catch {

@@ -94,7 +94,8 @@ export default function AdminAuthoritiesPage() {
     addContact,
     updateContact,
     archiveContact,
-    restoreContact
+    restoreContact,
+    reloadAuthorities
   } = useAuthorities();
 
   const [showArchivedAuthorities, setShowArchivedAuthorities] = useState(false);
@@ -114,6 +115,28 @@ export default function AdminAuthoritiesPage() {
   const [confirmation, setConfirmation] = useState<ConfirmationState | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isConfirmSubmitting, setIsConfirmSubmitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAuthorities() {
+      setPageError("");
+
+      try {
+        await reloadAuthorities();
+      } catch (error) {
+        if (!cancelled) {
+          setPageError(extractApiErrorMessage(error, "admin.authorities.error.load"));
+        }
+      }
+    }
+
+    void loadAuthorities();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reloadAuthorities]);
 
   const visibleAuthorities = useMemo(
     () => authorities.filter((authority) => (showArchivedAuthorities ? true : !authority.isArchived)),

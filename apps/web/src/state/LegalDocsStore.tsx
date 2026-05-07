@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import {
   LegalDoc,
   LegalDocAiExtraction,
@@ -22,6 +23,7 @@ import {
   updateLegalDoc as apiUpdateLegalDoc
 } from "../api/legalDocs";
 import type { DomainProjectOption } from "../data/projects";
+import { shouldAutoLoadDomainStore } from "./routeLoading";
 
 type LegalDocCreateInput = Omit<
   LegalDoc,
@@ -178,11 +180,13 @@ function mergeLegalDoc(existing: LegalDoc, incoming: LegalDoc) {
 
 export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
   const { user: authUser } = useAuth();
+  const location = useLocation();
   const { logEvent } = useAuditLog();
   const { projects } = useProjects();
   const { getScopeLabel } = useScopes();
   const [legalDocs, setLegalDocs] = useState<LegalDoc[]>([]);
   const [writableProjectOptions, setWritableProjectOptions] = useState<DomainProjectOption[]>([]);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
 
   const reloadLegalDocs = useCallback(async () => {
     if (!authUser || authUser.type === "EXTERNAL") {
@@ -210,13 +214,16 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
       clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
       return;
     }
+    if (!shouldAutoLoad) {
+      return;
+    }
 
     void reloadLegalDocs().catch(() => {
       setLegalDocs([]);
       setWritableProjectOptions([]);
       clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
     });
-  }, [authUser, reloadLegalDocs]);
+  }, [authUser, reloadLegalDocs, shouldAutoLoad]);
 
   const addLegalDoc = useCallback(
     async (input: LegalDocCreateInput) => {

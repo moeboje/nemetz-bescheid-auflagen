@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import {
   authorities as initialAuthorities,
   contacts as initialContacts,
@@ -7,6 +8,7 @@ import {
 } from "../data/authorities";
 import { useAuth } from "./AuthStore";
 import { clearPersistedValue, makeStorageKey } from "./persistence";
+import { shouldAutoLoadDomainStore } from "./routeLoading";
 import {
   archiveAuthority as apiArchiveAuthority,
   archiveAuthorityContact as apiArchiveAuthorityContact,
@@ -192,12 +194,14 @@ function mergeContact(existing: AuthorityContact, incoming: AuthorityContact) {
 
 export function AuthoritiesProvider({ children }: { children: React.ReactNode }) {
   const { user: authUser } = useAuth();
+  const location = useLocation();
   const [authorityData, setAuthorityData] = useState<AuthoritiesSnapshot>({
     authorities: [],
     contacts: []
   });
 
   const { authorities, contacts } = authorityData;
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
 
   const reloadAuthorities = useCallback(async () => {
     if (!authUser || authUser.type === "EXTERNAL") {
@@ -219,12 +223,15 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       clearPersistedValue(AUTHORITIES_STORAGE_KEY);
       return;
     }
+    if (!shouldAutoLoad) {
+      return;
+    }
 
     void reloadAuthorities().catch(() => {
       setAuthorityData({ authorities: [], contacts: [] });
       clearPersistedValue(AUTHORITIES_STORAGE_KEY);
     });
-  }, [authUser, reloadAuthorities]);
+  }, [authUser, reloadAuthorities, shouldAutoLoad]);
 
   const getAuthority = useCallback(
     (authorityId: string) => authorities.find((authority) => authority.id === authorityId),

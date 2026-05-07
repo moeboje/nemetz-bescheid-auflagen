@@ -1,7 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useAuth } from "./AuthStore";
 import { useAuditLog } from "./AuditLogStore";
 import { useUsers } from "./UsersStore";
+import { shouldAutoLoadDomainStore } from "./routeLoading";
 import { clearPersistedValue, loadJSON, STORAGE_KEYS } from "./persistence";
 import {
   addTaskStateEvidence as apiAddTaskStateEvidence,
@@ -245,10 +247,12 @@ function canAccessTaskState(authUser: ReturnType<typeof useAuth>["user"]) {
 
 export function TaskStateProvider({ children }: { children: React.ReactNode }) {
   const { user: authUser } = useAuth();
+  const location = useLocation();
   const { logEvent } = useAuditLog();
   const { currentUser, getUserLabel } = useUsers();
   const [taskState, setTaskState] = useState<TaskStateMap>({});
   const legacyCleanupReadyRef = useRef(false);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
 
   const clearLegacyTaskStateIfReady = useCallback(() => {
     if (legacyCleanupReadyRef.current) {
@@ -303,9 +307,12 @@ export function TaskStateProvider({ children }: { children: React.ReactNode }) {
       legacyCleanupReadyRef.current = false;
       return;
     }
+    if (!shouldAutoLoad) {
+      return;
+    }
 
     void reloadTaskState();
-  }, [authUser, reloadTaskState]);
+  }, [authUser, reloadTaskState, shouldAutoLoad]);
 
   const setTaskStatus = useCallback(
     async (instanceId: string, status: TaskInstanceStatus) => {

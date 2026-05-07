@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import {
   deadlines as initialDeadlines,
   type Deadline,
@@ -31,6 +32,7 @@ import {
 } from "../types/attachments";
 import type { Evidence, EvidenceOutcome } from "../types/evidence";
 import type { DomainProjectOption } from "../data/projects";
+import { shouldAutoLoadDomainStore } from "./routeLoading";
 
 type DeadlineStatusInput = DeadlineStoredStatus;
 
@@ -271,10 +273,12 @@ function mergeDeadline(existing: Deadline, incoming: Deadline) {
 
 export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
   const { user: authUser } = useAuth();
+  const location = useLocation();
   const { logEvent } = useAuditLog();
   const { currentUser, getUserLabel } = useUsers();
   const [deadlines, setDeadlines] = useState<Deadline[]>([]);
   const [writableProjectOptions, setWritableProjectOptions] = useState<DomainProjectOption[]>([]);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
 
   const reloadDeadlines = useCallback(async () => {
     if (!authUser || authUser.type === "EXTERNAL") {
@@ -302,13 +306,16 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
       clearPersistedValue(DEADLINES_STORAGE_KEY);
       return;
     }
+    if (!shouldAutoLoad) {
+      return;
+    }
 
     void reloadDeadlines().catch(() => {
       setDeadlines([]);
       setWritableProjectOptions([]);
       clearPersistedValue(DEADLINES_STORAGE_KEY);
     });
-  }, [authUser, reloadDeadlines]);
+  }, [authUser, reloadDeadlines, shouldAutoLoad]);
 
   const addDeadline = useCallback(
     async (input: DeadlineCreateInput) => {

@@ -1,4 +1,5 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { t } from "../i18n";
 import { getUserDisplayName, type User, type UserRole, type UserType } from "../data/users";
 import {
@@ -19,6 +20,7 @@ import {
   type UserPasswordResetResult
 } from "../api/users";
 import { useAuth } from "./AuthStore";
+import { isLegacyAdminRootPath, shouldAutoLoadDomainStore } from "./routeLoading";
 
 type UserSelectionFilter = {
   includeExternal?: boolean;
@@ -79,11 +81,15 @@ export type UsersContextValue = {
   replaceUsers: (value: User[]) => void;
   resetUsers: () => void;
   reloadUsers: () => Promise<User[]>;
+  reloadUsersForLegacyAdmin: () => Promise<User[]>;
   getUserById: (userId?: string) => User | undefined;
   getUserLabel: (userId?: string) => string;
 };
 
 const UsersContext = createContext<UsersContextValue | undefined>(undefined);
+const usersLookupInFlight = new Map<string, Promise<User[]>>();
+
+type UserLookupMode = "full-list" | "legacy-admin-full" | "restricted-lookup";
 
 function sortUsers(rows: User[]) {
   return [...rows].sort((a, b) => getUserDisplayName(a).localeCompare(getUserDisplayName(b)));
@@ -141,6 +147,32 @@ function hasAnyPermission(permissionKeys: string[], keys: string[]) {
   return keys.some((key) => permissionKeys.includes(key));
 }
 
+function getPermissionSignature(authUser: User) {
+  return Array.isArray(authUser.effectivePermissions)
+    ? [...authUser.effectivePermissions].sort().join(",")
+    : "";
+}
+
+function getUserAuthContextKey(authUser: User | null) {
+  if (!authUser) {
+    return "anonymous";
+  }
+
+  return [authUser.id, authUser.type, authUser.role, getPermissionSignature(authUser)].join("|");
+}
+
+function getUsersInFlightKey(input: {
+  authContextKey: string;
+  mode: UserLookupMode;
+  includeArchived: boolean;
+}) {
+  return [
+    input.authContextKey,
+    input.mode,
+    input.includeArchived ? "includeArchived" : "activeOnly"
+  ].join("|");
+}
+
 function canUseUserLookup(authUser: User) {
   if (authUser.type === "EXTERNAL") {
     return false;
@@ -163,9 +195,33 @@ function canUseUserLookup(authUser: User) {
 
 export function UsersProvider({ children }: { children: React.ReactNode }) {
   const { user: authUser } = useAuth();
+  const location = useLocation();
   const [users, setUsers] = useState<User[]>([]);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
+  const isLegacyAdminRoot = isLegacyAdminRootPath(location.pathname);
+  const permissionKeys = Array.isArray(authUser?.effectivePermissions) ? authUser.effectivePermissions : [];
+  const canManageUsers = Boolean(
+    authUser &&
+      permissionKeys.includes("admin.access") &&
+      permissionKeys.includes("users.manage")
+  );
+  const authContextKey = getUserAuthContextKey(authUser);
+  const latestAuthContextRef = useRef(authContextKey);
+  latestAuthContextRef.current = authContextKey;
 
-  const reloadUsers = useCallback(async () => {
+  useEffect(() => {
+    usersLookupInFlight.clear();
+    if (!authUser) {
+      setUsers([]);
+      return;
+    }
+
+    setUsers(sortUsers([authUser]));
+  }, [authContextKey]);
+
+  const loadUsersByMode = useCallback(async (mode: UserLookupMode) => {
+    const requestAuthContextKey = authContextKey;
+
     if (!authUser) {
       setUsers([]);
       return [];
@@ -177,28 +233,64 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
       return fallbackUsers;
     }
 
-    const permissionKeys = Array.isArray(authUser.effectivePermissions) ? authUser.effectivePermissions : [];
-    const canManageUsers = permissionKeys.includes("admin.access") && permissionKeys.includes("users.manage");
+    const safeMode: UserLookupMode =
+      (mode === "full-list" || mode === "legacy-admin-full") && !canManageUsers
+        ? "restricted-lookup"
+        : mode;
+    const includeArchived = true;
+    const inFlightKey = getUsersInFlightKey({
+      authContextKey: requestAuthContextKey,
+      mode: safeMode,
+      includeArchived
+    });
+    let inFlight = usersLookupInFlight.get(inFlightKey);
 
-    const nextUsers = canManageUsers
-      ? await listUsers({ includeArchived: true })
-      : await listUserLookup({ includeArchived: true });
+    if (!inFlight) {
+      inFlight = (safeMode === "full-list" || safeMode === "legacy-admin-full"
+        ? listUsers({ includeArchived })
+        : listUserLookup({ includeArchived })
+      ).finally(() => {
+        if (usersLookupInFlight.get(inFlightKey) === inFlight) {
+          usersLookupInFlight.delete(inFlightKey);
+        }
+      });
+      usersLookupInFlight.set(inFlightKey, inFlight);
+    }
+
+    const nextUsers = await inFlight;
+    if (latestAuthContextRef.current !== requestAuthContextKey) {
+      return [];
+    }
 
     const sorted = sortUsers(nextUsers);
     setUsers(sorted);
     return sorted;
-  }, [authUser]);
+  }, [authContextKey, authUser, canManageUsers]);
+
+  const reloadUsers = useCallback(async () => {
+    return loadUsersByMode(canManageUsers && !isLegacyAdminRoot ? "full-list" : "restricted-lookup");
+  }, [canManageUsers, isLegacyAdminRoot, loadUsersByMode]);
+
+  const reloadUsersForLegacyAdmin = useCallback(async () => {
+    return loadUsersByMode("legacy-admin-full");
+  }, [loadUsersByMode]);
 
   useEffect(() => {
     if (!authUser) {
       setUsers([]);
       return;
     }
+    if (!shouldAutoLoad) {
+      return;
+    }
 
     void reloadUsers().catch(() => {
+      if (latestAuthContextRef.current !== authContextKey) {
+        return;
+      }
       setUsers(sortUsers([authUser]));
     });
-  }, [authUser, reloadUsers]);
+  }, [authContextKey, authUser, reloadUsers, shouldAutoLoad]);
 
   const getUser = useCallback(
     (userId?: string | null) => {
@@ -291,24 +383,32 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
 
   const updateUser = useCallback(
     async (id: string, patch: UserUpdatePatch) => {
+      const requestAuthContextKey = authContextKey;
       const existing = users.find((user) => user.id === id);
-      if (!existing) {
-        return null;
-      }
 
-      const role = patch.role ?? normalizeRole({
-        role: existing.role,
-        type: existing.type,
-        isExternal: existing.isExternal
-      });
-      const type = patch.type ?? normalizeType(
-        {
-          type: existing.type,
-          isExternal: existing.isExternal,
-          role: existing.role
-        },
-        role
-      );
+      const role = patch.role
+        ? normalizeRole(patch)
+        : existing
+          ? normalizeRole({
+              role: existing.role,
+              type: existing.type,
+              isExternal: existing.isExternal
+            })
+          : undefined;
+      const type = patch.type
+        ? patch.type
+        : typeof patch.isExternal === "boolean"
+          ? patch.isExternal ? "EXTERNAL" : "INTERNAL"
+          : existing && role
+            ? normalizeType(
+                {
+                  type: existing.type,
+                  isExternal: existing.isExternal,
+                  role: existing.role
+                },
+                role
+              )
+            : undefined;
 
       const updated = await apiUpdateUser(id, {
         firstName: patch.firstName?.trim(),
@@ -318,7 +418,11 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
         role,
         type,
         titleOrPosition:
-          typeof patch.titleOrPosition === "string" ? patch.titleOrPosition.trim() || undefined : undefined,
+          typeof patch.titleOrPosition === "string"
+            ? patch.titleOrPosition.trim() || undefined
+            : typeof patch.companyRole === "string"
+              ? patch.companyRole.trim() || undefined
+              : undefined,
         department: typeof patch.department === "string" ? patch.department.trim() || undefined : undefined,
         externalCompany:
           typeof patch.externalCompany === "string" ? patch.externalCompany.trim() || undefined : undefined,
@@ -328,10 +432,18 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
         mustChangePassword: patch.mustChangePassword
       });
 
-      setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updated) : user))));
+      if (latestAuthContextRef.current === requestAuthContextKey) {
+        setUsers((prev) => {
+          const hasUser = prev.some((user) => user.id === id);
+          if (!hasUser) {
+            return prev;
+          }
+          return sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updated) : user)));
+        });
+      }
       return updated;
     },
-    [users]
+    [authContextKey, users]
   );
 
   const archiveUser = useCallback(async (id: string) => {
@@ -423,12 +535,16 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const resetUsers = useCallback(() => {
+    const requestAuthContextKey = authContextKey;
     void reloadUsers().catch(() => {
+      if (latestAuthContextRef.current !== requestAuthContextKey) {
+        return;
+      }
       if (authUser) {
         setUsers(sortUsers([authUser]));
       }
     });
-  }, [authUser, reloadUsers]);
+  }, [authContextKey, authUser, reloadUsers]);
 
   const value = useMemo(
     () => ({
@@ -452,6 +568,7 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
       replaceUsers,
       resetUsers,
       reloadUsers,
+      reloadUsersForLegacyAdmin,
       getUserById: (userId?: string) => getUser(userId),
       getUserLabel
     }),
@@ -476,6 +593,7 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
       replaceUsers,
       resetUsers,
       reloadUsers,
+      reloadUsersForLegacyAdmin,
       getUserLabel
     ]
   );

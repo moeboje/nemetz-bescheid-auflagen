@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import cors from "cors";
 import express, { type NextFunction, type Request, type Response } from "express";
-import { type AuditLog, type Prisma, type Session, type User as PrismaUser } from "@prisma/client";
+import { type AuditLog, Prisma, type Session, type User as PrismaUser } from "@prisma/client";
 import { Issuer } from "openid-client";
 import { loadConfig, type AppConfig } from "./config.js";
 import { prisma } from "./prisma.js";
@@ -88,6 +88,12 @@ import {
   resolveDocumentOwnerProjectContext,
   type ProjectDomain
 } from "./projectAccess.js";
+import {
+  createPerfRequestMiddleware,
+  createPerfTimer,
+  logPerfRequestError,
+  startPerfRuntimeLogging
+} from "./perf.js";
 
 const SESSION_COOKIE_NAME = "nemetz_session";
 const DEFAULT_ADMIN_PAGE = 1;
@@ -1576,6 +1582,42 @@ function toSearchable(row: Pick<PrismaUser, "firstName" | "lastName" | "email">)
   return `${row.firstName} ${row.lastName} ${row.email}`.toLowerCase();
 }
 
+function normalizeSearchWhitespace(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function buildAdminUserSearchSql(search: string | undefined): Prisma.Sql | undefined {
+  const normalizedSearch = normalizeSearchWhitespace(search ?? "");
+  if (!normalizedSearch) {
+    return undefined;
+  }
+
+  return Prisma.sql`strpos(lower(concat_ws(' ', "firstName", "lastName", "email")), lower(${normalizedSearch})) > 0`;
+}
+
+function andSqlClauses(clauses: Prisma.Sql[]) {
+  if (clauses.length === 0) {
+    return Prisma.sql`TRUE`;
+  }
+  return clauses.reduce((combined, clause) => Prisma.sql`${combined} AND ${clause}`);
+}
+
+function buildAdminUserRawOrderBy(sort: AdminSortField, dir: SortDirection) {
+  const direction = dir === "desc" ? Prisma.sql`DESC` : Prisma.sql`ASC`;
+
+  switch (sort) {
+    case "name":
+      return Prisma.sql`"firstName" ${direction}, "lastName" ${direction}, "email" ${direction}`;
+    case "lastLoginAt":
+      return Prisma.sql`"lastLoginAt" ${direction} ${dir === "asc" ? Prisma.sql`NULLS LAST` : Prisma.sql`NULLS FIRST`}, "email" ${direction}, "id" ASC`;
+    case "createdAt":
+      return Prisma.sql`"createdAt" ${direction}, "id" ASC`;
+    case "email":
+    default:
+      return Prisma.sql`"email" ${direction}`;
+  }
+}
+
 function compareNullableDates(left: Date | null, right: Date | null) {
   if (!left && !right) {
     return 0;
@@ -2285,9 +2327,11 @@ async function verifyMfaCodeOrRecovery(args: {
 export function createApp(config: AppConfig = loadConfig()) {
   const app = express();
 
+  startPerfRuntimeLogging(config);
   app.set("trust proxy", 1);
   app.use(applySecurityHeaders);
   app.use(createCorsMiddleware(config));
+  app.use(createPerfRequestMiddleware(config));
   app.use(express.json({ limit: "1mb" }));
   app.use(csrfProtectionMiddleware);
 
@@ -2298,8 +2342,8 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.use(createLegalDocsRouter(prisma));
   router.use(createLegacyDecisionsRouter(prisma));
   router.use(createObligationsRouter(prisma, config));
-  router.use(createProjectChecklistsRouter(prisma));
-  router.use(createProjectsRouter(prisma));
+  router.use(createProjectChecklistsRouter(prisma, config));
+  router.use(createProjectsRouter(prisma, config));
   router.use(createScopesRouter(prisma));
   router.use(createTaskStateRouter(prisma));
   const entraStateStore = createEntraStateStore();
@@ -2840,10 +2884,13 @@ export function createApp(config: AppConfig = loadConfig()) {
     "/admin/design",
     authMiddleware,
     requireAdminPermissions("masterData.manage"),
-    async (_req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
+        const perf = createPerfTimer(config, req, "admin.design.read");
         res.setHeader("Cache-Control", "private, no-store");
-        res.json(await loadBrandingDesignConfig());
+        const design = await perf.measure("branding metadata query", async () => loadBrandingDesignConfig());
+        perf.mark("response");
+        res.json(design);
       } catch (error) {
         next(error);
       }
@@ -2852,58 +2899,67 @@ export function createApp(config: AppConfig = loadConfig()) {
 
   async function handleBrandingUpload(kind: BrandingAssetKind, req: AuthenticatedRequest, res: Response, next: NextFunction) {
     try {
+      const perf = createPerfTimer(config, req, `admin.design.${kind}.save`);
       if (!Buffer.isBuffer(req.body)) {
         res.status(400).json({ ok: false, message: "Multipart payload is required." });
         return;
       }
 
-      const parsed = parseMultipartFormData(req.headers["content-type"], req.body);
-      const validation = validateBrandingUpload(kind, parsed?.file);
+      const parsed = await perf.measure("upload parse", async () =>
+        parseMultipartFormData(req.headers["content-type"], req.body)
+      );
+      const validation = await perf.measure("file validation", async () => validateBrandingUpload(kind, parsed?.file));
       if (!validation.ok) {
         res.status(validation.status).json({ ok: false, message: validation.message });
         return;
       }
 
-      const content = Buffer.from(validation.content);
-      const updated = await prisma.brandingAsset.upsert({
-        where: {
-          type: BRANDING_ASSET_CONFIG[kind].type
-        },
-        create: {
-          type: BRANDING_ASSET_CONFIG[kind].type,
-          fileName: validation.fileName,
-          mimeType: validation.mimeType,
-          sizeBytes: validation.sizeBytes,
-          content,
-          sha256: validation.sha256,
-          updatedById: req.authUser?.id
-        },
-        update: {
-          fileName: validation.fileName,
-          mimeType: validation.mimeType,
-          sizeBytes: validation.sizeBytes,
-          content,
-          sha256: validation.sha256,
-          updatedById: req.authUser?.id
-        }
-      });
+      const content = await perf.measure("buffer copy", async () => Buffer.from(validation.content));
+      const updated = await perf.measure("branding asset upsert", async () =>
+        prisma.brandingAsset.upsert({
+          where: {
+            type: BRANDING_ASSET_CONFIG[kind].type
+          },
+          create: {
+            type: BRANDING_ASSET_CONFIG[kind].type,
+            fileName: validation.fileName,
+            mimeType: validation.mimeType,
+            sizeBytes: validation.sizeBytes,
+            content,
+            sha256: validation.sha256,
+            updatedById: req.authUser?.id
+          },
+          update: {
+            fileName: validation.fileName,
+            mimeType: validation.mimeType,
+            sizeBytes: validation.sizeBytes,
+            content,
+            sha256: validation.sha256,
+            updatedById: req.authUser?.id
+          }
+        })
+      );
 
-      await audit({
-        actorUserId: req.authUser?.id,
-        action: kind === "logo" ? "BRANDING_LOGO_UPDATED" : "BRANDING_ICON_UPDATED",
-        req,
-        metadata: {
-          assetId: updated.id,
-          assetType: updated.type,
-          fileName: updated.fileName,
-          mimeType: updated.mimeType,
-          sizeBytes: updated.sizeBytes
-        }
-      });
+      await perf.measure("audit", async () =>
+        audit({
+          actorUserId: req.authUser?.id,
+          action: kind === "logo" ? "BRANDING_LOGO_UPDATED" : "BRANDING_ICON_UPDATED",
+          req,
+          metadata: {
+            assetId: updated.id,
+            assetType: updated.type,
+            fileName: updated.fileName,
+            mimeType: updated.mimeType,
+            sizeBytes: updated.sizeBytes
+          }
+        })
+      );
 
+      const design = await perf.measure("branding reload", async () => loadBrandingDesignConfig());
+      perf.mark("response", { kind, sizeBytes: updated.sizeBytes });
       res.status(200).json({
         ok: true,
-        design: await loadBrandingDesignConfig()
+        design
       });
     } catch (error) {
       next(error);
@@ -3108,6 +3164,7 @@ export function createApp(config: AppConfig = loadConfig()) {
 
   router.get("/documents", authMiddleware, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
+      const perf = createPerfTimer(config, req, "documents.list");
       if (!assertCanUseDocumentEndpoints(req, res)) {
         return;
       }
@@ -3119,21 +3176,24 @@ export function createApp(config: AppConfig = loadConfig()) {
         return;
       }
 
-      if (!(await assertCanReadDocumentOwner(req, res, ownerTypeRaw, ownerId))) {
+      if (!(await perf.measure("owner scope validation", async () => assertCanReadDocumentOwner(req, res, ownerTypeRaw, ownerId)))) {
         return;
       }
 
-      const documents = await prisma.document.findMany({
-        where: {
-          ownerType: ownerTypeRaw,
-          ownerId,
-          isArchived: false
-        },
-        orderBy: {
-          createdAt: "desc"
-        }
-      });
+      const documents = await perf.measure("document query", async () =>
+        prisma.document.findMany({
+          where: {
+            ownerType: ownerTypeRaw,
+            ownerId,
+            isArchived: false
+          },
+          orderBy: {
+            createdAt: "desc"
+          }
+        })
+      );
 
+      perf.mark("response", { itemCount: documents.length });
       res.json({
         items: documents.map((document) => toDocumentDto(document))
       });
@@ -3460,6 +3520,7 @@ export function createApp(config: AppConfig = loadConfig()) {
 
   router.get("/comments", authMiddleware, async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
+      const perf = createPerfTimer(config, req, "comments.list");
       if (!assertAuthenticated(req, res)) {
         return;
       }
@@ -3471,39 +3532,44 @@ export function createApp(config: AppConfig = loadConfig()) {
         res.status(400).json({ ok: false, message: "entityType and entityId are required." });
         return;
       }
-      if (!(await assertCanUseCommentEntity(req, res, entityType, entityId))) {
+      if (!(await perf.measure("entity scope validation", async () => assertCanUseCommentEntity(req, res, entityType, entityId)))) {
         return;
       }
 
-      const comments = await prisma.comment.findMany({
-        where: {
-          entityType,
-          entityId
-        },
-        orderBy: {
-          createdAt: "asc"
-        }
-      });
+      const comments = await perf.measure("comment query", async () =>
+        prisma.comment.findMany({
+          where: {
+            entityType,
+            entityId
+          },
+          orderBy: {
+            createdAt: "asc"
+          }
+        })
+      );
 
       const authorIds = [...new Set(comments.map((comment) => comment.authorUserId))];
       const authors = authorIds.length
-        ? await prisma.user.findMany({
-            where: {
-              id: {
-                in: authorIds
+        ? await perf.measure("author query", async () =>
+            prisma.user.findMany({
+              where: {
+                id: {
+                  in: authorIds
+                }
+              },
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                role: true,
+                type: true
               }
-            },
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              role: true,
-              type: true
-            }
-          })
+            })
+          )
         : [];
       const authorById = new Map(authors.map((author) => [author.id, author] as const));
 
+      perf.mark("response", { itemCount: comments.length });
       res.json({
         items: comments.map((comment) => toCommentDto(comment, authorById.get(comment.authorUserId)))
       });
@@ -4585,33 +4651,39 @@ export function createApp(config: AppConfig = loadConfig()) {
     requireAdminPermissions("roles.view", "roles.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
+        const perf = createPerfTimer(config, req, "admin.roles.list");
         const search = toOptionalTrimmedString(req.query.q ?? req.query.search)?.toLowerCase();
         const archived = parseArchivedFilter(req.query.archived);
 
-        const roles = await prisma.role.findMany({
-          where: {
-            isArchived: archived === "all" ? undefined : archived === "true"
-          },
-          orderBy: [
-            {
-              isSystem: "desc"
+        const roles = await perf.measure("role query", async () =>
+          prisma.role.findMany({
+            where: {
+              isArchived: archived === "all" ? undefined : archived === "true"
             },
-            {
-              key: "asc"
-            }
-          ]
-        });
+            orderBy: [
+              {
+                isSystem: "desc"
+              },
+              {
+                key: "asc"
+              }
+            ]
+          })
+        );
 
         const filtered = search
           ? roles.filter((row) =>
               `${row.key} ${row.labelDe} ${row.descriptionDe ?? ""}`.toLowerCase().includes(search)
             )
           : roles;
-        const permissionMap = await getStoredRolePermissionMap(
-          prisma,
-          filtered.map((row) => row.key)
+        const permissionMap = await perf.measure("permission metadata query", async () =>
+          getStoredRolePermissionMap(
+            prisma,
+            filtered.map((row) => row.key)
+          )
         );
 
+        perf.mark("response", { total: filtered.length });
         res.json({
           items: filtered.map((row) =>
             toAdminRole({
@@ -4702,12 +4774,15 @@ export function createApp(config: AppConfig = loadConfig()) {
     requireAdminPermissions("roles.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
+        const perf = createPerfTimer(config, req, "admin.roles.update");
         const roleId = req.params.id;
-        const existing = await prisma.role.findUnique({
-          where: {
-            id: roleId
-          }
-        });
+        const existing = await perf.measure("role lookup", async () =>
+          prisma.role.findUnique({
+            where: {
+              id: roleId
+            }
+          })
+        );
 
         if (!existing) {
           res.status(404).json({ ok: false, message: "Role not found." });
@@ -4718,7 +4793,9 @@ export function createApp(config: AppConfig = loadConfig()) {
         const hasLabelDe = hasOwn(req.body, "labelDe");
         const hasDescriptionDe = hasOwn(req.body, "descriptionDe");
         const hasPermissionKeys = hasOwn(req.body, "permissionKeys");
-        const existingPermissionKeys = await getStoredRolePermissionKeys(prisma, existing.key);
+        const existingPermissionKeys = await perf.measure("permission metadata query", async () =>
+          getStoredRolePermissionKeys(prisma, existing.key)
+        );
 
         const key = hasKey ? normalizeRoleKeyInput(req.body?.key) : existing.key;
         const labelDe = hasLabelDe ? ensureStringBody(req.body?.labelDe).trim() : existing.labelDe;
@@ -4747,11 +4824,13 @@ export function createApp(config: AppConfig = loadConfig()) {
         const nextKey = key ?? existing.key;
 
         if (hasKey && nextKey !== existing.key) {
-          const duplicate = await prisma.role.findUnique({
-            where: {
-              key: nextKey
-            }
-          });
+          const duplicate = await perf.measure("duplicate key lookup", async () =>
+            prisma.role.findUnique({
+              where: {
+                key: nextKey
+              }
+            })
+          );
           if (duplicate && duplicate.id !== existing.id) {
             res.status(409).json({ ok: false, message: "Role key already exists." });
             return;
@@ -4804,27 +4883,34 @@ export function createApp(config: AppConfig = loadConfig()) {
           return;
         }
 
-        const updated = await prisma.role.update({
-          where: {
-            id: existing.id
-          },
-          data
-        });
+        const updated = await perf.measure("role update", async () =>
+          prisma.role.update({
+            where: {
+              id: existing.id
+            },
+            data
+          })
+        );
         if (hasPermissionKeys) {
-          await setStoredRolePermissionKeys(prisma, updated.key, nextPermissionKeys);
+          await perf.measure("permission metadata update", async () =>
+            setStoredRolePermissionKeys(prisma, updated.key, nextPermissionKeys)
+          );
         }
 
-        await audit({
-          actorUserId: req.authUser?.id,
-          action: "ROLE_UPDATED",
-          req,
-          metadata: {
-            roleId: updated.id,
-            key: updated.key,
-            changedFields
-          }
-        });
+        await perf.measure("audit", async () =>
+          audit({
+            actorUserId: req.authUser?.id,
+            action: "ROLE_UPDATED",
+            req,
+            metadata: {
+              roleId: updated.id,
+              key: updated.key,
+              changedFields
+            }
+          })
+        );
 
+        perf.mark("response", { changedFieldCount: changedFields.length });
         res.json({
           ok: true,
           role: toAdminRole({
@@ -5519,26 +5605,32 @@ export function createApp(config: AppConfig = loadConfig()) {
     requireAdminPermissions("externalOrgs.view"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
+        const perf = createPerfTimer(config, req, "admin.external_orgs.list");
         const search = toOptionalTrimmedString(req.query.q ?? req.query.search)?.toLowerCase();
         const archived = parseArchivedFilter(req.query.archived);
 
-        const organizations = await prisma.externalOrganization.findMany({
-          where: {
-            isArchived: archived === "all" ? undefined : archived === "true"
-          },
-          orderBy: {
-            name: "asc"
-          }
-        });
+        const organizations = await perf.measure("organization query", async () =>
+          prisma.externalOrganization.findMany({
+            where: {
+              isArchived: archived === "all" ? undefined : archived === "true"
+            },
+            orderBy: {
+              name: "asc"
+            }
+          })
+        );
 
-        const filtered = search
-          ? organizations.filter((row) =>
-              `${row.name} ${row.type} ${row.email ?? ""} ${row.phone ?? ""} ${row.address ?? ""}`
-                .toLowerCase()
-                .includes(search)
-            )
-          : organizations;
+        const filtered = await perf.measure("filter and serialization", async () =>
+          search
+            ? organizations.filter((row) =>
+                `${row.name} ${row.type} ${row.email ?? ""} ${row.phone ?? ""} ${row.address ?? ""}`
+                  .toLowerCase()
+                  .includes(search)
+              )
+            : organizations
+        );
 
+        perf.mark("response", { total: filtered.length });
         res.json({
           items: filtered.map((row) => toExternalOrganization(row)),
           total: filtered.length
@@ -5555,6 +5647,7 @@ export function createApp(config: AppConfig = loadConfig()) {
     requireAdminPermissions("externalOrgs.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
+        const perf = createPerfTimer(config, req, "admin.external_orgs.create");
         const name = ensureStringBody(req.body?.name).trim();
         const type = ensureStringBody(req.body?.type).trim() || DEFAULT_EXTERNAL_ORG_TYPE;
         const phone = toOptionalTrimmedString(req.body?.phone);
@@ -5571,11 +5664,13 @@ export function createApp(config: AppConfig = loadConfig()) {
           return;
         }
 
-        const existing = await prisma.externalOrganization.findUnique({
-          where: {
-            name
-          }
-        });
+        const existing = await perf.measure("duplicate name lookup", async () =>
+          prisma.externalOrganization.findUnique({
+            where: {
+              name
+            }
+          })
+        );
 
         if (existing) {
           res.status(409).json({
@@ -5586,26 +5681,31 @@ export function createApp(config: AppConfig = loadConfig()) {
           return;
         }
 
-        const created = await prisma.externalOrganization.create({
-          data: {
-            name,
-            type,
-            phone,
-            email,
-            address
-          }
-        });
+        const created = await perf.measure("prisma create", async () =>
+          prisma.externalOrganization.create({
+            data: {
+              name,
+              type,
+              phone,
+              email,
+              address
+            }
+          })
+        );
 
-        await audit({
-          actorUserId: req.authUser?.id,
-          action: "EXTERNAL_ORG_CREATED",
-          req,
-          metadata: {
-            externalOrgId: created.id,
-            name: created.name
-          }
-        });
+        await perf.measure("audit", async () =>
+          audit({
+            actorUserId: req.authUser?.id,
+            action: "EXTERNAL_ORG_CREATED",
+            req,
+            metadata: {
+              externalOrgId: created.id,
+              name: created.name
+            }
+          })
+        );
 
+        perf.mark("response");
         res.status(201).json({
           ok: true,
           externalOrg: toExternalOrganization(created)
@@ -5622,12 +5722,15 @@ export function createApp(config: AppConfig = loadConfig()) {
     requireAdminPermissions("externalOrgs.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
+        const perf = createPerfTimer(config, req, "admin.external_orgs.update");
         const externalOrgId = req.params.id;
-        const existing = await prisma.externalOrganization.findUnique({
-          where: {
-            id: externalOrgId
-          }
-        });
+        const existing = await perf.measure("organization lookup", async () =>
+          prisma.externalOrganization.findUnique({
+            where: {
+              id: externalOrgId
+            }
+          })
+        );
 
         if (!existing) {
           res.status(404).json({ ok: false, message: "External organization not found." });
@@ -5659,11 +5762,13 @@ export function createApp(config: AppConfig = loadConfig()) {
         }
 
         if (name !== existing.name) {
-          const duplicate = await prisma.externalOrganization.findUnique({
-            where: {
-              name
-            }
-          });
+          const duplicate = await perf.measure("duplicate name lookup", async () =>
+            prisma.externalOrganization.findUnique({
+              where: {
+                name
+              }
+            })
+          );
           if (duplicate && duplicate.id !== existing.id) {
             res.status(409).json({
               ok: false,
@@ -5710,23 +5815,28 @@ export function createApp(config: AppConfig = loadConfig()) {
           return;
         }
 
-        const updated = await prisma.externalOrganization.update({
-          where: {
-            id: existing.id
-          },
-          data
-        });
+        const updated = await perf.measure("prisma update", async () =>
+          prisma.externalOrganization.update({
+            where: {
+              id: existing.id
+            },
+            data
+          })
+        );
 
-        await audit({
-          actorUserId: req.authUser?.id,
-          action: "EXTERNAL_ORG_UPDATED",
-          req,
-          metadata: {
-            externalOrgId: updated.id,
-            changedFields
-          }
-        });
+        await perf.measure("audit", async () =>
+          audit({
+            actorUserId: req.authUser?.id,
+            action: "EXTERNAL_ORG_UPDATED",
+            req,
+            metadata: {
+              externalOrgId: updated.id,
+              changedFields
+            }
+          })
+        );
 
+        perf.mark("response", { changedFieldCount: changedFields.length });
         res.json({
           ok: true,
           externalOrg: toExternalOrganization(updated)
@@ -5859,49 +5969,120 @@ export function createApp(config: AppConfig = loadConfig()) {
     requireAdminPermissions("users.view", "users.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
-        const search = toOptionalTrimmedString(req.query.q ?? req.query.search);
-        const role = parseRole(req.query.role);
-        const type = parseType(req.query.type);
-        const archived = parseArchivedFilter(req.query.archived ?? (isTrue(req.query.includeArchived) ? "all" : undefined));
-        const page = parsePositiveInteger(req.query.page, DEFAULT_ADMIN_PAGE);
-        const pageSize = parsePositiveInteger(req.query.pageSize, DEFAULT_ADMIN_PAGE_SIZE, MAX_ADMIN_PAGE_SIZE);
-        const sort = parseAdminSortField(req.query.sort);
-        const dir = parseSortDirection(req.query.dir);
+        const perf = createPerfTimer(config, req, "admin.users.list");
+        const parsed = await perf.measure("filters", async () => {
+          const search = toOptionalTrimmedString(req.query.q ?? req.query.search);
+          const role = parseRole(req.query.role);
+          const type = parseType(req.query.type);
+          const archived = parseArchivedFilter(req.query.archived ?? (isTrue(req.query.includeArchived) ? "all" : undefined));
+          const page = parsePositiveInteger(req.query.page, DEFAULT_ADMIN_PAGE);
+          const pageSize = parsePositiveInteger(req.query.pageSize, DEFAULT_ADMIN_PAGE_SIZE, MAX_ADMIN_PAGE_SIZE);
+          const sort = parseAdminSortField(req.query.sort);
+          const dir = parseSortDirection(req.query.dir);
+          return { search, role, type, archived, page, pageSize, sort, dir };
+        });
+        const searchSql = buildAdminUserSearchSql(parsed.search);
 
-        const users = await prisma.user.findMany({
-          where: {
-            isArchived: archived === "all" ? undefined : archived === "true"
-          },
-          include: {
+        const where: Prisma.UserWhereInput = {
+          isArchived: parsed.archived === "all" ? undefined : parsed.archived === "true",
+          role: parsed.role ?? undefined,
+          type: parsed.type ?? undefined
+        };
+        const orderBy: Prisma.UserOrderByWithRelationInput[] =
+          parsed.sort === "name"
+            ? [{ firstName: parsed.dir }, { lastName: parsed.dir }, { email: parsed.dir }]
+            : parsed.sort === "lastLoginAt"
+            ? [
+                {
+                  lastLoginAt: {
+                    sort: parsed.dir,
+                    nulls: parsed.dir === "asc" ? "last" : "first"
+                  }
+                },
+                { email: parsed.dir },
+                { id: "asc" }
+              ]
+            : parsed.sort === "createdAt"
+            ? [{ createdAt: parsed.dir }, { id: "asc" }]
+            : [{ [parsed.sort]: parsed.dir } as Prisma.UserOrderByWithRelationInput];
+        const offset = (parsed.page - 1) * parsed.pageSize;
+
+        const { users, total } = await perf.measure("user query and count", async () => {
+          const externalOrgInclude = {
             externalOrg: {
               select: {
                 id: true,
                 name: true
               }
             }
+          } satisfies Prisma.UserInclude;
+
+          if (searchSql) {
+            const rawClauses: Prisma.Sql[] = [searchSql];
+            if (parsed.archived !== "all") {
+              rawClauses.push(Prisma.sql`"isArchived" = ${parsed.archived === "true"}`);
+            }
+            if (parsed.role) {
+              rawClauses.push(Prisma.sql`"role" = ${parsed.role}`);
+            }
+            if (parsed.type) {
+              rawClauses.push(Prisma.sql`"type" = ${parsed.type}`);
+            }
+
+            const rawWhere = andSqlClauses(rawClauses);
+            const rawOrderBy = buildAdminUserRawOrderBy(parsed.sort, parsed.dir);
+            const [idRows, countRows] = await Promise.all([
+              prisma.$queryRaw<Array<{ id: string }>>(
+                Prisma.sql`SELECT "id" FROM "User" WHERE ${rawWhere} ORDER BY ${rawOrderBy} OFFSET ${offset} LIMIT ${parsed.pageSize}`
+              ),
+              prisma.$queryRaw<Array<{ count: number | bigint }>>(
+                Prisma.sql`SELECT COUNT(*)::int AS "count" FROM "User" WHERE ${rawWhere}`
+              )
+            ]);
+            const pageIds = idRows.map((row) => row.id);
+            const pageUsers = pageIds.length
+              ? await prisma.user.findMany({
+                  where: {
+                    id: {
+                      in: pageIds
+                    }
+                  },
+                  include: externalOrgInclude
+                })
+              : [];
+            const usersById = new Map(pageUsers.map((row) => [row.id, row]));
+
+            return {
+              users: pageIds.flatMap((id) => {
+                const user = usersById.get(id);
+                return user ? [user] : [];
+              }),
+              total: Number(countRows[0]?.count ?? 0)
+            };
           }
+
+          const [users, total] = await Promise.all([
+            prisma.user.findMany({
+              where,
+              include: externalOrgInclude,
+              orderBy,
+              skip: offset,
+              take: parsed.pageSize
+            }),
+            prisma.user.count({ where })
+          ]);
+
+          return { users, total };
         });
 
-        const normalizedSearch = search?.toLowerCase();
+        const items = await perf.measure("serialization", async () => users.map((row) => toAdminUserListItem(row)));
 
-        const filtered = users
-          .filter((row) => (role ? row.role === role : true))
-          .filter((row) => (type ? row.type === type : true))
-          .filter((row) => (normalizedSearch ? toSearchable(row).includes(normalizedSearch) : true))
-          .sort((left, right) => {
-            const base = compareAdminUsers(left, right, sort);
-            return dir === "asc" ? base : base * -1;
-          });
-
-        const total = filtered.length;
-        const offset = (page - 1) * pageSize;
-        const items = filtered.slice(offset, offset + pageSize).map((row) => toAdminUserListItem(row));
-
+        perf.mark("response", { total, itemCount: items.length });
         res.json({
           items,
           total,
-          page,
-          pageSize
+          page: parsed.page,
+          pageSize: parsed.pageSize
         });
       } catch (error) {
         next(error);
@@ -5915,7 +6096,10 @@ export function createApp(config: AppConfig = loadConfig()) {
     requireAdminPermissions("users.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
-        const securitySettings = await getEffectiveSecuritySettings(prisma, config);
+        const perf = createPerfTimer(config, req, "admin.users.create");
+        const securitySettings = await perf.measure("security settings", async () =>
+          getEffectiveSecuritySettings(prisma, config)
+        );
         const firstName = ensureStringBody(req.body?.firstName).trim();
         const lastName = ensureStringBody(req.body?.lastName).trim();
         const email = normalizeEmail(ensureStringBody(req.body?.email));
@@ -5929,6 +6113,7 @@ export function createApp(config: AppConfig = loadConfig()) {
         const notes = toOptionalTrimmedString(req.body?.notes);
         const initialPassword = toOptionalTrimmedString(req.body?.initialPassword);
         const requestedPasswordMode = parsePasswordMode(req.body?.passwordMode);
+        perf.mark("validation parsed");
 
         if (!firstName || !lastName || !email) {
           res.status(400).json({ ok: false, message: "firstName, lastName and email are required." });
@@ -5945,11 +6130,13 @@ export function createApp(config: AppConfig = loadConfig()) {
           return;
         }
 
-        const existing = await prisma.user.findUnique({
-          where: {
-            email
-          }
-        });
+        const existing = await perf.measure("duplicate email lookup", async () =>
+          prisma.user.findUnique({
+            where: {
+              email
+            }
+          })
+        );
 
         if (existing) {
           res.status(409).json({ ok: false, message: "Email already exists." });
@@ -5963,7 +6150,7 @@ export function createApp(config: AppConfig = loadConfig()) {
           fallbackType: "INTERNAL"
         });
 
-        const assignableRole = await findAssignableRole(roleAndType.role);
+        const assignableRole = await perf.measure("role lookup", async () => findAssignableRole(roleAndType.role));
         if (!assignableRole) {
           res.status(400).json({ ok: false, message: "Role does not exist or is archived." });
           return;
@@ -5976,7 +6163,9 @@ export function createApp(config: AppConfig = loadConfig()) {
             return;
           }
 
-          const found = await findActiveExternalOrganization(externalOrgIdInput);
+          const found = await perf.measure("external org lookup", async () =>
+            findActiveExternalOrganization(externalOrgIdInput)
+          );
           if (!found) {
             res.status(400).json({ ok: false, message: "Invalid externalOrgId." });
             return;
@@ -6016,36 +6205,38 @@ export function createApp(config: AppConfig = loadConfig()) {
         }
 
         const now = new Date();
-        const passwordHash = await hashPassword(effectivePassword);
+        const passwordHash = await perf.measure("password hash", async () => hashPassword(effectivePassword));
 
-        const created = await prisma.user.create({
-          data: {
-            firstName,
-            lastName,
-            email,
-            phone,
-            role: roleAndType.role,
-            type: roleAndType.type,
-            titleOrPosition,
-            department,
-            externalOrgId: roleAndType.type === "EXTERNAL" ? (externalOrg?.id ?? null) : null,
-            externalCompany: roleAndType.type === "EXTERNAL" ? (externalOrg?.name ?? externalCompany ?? null) : null,
-            notes,
-            passwordHash,
-            passwordUpdatedAt: now,
-            mustChangePassword: passwordMode !== "link",
-            invitedAt: passwordMode === "link" ? now : null,
-            lastPasswordResetAt: now
-          },
-          include: {
-            externalOrg: {
-              select: {
-                id: true,
-                name: true
+        const created = await perf.measure("prisma create", async () =>
+          prisma.user.create({
+            data: {
+              firstName,
+              lastName,
+              email,
+              phone,
+              role: roleAndType.role,
+              type: roleAndType.type,
+              titleOrPosition,
+              department,
+              externalOrgId: roleAndType.type === "EXTERNAL" ? (externalOrg?.id ?? null) : null,
+              externalCompany: roleAndType.type === "EXTERNAL" ? (externalOrg?.name ?? externalCompany ?? null) : null,
+              notes,
+              passwordHash,
+              passwordUpdatedAt: now,
+              mustChangePassword: passwordMode !== "link",
+              invitedAt: passwordMode === "link" ? now : null,
+              lastPasswordResetAt: now
+            },
+            include: {
+              externalOrg: {
+                select: {
+                  id: true,
+                  name: true
+                }
               }
             }
-          }
-        });
+          })
+        );
 
         let resetLink: string | undefined;
         let temporaryPassword: string | undefined;
@@ -6054,27 +6245,31 @@ export function createApp(config: AppConfig = loadConfig()) {
 
         if (passwordMode === "link") {
           try {
-            const reset = await createAndDispatchPasswordResetNotification(prisma, config, {
-              user: created,
-              ttlMinutes: config.resetTokenTtlMinutes
-            });
+            const reset = await perf.measure("reset notification dispatch", async () =>
+              createAndDispatchPasswordResetNotification(prisma, config, {
+                user: created,
+                ttlMinutes: config.resetTokenTtlMinutes
+              })
+            );
 
             resetLink = reset.resetLink;
             notificationStatus = reset.deliveryStatus;
             notificationError = reset.deliveryError;
 
-            await audit({
-              actorUserId: req.authUser?.id,
-              targetUserId: created.id,
-              action: "USER_INVITED",
-              req,
-              metadata: {
-                expiresAt: reset.expiresAt.toISOString(),
-                notificationId: reset.notificationId,
-                deliveryStatus: reset.deliveryStatus,
-                deliveryError: reset.deliveryError
-              }
-            });
+            await perf.measure("audit user invited", async () =>
+              audit({
+                actorUserId: req.authUser?.id,
+                targetUserId: created.id,
+                action: "USER_INVITED",
+                req,
+                metadata: {
+                  expiresAt: reset.expiresAt.toISOString(),
+                  notificationId: reset.notificationId,
+                  deliveryStatus: reset.deliveryStatus,
+                  deliveryError: reset.deliveryError
+                }
+              })
+            );
           } catch (notificationErrorValue) {
             notificationStatus = "FAILED";
             notificationError =
@@ -6086,19 +6281,22 @@ export function createApp(config: AppConfig = loadConfig()) {
           temporaryPassword = generatedPassword;
         }
 
-        await audit({
-          actorUserId: req.authUser?.id,
-          targetUserId: created.id,
-          action: "USER_CREATED",
-          req,
-          metadata: {
-            role: created.role,
-            type: created.type,
-            passwordMode,
-            mustChangePassword: passwordMode !== "link"
-          }
-        });
+        await perf.measure("audit user created", async () =>
+          audit({
+            actorUserId: req.authUser?.id,
+            targetUserId: created.id,
+            action: "USER_CREATED",
+            req,
+            metadata: {
+              role: created.role,
+              type: created.type,
+              passwordMode,
+              mustChangePassword: passwordMode !== "link"
+            }
+          })
+        );
 
+        perf.mark("response", { passwordMode, notificationStatus });
         res.status(201).json({
           ok: true,
           user: toSafeUser(created),
@@ -6119,21 +6317,24 @@ export function createApp(config: AppConfig = loadConfig()) {
     requireAdminPermissions("users.manage"),
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
+        const perf = createPerfTimer(config, req, "admin.users.update");
         const userId = req.params.id;
 
-        const existing = await prisma.user.findUnique({
-          where: {
-            id: userId
-          },
-          include: {
-            externalOrg: {
-              select: {
-                id: true,
-                name: true
+        const existing = await perf.measure("user lookup", async () =>
+          prisma.user.findUnique({
+            where: {
+              id: userId
+            },
+            include: {
+              externalOrg: {
+                select: {
+                  id: true,
+                  name: true
+                }
               }
             }
-          }
-        });
+          })
+        );
 
         if (!existing) {
           res.status(404).json({ ok: false, message: "User not found." });
@@ -6169,6 +6370,7 @@ export function createApp(config: AppConfig = loadConfig()) {
           ? toOptionalTrimmedString(req.body?.externalOrgId)
           : existing.externalOrgId ?? undefined;
         const notes = toOptionalTrimmedString(req.body?.notes);
+        perf.mark("validation parsed");
 
         if (hasFirstName && !firstName) {
           res.status(400).json({ ok: false, message: "firstName is required." });
@@ -6212,7 +6414,9 @@ export function createApp(config: AppConfig = loadConfig()) {
         }
 
         if (normalizedEmail && normalizedEmail !== existing.email) {
-          const byEmail = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+          const byEmail = await perf.measure("duplicate email lookup", async () =>
+            prisma.user.findUnique({ where: { email: normalizedEmail } })
+          );
           if (byEmail && byEmail.id !== existing.id) {
             res.status(409).json({ ok: false, message: "Email already exists." });
             return;
@@ -6229,7 +6433,7 @@ export function createApp(config: AppConfig = loadConfig()) {
         const normalizedExistingRole = normalizeRoleValue(existing.role);
         const roleChanged = roleAndType.role !== normalizedExistingRole;
         if (hasRole || roleChanged) {
-          const assignableRole = await findAssignableRole(roleAndType.role);
+          const assignableRole = await perf.measure("role lookup", async () => findAssignableRole(roleAndType.role));
           if (!assignableRole) {
             res.status(400).json({ ok: false, message: "Role does not exist or is archived." });
             return;
@@ -6243,7 +6447,9 @@ export function createApp(config: AppConfig = loadConfig()) {
             return;
           }
 
-          const found = await findActiveExternalOrganization(externalOrgIdInput);
+          const found = await perf.measure("external org lookup", async () =>
+            findActiveExternalOrganization(externalOrgIdInput)
+          );
           if (!found) {
             res.status(400).json({ ok: false, message: "Invalid externalOrgId." });
             return;
@@ -6259,7 +6465,9 @@ export function createApp(config: AppConfig = loadConfig()) {
         const willRemainAdmin = roleAndType.role === "ADMIN" && roleAndType.type === "INTERNAL";
         const isDemotingAdmin = isExistingAdmin && !willRemainAdmin;
         if (isDemotingAdmin) {
-          const hasBackupAdmin = await hasOtherActiveAdmin(existing.id);
+          const hasBackupAdmin = await perf.measure("backup admin check", async () =>
+            hasOtherActiveAdmin(existing.id)
+          );
           if (!hasBackupAdmin) {
             res.status(400).json({
               ok: false,
@@ -6363,30 +6571,34 @@ export function createApp(config: AppConfig = loadConfig()) {
           changedFields.push("type");
         }
 
-        const updated = await prisma.user.update({
-          where: {
-            id: userId
-          },
-          data,
-          include: {
-            externalOrg: {
-              select: {
-                id: true,
-                name: true
+        const updated = await perf.measure("prisma update", async () =>
+          prisma.user.update({
+            where: {
+              id: userId
+            },
+            data,
+            include: {
+              externalOrg: {
+                select: {
+                  id: true,
+                  name: true
+                }
               }
             }
-          }
-        });
+          })
+        );
 
-        await audit({
-          actorUserId: req.authUser?.id,
-          targetUserId: updated.id,
-          action: "USER_UPDATED",
-          req,
-          metadata: {
-            changedFields
-          }
-        });
+        await perf.measure("audit user updated", async () =>
+          audit({
+            actorUserId: req.authUser?.id,
+            targetUserId: updated.id,
+            action: "USER_UPDATED",
+            req,
+            metadata: {
+              changedFields
+            }
+          })
+        );
 
         if (normalizeRoleValue(existing.role) !== normalizeRoleValue(updated.role)) {
           await audit({
@@ -6440,6 +6652,7 @@ export function createApp(config: AppConfig = loadConfig()) {
           });
         }
 
+        perf.mark("response", { changedFieldCount: changedFields.length });
         res.json({
           ok: true,
           user: toSafeUser(updated)
@@ -6561,18 +6774,23 @@ export function createApp(config: AppConfig = loadConfig()) {
 
   const handleAdminResetPassword = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     try {
-      const securitySettings = await getEffectiveSecuritySettings(prisma, config);
+      const perf = createPerfTimer(config, req, "admin.users.reset_password");
+      const securitySettings = await perf.measure("security settings", async () =>
+        getEffectiveSecuritySettings(prisma, config)
+      );
       const userId = req.params.id;
       const requestedPasswordMode = parseAdminResetPasswordMode(req.body?.passwordMode);
       const temporaryPasswordInput = toOptionalTrimmedString(req.body?.temporaryPassword);
       const newPassword = ensureStringBody(req.body?.newPassword);
       const hasNewPassword = newPassword.trim().length > 0;
 
-      const target = await prisma.user.findUnique({
-        where: {
-          id: userId
-        }
-      });
+      const target = await perf.measure("target user lookup", async () =>
+        prisma.user.findUnique({
+          where: {
+            id: userId
+          }
+        })
+      );
 
       if (!target || target.isArchived) {
         res.status(404).json({ ok: false, message: "User not found." });
@@ -6612,24 +6830,28 @@ export function createApp(config: AppConfig = loadConfig()) {
         requestedPasswordMode === "direct" || hasNewPassword ? "direct" : requestedPasswordMode ?? "link";
 
       if (passwordMode === "link") {
-        const reset = await createAndDispatchPasswordResetNotification(prisma, config, {
-          user: target,
-          ttlMinutes: config.resetTokenTtlMinutes
-        });
+        const reset = await perf.measure("reset notification dispatch", async () =>
+          createAndDispatchPasswordResetNotification(prisma, config, {
+            user: target,
+            ttlMinutes: config.resetTokenTtlMinutes
+          })
+        );
 
-        await audit({
-          actorUserId: req.authUser?.id,
-          targetUserId: target.id,
-          action: "USER_PASSWORD_RESET_REQUESTED_BY_ADMIN",
-          req,
-          metadata: {
-            notificationId: reset.notificationId,
-            expiresAt: reset.expiresAt.toISOString(),
-            deliveryStatus: reset.deliveryStatus,
-            deliveryError: reset.deliveryError,
-            passwordMode
-          }
-        });
+        await perf.measure("audit", async () =>
+          audit({
+            actorUserId: req.authUser?.id,
+            targetUserId: target.id,
+            action: "USER_PASSWORD_RESET_REQUESTED_BY_ADMIN",
+            req,
+            metadata: {
+              notificationId: reset.notificationId,
+              expiresAt: reset.expiresAt.toISOString(),
+              deliveryStatus: reset.deliveryStatus,
+              deliveryError: reset.deliveryError,
+              passwordMode
+            }
+          })
+        );
 
         if (reset.deliveryStatus !== "SENT") {
           res.status(502).json({
@@ -6639,6 +6861,7 @@ export function createApp(config: AppConfig = loadConfig()) {
           return;
         }
 
+        perf.mark("response", { passwordMode, deliveryStatus: reset.deliveryStatus });
         res.json({
           ok: true,
           resetLink: reset.resetLink
@@ -6685,61 +6908,66 @@ export function createApp(config: AppConfig = loadConfig()) {
       }
 
       const now = new Date();
-      const passwordHash = await hashPassword(effectivePassword);
-      const [updated] = await prisma.$transaction([
-        prisma.user.update({
-          where: {
-            id: target.id
-          },
-          include: {
-            externalOrg: {
-              select: {
-                id: true,
-                name: true
+      const passwordHash = await perf.measure("password hash", async () => hashPassword(effectivePassword));
+      const [updated] = await perf.measure("password reset transaction", async () =>
+        prisma.$transaction([
+          prisma.user.update({
+            where: {
+              id: target.id
+            },
+            include: {
+              externalOrg: {
+                select: {
+                  id: true,
+                  name: true
+                }
               }
+            },
+            data: {
+              passwordHash,
+              passwordUpdatedAt: now,
+              lastPasswordResetAt: now,
+              mustChangePassword,
+              failedLoginCount: 0,
+              lockedUntil: null
             }
-          },
-          data: {
-            passwordHash,
-            passwordUpdatedAt: now,
-            lastPasswordResetAt: now,
-            mustChangePassword,
-            failedLoginCount: 0,
-            lockedUntil: null
-          }
-        }),
-        prisma.session.updateMany({
-          where: {
-            userId: target.id,
-            revokedAt: null
-          },
-          data: {
-            revokedAt: now
-          }
-        }),
-        prisma.passwordResetToken.updateMany({
-          where: {
-            userId: target.id,
-            usedAt: null
-          },
-          data: {
-            usedAt: now
+          }),
+          prisma.session.updateMany({
+            where: {
+              userId: target.id,
+              revokedAt: null
+            },
+            data: {
+              revokedAt: now
+            }
+          }),
+          prisma.passwordResetToken.updateMany({
+            where: {
+              userId: target.id,
+              usedAt: null
+            },
+            data: {
+              usedAt: now
+            }
+          })
+        ])
+      );
+
+      await perf.measure("audit", async () =>
+        audit({
+          actorUserId: req.authUser?.id,
+          targetUserId: target.id,
+          action: "USER_PASSWORD_RESET_BY_ADMIN",
+          req,
+          metadata: {
+            passwordMode,
+            mustChangePassword
           }
         })
-      ]);
-
-      await audit({
-        actorUserId: req.authUser?.id,
-        targetUserId: target.id,
-        action: "USER_PASSWORD_RESET_BY_ADMIN",
-        req,
-        metadata: {
-          passwordMode,
-          mustChangePassword
-        }
-      });
+      );
 
       if (passwordMode === "direct") {
+        perf.mark("response", { passwordMode });
         res.json({
           ok: true,
           user: toSafeUser(updated)
@@ -6747,6 +6975,7 @@ export function createApp(config: AppConfig = loadConfig()) {
         return;
       }
 
+      perf.mark("response", { passwordMode });
       res.json({
         ok: true,
         temporaryPassword: passwordMode === "auto" ? effectivePassword : undefined
@@ -6889,7 +7118,9 @@ export function createApp(config: AppConfig = loadConfig()) {
 
   app.use(config.basePath, router);
 
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    logPerfRequestError(config, req, res, err);
+
     if (err instanceof Error && err.message === "Origin not allowed") {
       res.status(403).json({ ok: false, message: "Origin not allowed." });
       return;

@@ -32,6 +32,7 @@ type RolesContextValue = {
 };
 
 const RolesContext = createContext<RolesContextValue | undefined>(undefined);
+let rolesLookupInFlight: Promise<AdminRole[]> | null = null;
 
 function sortRoles(rows: AdminRole[]) {
   return [...rows].sort((left, right) => left.labelDe.localeCompare(right.labelDe));
@@ -59,8 +60,15 @@ export function RolesProvider({ children }: { children: React.ReactNode }) {
       return [];
     }
 
-    const payload = await listAdminRolesLookup();
-    const next = sortRoles(payload.items);
+    if (!rolesLookupInFlight) {
+      rolesLookupInFlight = listAdminRolesLookup()
+        .then((payload) => sortRoles(payload.items))
+        .finally(() => {
+          rolesLookupInFlight = null;
+        });
+    }
+
+    const next = await rolesLookupInFlight;
     setRoles(next);
     return next;
   }, [canLookupRoles, user]);
@@ -79,10 +87,10 @@ export function RolesProvider({ children }: { children: React.ReactNode }) {
   const createRoleEntry = useCallback(
     async (input: { key: string; labelDe: string; descriptionDe?: string; permissionKeys?: string[] }) => {
       const created = await createAdminRole(input);
-      await reloadRoles();
+      setRoles((prev) => sortRoles([created, ...prev.filter((row) => row.id !== created.id)]));
       return created;
     },
-    [reloadRoles]
+    []
   );
 
   const updateRoleEntry = useCallback(
@@ -96,28 +104,28 @@ export function RolesProvider({ children }: { children: React.ReactNode }) {
       }>
     ) => {
       const updated = await updateAdminRole(id, input);
-      await reloadRoles();
+      setRoles((prev) => sortRoles([updated, ...prev.filter((row) => row.id !== updated.id)]));
       return updated;
     },
-    [reloadRoles]
+    []
   );
 
   const archiveRoleEntry = useCallback(
     async (id: string) => {
       const updated = await archiveAdminRole(id);
-      await reloadRoles();
+      setRoles((prev) => sortRoles([updated, ...prev.filter((row) => row.id !== updated.id)]));
       return updated;
     },
-    [reloadRoles]
+    []
   );
 
   const restoreRoleEntry = useCallback(
     async (id: string) => {
       const updated = await restoreAdminRole(id);
-      await reloadRoles();
+      setRoles((prev) => sortRoles([updated, ...prev.filter((row) => row.id !== updated.id)]));
       return updated;
     },
-    [reloadRoles]
+    []
   );
 
   const getRoleByKey = useCallback(

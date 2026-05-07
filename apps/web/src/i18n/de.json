@@ -551,6 +551,7 @@
   "admin.authorities.form.name": "Name",
   "admin.authorities.form.shortName": "Kurzname",
   "admin.authorities.empty": "Keine Behörden verfuegbar.",
+  "admin.authorities.error.load": "Behörden konnten nicht geladen werden.",
   "admin.authorities.error.save": "Behörde konnte nicht gespeichert werden.",
   "admin.authorities.error.action": "Aktion fuer die Behörde konnte nicht ausgefuehrt werden.",
   "admin.authorities.success.created": "Behörde wurde angelegt.",

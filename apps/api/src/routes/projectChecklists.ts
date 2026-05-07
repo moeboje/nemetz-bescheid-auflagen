@@ -13,6 +13,8 @@ import {
   requireProjectDomainReadPermission,
   requireProjectDomainWrite
 } from "../projectAccess.js";
+import type { AppConfig } from "../config.js";
+import { createPerfTimer } from "../perf.js";
 
 const CHECKLIST_ITEM_STATUS_VALUES = [
   "OPEN",
@@ -532,7 +534,7 @@ async function replaceProjectChecklistSnapshot(
   return readProjectChecklistByProjectId(db, snapshot.projectId);
 }
 
-export function createProjectChecklistsRouter(prisma: PrismaClient) {
+export function createProjectChecklistsRouter(prisma: PrismaClient, config: AppConfig) {
   const router = Router();
 
   router.get("/project-checklists", async (req: Request, res: Response, next: NextFunction) => {
@@ -557,9 +559,10 @@ export function createProjectChecklistsRouter(prisma: PrismaClient) {
 
   router.get("/projects/:id/checklist", async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const perf = createPerfTimer(config, req, "projects.checklist.read");
       applyNoStoreHeaders(res);
 
-      const user = await requireAuthenticatedRouteUser(req, res, prisma);
+      const user = await perf.measure("auth", async () => requireAuthenticatedRouteUser(req, res, prisma));
       if (!user) {
         return;
       }
@@ -568,24 +571,29 @@ export function createProjectChecklistsRouter(prisma: PrismaClient) {
         return;
       }
 
-      const projectExists = await ensureProjectExists(prisma, req.params.id);
+      const projectExists = await perf.measure("project lookup", async () => ensureProjectExists(prisma, req.params.id));
       if (!projectExists) {
         res.status(404).json({ ok: false, message: "Project not found." });
         return;
       }
       if (
-        !(await requireProjectDomainRead({
-          db: prisma,
-          user,
-          projectId: req.params.id,
-          domain: "projectChecklists",
-          res
-        }))
+        !(await perf.measure("project scope validation", async () =>
+          requireProjectDomainRead({
+            db: prisma,
+            user,
+            projectId: req.params.id,
+            domain: "projectChecklists",
+            res
+          })
+        ))
       ) {
         return;
       }
 
-      const checklist = await readProjectChecklistByProjectId(prisma, req.params.id);
+      const checklist = await perf.measure("checklist query", async () =>
+        readProjectChecklistByProjectId(prisma, req.params.id)
+      );
+      perf.mark("response", { hasChecklist: Boolean(checklist) });
       res.json({
         ok: true,
         checklist: checklist ? toProjectChecklistDto(checklist) : null

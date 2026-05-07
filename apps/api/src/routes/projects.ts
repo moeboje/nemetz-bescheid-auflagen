@@ -24,6 +24,8 @@ import {
   type ProjectAccessSource
 } from "../projectAccess.js";
 import { hasPermission } from "../accessControl.js";
+import type { AppConfig } from "../config.js";
+import { createPerfTimer } from "../perf.js";
 
 const PROJECT_STATUS_VALUES = [
   "DRAFT",
@@ -1516,7 +1518,7 @@ async function listProjectAccessEntries(prisma: PrismaClient, projectId: string)
   return [...implicitDtos, ...explicitDtos];
 }
 
-export function createProjectsRouter(prisma: PrismaClient) {
+export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
   const router = Router();
 
   router.get("/projects", async (req: Request, res: Response, next: NextFunction) => {
@@ -1601,9 +1603,10 @@ export function createProjectsRouter(prisma: PrismaClient) {
 
   router.get("/projects/:id/access", async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const perf = createPerfTimer(config, req, "projects.access.list");
       applyNoStoreHeaders(res);
 
-      const user = await requireInternalAuthenticatedUser(req, res, prisma);
+      const user = await perf.measure("auth and rbac", async () => requireInternalAuthenticatedUser(req, res, prisma));
       if (!user) {
         return;
       }
@@ -1613,12 +1616,15 @@ export function createProjectsRouter(prisma: PrismaClient) {
         return;
       }
 
-      const entries = await listProjectAccessEntries(prisma, req.params.id);
+      const entries = await perf.measure("access query and mapping", async () =>
+        listProjectAccessEntries(prisma, req.params.id)
+      );
       if (!entries) {
         res.status(404).json({ ok: false, message: "Project not found." });
         return;
       }
 
+      perf.mark("response", { itemCount: entries.length });
       res.json({
         ok: true,
         items: entries

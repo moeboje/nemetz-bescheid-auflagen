@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import {
   ExternalParticipant,
   ProjectInternalParticipant,
@@ -28,6 +29,7 @@ import {
 } from "./projectRelations";
 import { normalizeProjectStatus } from "../projectStatus";
 import { normalizeProjectSubmissionType } from "../projectSubmissionType";
+import { shouldAutoLoadDomainStore } from "./routeLoading";
 
 type ProjectCreateInput = Omit<
   Project,
@@ -261,9 +263,11 @@ const normalizedInitialProjects = sanitizeProjectRelations(initialProjects).proj
 
 export function ProjectsProvider({ children }: { children: React.ReactNode }) {
   const { user: authUser } = useAuth();
+  const location = useLocation();
   const { actor } = useAuthorization();
   const { logEvent } = useAuditLog();
   const [projects, setProjects] = useState<Project[]>([]);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
 
   const reloadProjects = useCallback(async () => {
     if (!authUser) {
@@ -284,12 +288,15 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       clearPersistedValue(PROJECTS_STORAGE_KEY);
       return;
     }
+    if (!shouldAutoLoad) {
+      return;
+    }
 
     void reloadProjects().catch(() => {
       setProjects([]);
       clearPersistedValue(PROJECTS_STORAGE_KEY);
     });
-  }, [authUser, reloadProjects]);
+  }, [authUser, reloadProjects, shouldAutoLoad]);
 
   const addProject = useCallback(
     async (input: ProjectCreateInput) => {

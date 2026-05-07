@@ -44,6 +44,8 @@ function extractSessionCookie(setCookieHeader: string | null) {
 async function createUser(args: {
   email: string;
   password: string;
+  firstName?: string;
+  lastName?: string;
   role?: string;
   type?: "INTERNAL" | "EXTERNAL";
   externalOrgId?: string;
@@ -54,8 +56,8 @@ async function createUser(args: {
 }) {
   return prisma.user.create({
     data: {
-      firstName: "Test",
-      lastName: "User",
+      firstName: args.firstName ?? "Test",
+      lastName: args.lastName ?? "User",
       email: args.email,
       role: args.role ?? "USER",
       type: args.type ?? "INTERNAL",
@@ -231,6 +233,266 @@ describe("Admin Users API", () => {
     assert.equal(allPayload.total, 1);
     assert.equal(allPayload.items[0]?.email, "archived-user@example.com");
     assert.equal(allPayload.items[0]?.isArchived, true);
+  });
+
+  it("preserves combined-name admin user search before pagination", async () => {
+    const admin = await createUser({
+      email: "search-admin@example.com",
+      password: "ValidPassword1!",
+      firstName: "Admin",
+      lastName: "Person",
+      role: "ADMIN"
+    });
+
+    await createUser({
+      email: "search-target@example.com",
+      password: "ValidPassword1!",
+      firstName: "Test",
+      lastName: "User"
+    });
+    await createUser({
+      email: "search-first-only@example.com",
+      password: "ValidPassword1!",
+      firstName: "Test",
+      lastName: "Other"
+    });
+    await createUser({
+      email: "search-broad-phrase-regression@example.com",
+      password: "ValidPassword1!",
+      firstName: "Test",
+      lastName: "Power User"
+    });
+    await createUser({
+      email: "search-last-only@example.com",
+      password: "ValidPassword1!",
+      firstName: "Other",
+      lastName: "User"
+    });
+    await createUser({
+      email: "search-nonmatch@example.com",
+      password: "ValidPassword1!",
+      firstName: "No",
+      lastName: "Match"
+    });
+
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    async function searchEmails(query: string) {
+      const response = await request(`/admin/users?archived=all&page=1&pageSize=10&q=${encodeURIComponent(query)}`, {
+        cookie
+      });
+      assert.equal(response.status, 200);
+      const payload = (await response.json()) as { items: Array<{ email: string }>; total: number };
+      return {
+        emails: payload.items.map((row) => row.email),
+        total: payload.total
+      };
+    }
+
+    assert.deepEqual(await searchEmails("Test User"), {
+      emails: ["search-target@example.com"],
+      total: 1
+    });
+    assert.deepEqual(await searchEmails("test user"), {
+      emails: ["search-target@example.com"],
+      total: 1
+    });
+    assert.deepEqual(await searchEmails("Test   User"), {
+      emails: ["search-target@example.com"],
+      total: 1
+    });
+
+    const firstNameSearch = await searchEmails("Test");
+    assert.equal(firstNameSearch.total, 3);
+    assert.ok(firstNameSearch.emails.includes("search-target@example.com"));
+    assert.ok(firstNameSearch.emails.includes("search-first-only@example.com"));
+    assert.ok(firstNameSearch.emails.includes("search-broad-phrase-regression@example.com"));
+
+    const lastNameSearch = await searchEmails("User");
+    assert.equal(lastNameSearch.total, 3);
+    assert.ok(lastNameSearch.emails.includes("search-target@example.com"));
+    assert.ok(lastNameSearch.emails.includes("search-last-only@example.com"));
+    assert.ok(lastNameSearch.emails.includes("search-broad-phrase-regression@example.com"));
+
+    assert.deepEqual(await searchEmails("search-target@example.com"), {
+      emails: ["search-target@example.com"],
+      total: 1
+    });
+    assert.deepEqual(await searchEmails("does-not-exist"), {
+      emails: [],
+      total: 0
+    });
+
+    const paginatedResponse = await request(
+      "/admin/users?archived=all&page=1&pageSize=1&sort=email&dir=asc&q=Test%20User",
+      { cookie }
+    );
+    assert.equal(paginatedResponse.status, 200);
+    const paginatedPayload = (await paginatedResponse.json()) as { items: Array<{ email: string }>; total: number };
+    assert.equal(paginatedPayload.total, 1);
+    assert.deepEqual(
+      paginatedPayload.items.map((row) => row.email),
+      ["search-target@example.com"]
+    );
+
+    const lastLoginResponse = await request(
+      "/admin/users?archived=all&page=1&pageSize=1&sort=lastLoginAt&dir=asc&q=Test%20User",
+      { cookie }
+    );
+    assert.equal(lastLoginResponse.status, 200);
+    const lastLoginPayload = (await lastLoginResponse.json()) as { items: Array<{ email: string }>; total: number };
+    assert.equal(lastLoginPayload.total, 1);
+    assert.deepEqual(
+      lastLoginPayload.items.map((row) => row.email),
+      ["search-target@example.com"]
+    );
+  });
+
+  it("keeps last login null ordering stable while sorting paginated admin users", async () => {
+    const admin = await createUser({
+      email: "last-login-sort-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const early = await createUser({
+      email: "last-login-sort-early@example.com",
+      password: "ValidPassword1!"
+    });
+    const late = await createUser({
+      email: "last-login-sort-late@example.com",
+      password: "ValidPassword1!"
+    });
+    await createUser({
+      email: "last-login-sort-never@example.com",
+      password: "ValidPassword1!"
+    });
+
+    await prisma.user.update({
+      where: { id: early.id },
+      data: { lastLoginAt: new Date("2024-01-01T00:00:00.000Z") }
+    });
+    await prisma.user.update({
+      where: { id: late.id },
+      data: { lastLoginAt: new Date("2024-02-01T00:00:00.000Z") }
+    });
+
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const ascResponse = await request(
+      "/admin/users?archived=all&q=last-login-sort-&page=1&pageSize=10&sort=lastLoginAt&dir=asc",
+      { cookie }
+    );
+    assert.equal(ascResponse.status, 200);
+    const ascPayload = (await ascResponse.json()) as { items: Array<{ email: string; lastLoginAt?: string }> };
+    assert.deepEqual(
+      ascPayload.items.map((row) => row.email),
+      [
+        "last-login-sort-early@example.com",
+        "last-login-sort-late@example.com",
+        "last-login-sort-admin@example.com",
+        "last-login-sort-never@example.com"
+      ]
+    );
+
+    const ascPageOneResponse = await request(
+      "/admin/users?archived=all&q=last-login-sort-&page=1&pageSize=2&sort=lastLoginAt&dir=asc",
+      { cookie }
+    );
+    assert.equal(ascPageOneResponse.status, 200);
+    const ascPageOnePayload = (await ascPageOneResponse.json()) as { items: Array<{ email: string }> };
+    const ascPageTwoResponse = await request(
+      "/admin/users?archived=all&q=last-login-sort-&page=2&pageSize=2&sort=lastLoginAt&dir=asc",
+      { cookie }
+    );
+    assert.equal(ascPageTwoResponse.status, 200);
+    const ascPageTwoPayload = (await ascPageTwoResponse.json()) as { items: Array<{ email: string }> };
+    assert.deepEqual(
+      [...ascPageOnePayload.items, ...ascPageTwoPayload.items].map((row) => row.email),
+      ascPayload.items.map((row) => row.email)
+    );
+
+    const descResponse = await request(
+      "/admin/users?archived=all&q=last-login-sort-&page=1&pageSize=10&sort=lastLoginAt&dir=desc",
+      { cookie }
+    );
+    assert.equal(descResponse.status, 200);
+    const descPayload = (await descResponse.json()) as { items: Array<{ email: string; lastLoginAt?: string }> };
+    assert.deepEqual(
+      descPayload.items.map((row) => row.email),
+      [
+        "last-login-sort-never@example.com",
+        "last-login-sort-admin@example.com",
+        "last-login-sort-late@example.com",
+        "last-login-sort-early@example.com"
+      ]
+    );
+  });
+
+  it("keeps createdAt sorting stable while paging admin users", async () => {
+    const admin = await createUser({
+      email: "created-sort-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const sameCreatedAt = new Date("2024-03-01T00:00:00.000Z");
+    const createdUsers = await Promise.all([
+      createUser({
+        email: "created-at-sort-a@example.com",
+        password: "ValidPassword1!"
+      }),
+      createUser({
+        email: "created-at-sort-b@example.com",
+        password: "ValidPassword1!"
+      }),
+      createUser({
+        email: "created-at-sort-c@example.com",
+        password: "ValidPassword1!"
+      })
+    ]);
+
+    await prisma.user.updateMany({
+      where: {
+        id: {
+          in: createdUsers.map((user) => user.id)
+        }
+      },
+      data: {
+        createdAt: sameCreatedAt
+      }
+    });
+
+    const cookie = await login(admin.email, "ValidPassword1!");
+    const expectedEmails = [...createdUsers]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((user) => user.email);
+
+    const pageOneResponse = await request(
+      "/admin/users?archived=all&q=created-at-sort-&page=1&pageSize=2&sort=createdAt&dir=asc",
+      { cookie }
+    );
+    assert.equal(pageOneResponse.status, 200);
+    const pageOnePayload = (await pageOneResponse.json()) as { items: Array<{ email: string }> };
+    const pageTwoResponse = await request(
+      "/admin/users?archived=all&q=created-at-sort-&page=2&pageSize=2&sort=createdAt&dir=asc",
+      { cookie }
+    );
+    assert.equal(pageTwoResponse.status, 200);
+    const pageTwoPayload = (await pageTwoResponse.json()) as { items: Array<{ email: string }> };
+    assert.deepEqual(
+      [...pageOnePayload.items, ...pageTwoPayload.items].map((row) => row.email),
+      expectedEmails
+    );
+
+    const descPageOneResponse = await request(
+      "/admin/users?archived=all&q=created-at-sort-&page=1&pageSize=2&sort=createdAt&dir=desc",
+      { cookie }
+    );
+    assert.equal(descPageOneResponse.status, 200);
+    const descPageOnePayload = (await descPageOneResponse.json()) as { items: Array<{ email: string }> };
+    assert.deepEqual(
+      descPageOnePayload.items.map((row) => row.email),
+      expectedEmails.slice(0, 2)
+    );
   });
 
   it("restricts user lookup to internal users with directory or assignment permissions", async () => {

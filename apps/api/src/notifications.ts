@@ -3,6 +3,7 @@ import { generateOpaqueToken, hashToken } from "./security.js";
 import type { AppConfig } from "./config.js";
 import { getAllowExternalUsers } from "./securitySettings.js";
 import { getEffectiveNotificationSettings } from "./notificationSettings.js";
+import { measurePerfOperation } from "./perf.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -401,16 +402,18 @@ async function postToPowerAutomate(
 
   let response: Response;
   try {
-    response = await fetch(config.powerAutomateNotificationWebhookUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Notification-Secret": config.powerAutomateNotificationSecret,
-        "X-Notification-Id": payload.notificationId
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(config.notificationDispatchTimeoutMs)
-    });
+    response = await measurePerfOperation(config, "notifications.power_automate", "fetch", async () =>
+      fetch(config.powerAutomateNotificationWebhookUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Notification-Secret": config.powerAutomateNotificationSecret,
+          "X-Notification-Id": payload.notificationId
+        },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(config.notificationDispatchTimeoutMs)
+      })
+    );
   } catch (error) {
     throw new NotificationDispatchError(normalizeErrorMessage(error), true);
   }
@@ -859,7 +862,12 @@ export async function createAndDispatchPasswordResetNotification(
     now?: () => Date;
   }
 ): Promise<PasswordResetDeliveryResult> {
-  const allowExternalUsers = await getAllowExternalUsers(prisma);
+  const allowExternalUsers = await measurePerfOperation(
+    config,
+    "notifications.password_reset",
+    "external user policy",
+    async () => getAllowExternalUsers(prisma)
+  );
   if (!canReceiveNotification(args.user, allowExternalUsers)) {
     throw new NotificationDispatchError("User does not have a deliverable email address.", false);
   }
@@ -870,7 +878,8 @@ export async function createAndDispatchPasswordResetNotification(
   const resetLink = buildResetPasswordLink(config, rawToken);
   const subject = "Passwort fuer das Nemetz Portal zuruecksetzen";
 
-  const created = await prisma.$transaction(async (tx) => {
+  const created = await measurePerfOperation(config, "notifications.password_reset", "token and outbox transaction", async () =>
+    prisma.$transaction(async (tx) => {
     await tx.$executeRaw(
       Prisma.sql`SELECT 1 FROM "User" WHERE "id" = ${args.user.id} FOR UPDATE`
     );
@@ -944,21 +953,25 @@ export async function createAndDispatchPasswordResetNotification(
       expiresAt,
       storedPayload
     };
-  });
+    })
+  );
 
   const entry = created.entry;
   const startedAt = new Date();
 
   try {
-    const provider = await postToPowerAutomate(
-      config,
-      buildPowerAutomatePayload(config, entry, created.storedPayload, {
-        linkOverride: resetLink
-      })
+    const provider = await measurePerfOperation(config, "notifications.password_reset", "power automate dispatch", async () =>
+      postToPowerAutomate(
+        config,
+        buildPowerAutomatePayload(config, entry, created.storedPayload, {
+          linkOverride: resetLink
+        })
+      )
     );
     const sentAt = new Date();
 
-    await prisma.$transaction(async (tx) => {
+    await measurePerfOperation(config, "notifications.password_reset", "sent status transaction", async () =>
+      prisma.$transaction(async (tx) => {
       await tx.notificationOutbox.updateMany({
         where: {
           id: entry.id,
@@ -995,7 +1008,8 @@ export async function createAndDispatchPasswordResetNotification(
           lastPasswordResetAt: sentAt
         }
       });
-    });
+      })
+    );
 
     return {
       notificationId: entry.id,
@@ -1009,7 +1023,8 @@ export async function createAndDispatchPasswordResetNotification(
     const httpStatus = error instanceof NotificationDispatchError ? error.httpStatus : undefined;
     const isUnknownDeliveryState = error instanceof NotificationDispatchError ? error.retryable : true;
 
-    await prisma.$transaction(async (tx) => {
+    await measurePerfOperation(config, "notifications.password_reset", "failed status transaction", async () =>
+      prisma.$transaction(async (tx) => {
       await tx.notificationOutbox.updateMany({
         where: {
           id: entry.id,
@@ -1043,7 +1058,8 @@ export async function createAndDispatchPasswordResetNotification(
           }
         });
       }
-    });
+      })
+    );
 
     return {
       notificationId: entry.id,
