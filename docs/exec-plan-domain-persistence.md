@@ -602,6 +602,52 @@
 - Nicht-Ziele:
 - keine Prisma-Schema-Aenderung, keine neue Storage-Architektur, keine neuen Dependencies, keine RBAC-Lockerung, keine Azure-Aenderung und keine Reaktivierung alter Bulk-/Recovery-Pfade.
 
+## 2ze. Facherweiterung 2026-05-08 fuer Projekt- und Rechtsdokument-Beschreibungen
+- Dies ist eine additive Erweiterung bereits serverseitig persistierter Domaenen, keine neue Persistenzphase, keine Azure-Arbeit und keine Workflow-Neugestaltung.
+- Ziel:
+- Projekte erhalten ein langes Feld `detailedDescription`.
+- Rechtsdokumente erhalten lange Felder `detailedDescription` und `contentSummary`.
+- Listenendpunkte bleiben payload-arm; Langtexte werden fuer Detail-, Edit- und Recovery-Export-Pfade ueber Detaildaten geladen.
+- Aktueller Stand:
+- `Project` und `LegalDocument` sind bereits API-backed und PostgreSQL ist fuer diese Domaenen Source of Truth.
+- Rechtsdokument-Unterlagen laufen ueber die stabile Document-API; neue Browser-only Attachments duerfen nicht entstehen.
+- Risiken:
+- Listenpayloads duerfen durch Langtexte nicht wieder gross werden.
+- Create/Edit-Modals duerfen Uploads erst nach erfolgreichem Entity-Persist finalisieren und keine verwaisten Browser-only Dateianhaenge erzeugen.
+- Rechtsdokument-Projektreferenzen muessen auch in Detail- und Exportpfaden stabil auf das echte `projectId` zeigen.
+- Datenmodell:
+- Additive PostgreSQL-Spalten: `Project.detailedDescription`, `LegalDocument.detailedDescription`, `LegalDocument.contentSummary`, jeweils nullable `TEXT`.
+- Keine neuen Stammdatentabellen, keine Checklisten-, Einreichtyp- oder Rechtsmaterien-Modelle.
+- API:
+- Projekt- und Rechtsdokument-Create/Edit akzeptieren die neuen Felder.
+- Listenendpunkte liefern kompakte DTOs ohne vollstaendige Langtexte.
+- Detailendpunkte liefern vollstaendige Langtexte und korrigierte Projektzuordnung.
+- Dokumente bleiben ueber `/documents` mit `ownerType=PROJECT` oder `ownerType=LEGAL_DOC` angebunden.
+- Frontend:
+- Bestehende Detail- und Edit-Flows zeigen und speichern die neuen Langtextfelder, ohne Navigation, Labels oder Workflows umzubauen.
+- LegalDoc-Create/Edit verwendet einen abgesicherten Upload-Flow ueber die Document-API und blockiert neue Browser-only Attachments.
+- Recovery-Export laedt Detaildaten fuer vollstaendige Langtexte mit begrenzter paralleler Detailrequest-Anzahl.
+- Snapshot-/Recovery-Strategie:
+- Keine Rueckkehr zu Snapshot oder `localStorage` als Source of Truth fuer Projekte oder Rechtsdokumente.
+- Der Export bleibt ein servergestuetzter Teil-Export; Langtexte werden vollstaendig aufgenommen, aber kein vollstaendiger Disaster-Recovery-Restore suggeriert.
+- Lokale Testplanung:
+- `cd apps/api && npx prisma validate`
+- `cd apps/api && npx prisma generate`
+- `cd apps/api && npm run build`
+- `cd apps/web && npm run build`
+- `cd apps/api && npm test`, sofern die lokale PostgreSQL-Testdatenbank erreichbar ist.
+- Manuelle Checks:
+- Projekt mit langer Beschreibung anlegen, neu laden, in Inkognito oeffnen und bearbeiten.
+- Rechtsdokument mit Detailbeschreibung, Zusammenfassung und Datei anlegen; Detailseite, Bearbeiten, Download/Vorschau und Projektreferenz pruefen.
+- Listen pruefen, dass sie ohne Detail-Langtexte laden und Detailansichten die Langtexte nachladen.
+- Recovery-Export erzeugen und pruefen, dass Projekt- und Rechtsdokument-Langtexte enthalten sind.
+- Azure-Rollout:
+- Keine Azure-Aenderungen in diesem Lauf.
+- Fuer spaeteren Rollout nur additive Migration deployen, danach API- und Web-Image normal ausrollen.
+- Rollback-Idee:
+- Bei UI-/API-Problem vorherige App-Version deployen; die nullable Spalten koennen liegen bleiben.
+- Bei Datenproblem Langtexte vor DB-Rollback exportieren, weil ein Drop der Spalten die neuen Inhalte entfernen wuerde.
+
 ## 3. Ist-Zustand
 - Browser-persistiert fachlich aktiv ist aktuell nur noch `taskState`; zusätzliche UI-/Recovery-Daten liegen weiterhin via `apps/web/src/state/persistence.ts` lokal.
 - `ScopesStore`, `AuthoritiesStore`, `ProjectsStore`, `LegalDocsStore`, `ObligationsStore` und `DeadlinesStore` sind bereits API-backed und löschen ihre alten Domänen-Storage-Keys aktiv.
