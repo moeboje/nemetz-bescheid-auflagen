@@ -251,6 +251,126 @@ describe("Projects submission type", () => {
     assert.equal(storedUpdated.submissionType, "UVP_UVE");
   });
 
+  it("persists project detailedDescription through create, update and detail", async () => {
+    const user = await createUser({
+      email: "project-detailed-description@example.com",
+      password: "ValidPassword1!"
+    });
+    const admin = await createUser({
+      email: "project-detailed-description-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const company = await createCompany("Detailed Description Company");
+    const cookie = await login(user.email, "ValidPassword1!");
+    const adminCookie = await login(admin.email, "ValidPassword1!");
+
+    const createResponse = await request("/projects", {
+      method: "POST",
+      cookie,
+      body: {
+        title: "Projekt mit Langbeschreibung",
+        companyId: company.id,
+        detailedDescription: "Zweck und Umfang des Projekts\nmit zweiter Zeile."
+      }
+    });
+
+    assert.equal(createResponse.status, 201);
+    const createdPayload = (await createResponse.json()) as {
+      project: { id: string; detailedDescription?: string };
+    };
+    assert.equal(
+      createdPayload.project.detailedDescription,
+      "Zweck und Umfang des Projekts\nmit zweiter Zeile."
+    );
+
+    const updateResponse = await request(`/projects/${createdPayload.project.id}`, {
+      method: "PATCH",
+      cookie,
+      body: {
+        detailedDescription: "Aktualisierte Projektbeschreibung."
+      }
+    });
+
+    assert.equal(updateResponse.status, 200);
+    const updatedPayload = (await updateResponse.json()) as {
+      project: { detailedDescription?: string };
+    };
+    assert.equal(updatedPayload.project.detailedDescription, "Aktualisierte Projektbeschreibung.");
+
+    const partialUpdateResponse = await request(`/projects/${createdPayload.project.id}`, {
+      method: "PATCH",
+      cookie,
+      body: {
+        authorityRef: "GZ-PARTIAL"
+      }
+    });
+    assert.equal(partialUpdateResponse.status, 200);
+    const partialUpdatePayload = (await partialUpdateResponse.json()) as {
+      project: { detailedDescription?: string };
+    };
+    assert.equal(
+      partialUpdatePayload.project.detailedDescription,
+      "Aktualisierte Projektbeschreibung."
+    );
+
+    const detailResponse = await request(`/projects/${createdPayload.project.id}`, { cookie });
+    assert.equal(detailResponse.status, 200);
+    const detailPayload = (await detailResponse.json()) as {
+      project: { detailedDescription?: string };
+    };
+    assert.equal(detailPayload.project.detailedDescription, "Aktualisierte Projektbeschreibung.");
+
+    const listResponse = await request("/projects", { cookie });
+    assert.equal(listResponse.status, 200);
+    const listPayload = (await listResponse.json()) as Array<{
+      id: string;
+      detailedDescription?: string;
+    }>;
+    const listProject = listPayload.find((project) => project.id === createdPayload.project.id);
+    assert.ok(listProject);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(listProject, "detailedDescription"),
+      false
+    );
+
+    const exportResponse = await request("/admin/internal/projects/rollback-to-snapshot", {
+      method: "POST",
+      cookie: adminCookie
+    });
+    assert.equal(exportResponse.status, 200);
+    const exportPayload = (await exportResponse.json()) as {
+      projects: Array<{ id: string; detailedDescription?: string }>;
+    };
+    const exportProject = exportPayload.projects.find(
+      (project) => project.id === createdPayload.project.id
+    );
+    assert.equal(exportProject?.detailedDescription, "Aktualisierte Projektbeschreibung.");
+
+    const clearResponse = await request(`/projects/${createdPayload.project.id}`, {
+      method: "PATCH",
+      cookie,
+      body: {
+        detailedDescription: ""
+      }
+    });
+    assert.equal(clearResponse.status, 200);
+    const clearPayload = (await clearResponse.json()) as {
+      project: { detailedDescription?: string };
+    };
+    assert.equal(clearPayload.project.detailedDescription, "");
+
+    const stored = await prisma.project.findUniqueOrThrow({
+      where: {
+        id: createdPayload.project.id
+      },
+      select: {
+        detailedDescription: true
+      }
+    });
+    assert.equal(stored.detailedDescription, null);
+  });
+
   it("accepts active internal users for project owner and internal participants", async () => {
     const admin = await createUser({
       email: "project-internal-owner-admin@example.com",
@@ -997,6 +1117,174 @@ describe("Projects submission type", () => {
       adminPayload.map((entry) => entry.id).sort(),
       [visibleLegalDoc.id, hiddenLegalDoc.id].sort()
     );
+  });
+
+  it("persists legal document descriptions and returns the direct project reference to scoped readers", async () => {
+    await createRole("LEGAL_DOC_DESCRIPTION_READER", ["legalDocs.view"]);
+
+    const admin = await createUser({
+      email: "legal-doc-description-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const scopedReader = await createUser({
+      email: "legal-doc-description-reader@example.com",
+      password: "ValidPassword1!",
+      role: "LEGAL_DOC_DESCRIPTION_READER"
+    });
+    const company = await createCompany("Legal Doc Description Company");
+    const project = await prisma.project.create({
+      data: {
+        id: "legal-doc-description-project",
+        title: "Projekt fuer Rechtsdokumentbeschreibung",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+    await prisma.projectAccess.create({
+      data: {
+        projectId: project.id,
+        userId: scopedReader.id,
+        accessRole: "PROJECT_VIEWER"
+      }
+    });
+
+    const adminCookie = await login(admin.email, "ValidPassword1!");
+    const createResponse = await request("/legal-docs", {
+      method: "POST",
+      cookie: adminCookie,
+      body: {
+        projectId: project.id,
+        type: "DECISION",
+        title: "Bescheid mit Beschreibung",
+        detailedDescription: "Fachlicher Kontext des Rechtsdokuments.",
+        contentSummary: "Zusammenfassung des Bescheidinhalts."
+      }
+    });
+
+    assert.equal(createResponse.status, 201);
+    const createdPayload = (await createResponse.json()) as {
+      legalDoc: {
+        id: string;
+        detailedDescription?: string;
+        contentSummary?: string;
+        projectTitle?: string;
+      };
+    };
+    assert.equal(createdPayload.legalDoc.detailedDescription, "Fachlicher Kontext des Rechtsdokuments.");
+    assert.equal(createdPayload.legalDoc.contentSummary, "Zusammenfassung des Bescheidinhalts.");
+    assert.equal(createdPayload.legalDoc.projectTitle, project.title);
+
+    const updateResponse = await request(`/legal-docs/${createdPayload.legalDoc.id}`, {
+      method: "PATCH",
+      cookie: adminCookie,
+      body: {
+        detailedDescription: "Aktualisierter Kontext.",
+        contentSummary: "Aktualisierte Zusammenfassung."
+      }
+    });
+    assert.equal(updateResponse.status, 200);
+    const updatedPayload = (await updateResponse.json()) as {
+      legalDoc: {
+        detailedDescription?: string;
+        contentSummary?: string;
+      };
+    };
+    assert.equal(updatedPayload.legalDoc.detailedDescription, "Aktualisierter Kontext.");
+    assert.equal(updatedPayload.legalDoc.contentSummary, "Aktualisierte Zusammenfassung.");
+
+    const partialUpdateResponse = await request(`/legal-docs/${createdPayload.legalDoc.id}`, {
+      method: "PATCH",
+      cookie: adminCookie,
+      body: {
+        reference: "GZ-PARTIAL"
+      }
+    });
+    assert.equal(partialUpdateResponse.status, 200);
+    const partialUpdatePayload = (await partialUpdateResponse.json()) as {
+      legalDoc: {
+        detailedDescription?: string;
+        contentSummary?: string;
+      };
+    };
+    assert.equal(partialUpdatePayload.legalDoc.detailedDescription, "Aktualisierter Kontext.");
+    assert.equal(partialUpdatePayload.legalDoc.contentSummary, "Aktualisierte Zusammenfassung.");
+
+    const adminListResponse = await request("/legal-docs", { cookie: adminCookie });
+    assert.equal(adminListResponse.status, 200);
+    const adminListPayload = (await adminListResponse.json()) as Array<{
+      id: string;
+      detailedDescription?: string;
+      contentSummary?: string;
+    }>;
+    const listLegalDoc = adminListPayload.find((item) => item.id === createdPayload.legalDoc.id);
+    assert.ok(listLegalDoc);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(listLegalDoc, "detailedDescription"),
+      false
+    );
+    assert.equal(Object.prototype.hasOwnProperty.call(listLegalDoc, "contentSummary"), false);
+
+    const exportResponse = await request("/admin/internal/legal-docs/rollback-to-snapshot", {
+      method: "POST",
+      cookie: adminCookie
+    });
+    assert.equal(exportResponse.status, 200);
+    const exportPayload = (await exportResponse.json()) as {
+      legalDocs: Array<{
+        id: string;
+        detailedDescription?: string;
+        contentSummary?: string;
+      }>;
+    };
+    const exportLegalDoc = exportPayload.legalDocs.find(
+      (item) => item.id === createdPayload.legalDoc.id
+    );
+    assert.equal(exportLegalDoc?.detailedDescription, "Aktualisierter Kontext.");
+    assert.equal(exportLegalDoc?.contentSummary, "Aktualisierte Zusammenfassung.");
+
+    const scopedCookie = await login(scopedReader.email, "ValidPassword1!");
+    const scopedProjectList = await request("/projects", { cookie: scopedCookie });
+    assert.equal(scopedProjectList.status, 200);
+    assert.deepEqual(await scopedProjectList.json(), []);
+
+    const scopedDetail = await request(`/legal-docs/${createdPayload.legalDoc.id}`, {
+      cookie: scopedCookie
+    });
+    assert.equal(scopedDetail.status, 200);
+    const scopedPayload = (await scopedDetail.json()) as {
+      legalDoc: {
+        projectTitle?: string;
+        detailedDescription?: string;
+        contentSummary?: string;
+      };
+    };
+    assert.equal(scopedPayload.legalDoc.projectTitle, project.title);
+    assert.equal(scopedPayload.legalDoc.detailedDescription, "Aktualisierter Kontext.");
+    assert.equal(scopedPayload.legalDoc.contentSummary, "Aktualisierte Zusammenfassung.");
+
+    const clearResponse = await request(`/legal-docs/${createdPayload.legalDoc.id}`, {
+      method: "PATCH",
+      cookie: adminCookie,
+      body: {
+        detailedDescription: "",
+        contentSummary: ""
+      }
+    });
+    assert.equal(clearResponse.status, 200);
+    const clearPayload = (await clearResponse.json()) as {
+      legalDoc: {
+        detailedDescription?: string;
+        contentSummary?: string;
+      };
+    };
+    assert.equal(clearPayload.legalDoc.detailedDescription, "");
+    assert.equal(clearPayload.legalDoc.contentSummary, "");
   });
 
   it("allows user admins to manage project access without projects.edit", async () => {

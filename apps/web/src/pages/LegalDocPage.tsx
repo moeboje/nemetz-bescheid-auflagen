@@ -9,6 +9,7 @@ import HelpHintCard from "../components/HelpHintCard";
 import { EyeIcon, EditIcon } from "../components/Icons";
 import DocumentsPanel from "../components/DocumentsPanel";
 import CommentsPanel from "../components/CommentsPanel";
+import LegalDocModal from "../components/LegalDocModal";
 import ObligationModal from "../components/ObligationModal";
 import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { useAuditLog } from "../state/AuditLogStore";
@@ -56,14 +57,20 @@ export default function LegalDocPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [tab, setTab] = useState("overview");
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [isOpeningEditModal, setIsOpeningEditModal] = useState(false);
+  const [pageError, setPageError] = useState("");
   const [archiveModalOpen, setArchiveModalOpen] = useState(false);
+  const [documentsRefreshKey, setDocumentsRefreshKey] = useState(0);
   const [obligationModalOpen, setObligationModalOpen] = useState(false);
   const [editingObligationId, setEditingObligationId] = useState<string | null>(null);
   const [deadlineModalOpen, setDeadlineModalOpen] = useState(false);
   const [editingDeadlineId, setEditingDeadlineId] = useState<string | null>(null);
   const {
     legalDocs,
+    writableProjectOptions,
     getEffectiveScopeLabel,
+    loadLegalDocDetail,
     archiveLegalDoc,
     restoreLegalDoc
   } = useLegalDocs();
@@ -73,6 +80,13 @@ export default function LegalDocPage() {
   const { deadlines, getDeadlineStatus, archiveDeadline } = useDeadlines();
   const { getUserLabel } = useUsers();
   const { permissions } = useAuthorization();
+  const isMountedRef = React.useRef(true);
+
+  React.useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const legalDoc = useMemo(() => legalDocs.find((doc) => doc.id === id), [id, legalDocs]);
   const docProject = projects.find((project) => project.id === legalDoc?.projectId);
@@ -81,13 +95,6 @@ export default function LegalDocPage() {
   const canArchiveLegalDoc = canWriteInProject && permissions.canArchiveLegalDocs;
   const canEditObligationsInProject = canWriteInProject && permissions.canEditObligations;
   const canEditDeadlinesInProject = canWriteInProject && permissions.canEditDeadlines;
-  const referencingProjects = useMemo(
-    () =>
-      projects.filter((project) =>
-        (project.referenceLegalDocIds ?? []).includes(legalDoc?.id ?? "")
-      ),
-    [legalDoc?.id, projects]
-  );
   const docObligations = obligations.filter(
     (obligation) =>
       obligation.legalDocId === legalDoc?.id && !obligation.isArchived && !obligation.archivedAt
@@ -118,6 +125,12 @@ export default function LegalDocPage() {
     });
   }, [docDeadlines, docObligations, entries, legalDoc]);
 
+  React.useEffect(() => {
+    if (!id) {
+      return;
+    }
+    void loadLegalDocDetail(id);
+  }, [id, loadLegalDocDetail]);
 
   const getNextDue = (obligationId: string) => {
     const obligation = obligations.find((item) => item.id === obligationId);
@@ -245,6 +258,21 @@ export default function LegalDocPage() {
     }
   };
 
+  const openEditModal = async () => {
+    setPageError("");
+    setIsOpeningEditModal(true);
+    const detail = await loadLegalDocDetail(legalDoc.id);
+    if (!isMountedRef.current) {
+      return;
+    }
+    setIsOpeningEditModal(false);
+    if (!detail) {
+      setPageError(t("legalDocs.detailLoadError"));
+      return;
+    }
+    setEditModalOpen(true);
+  };
+
   return (
     <div className="page">
       <div className="pageHeader">
@@ -261,6 +289,15 @@ export default function LegalDocPage() {
           <div className="inlineMeta">{legalDoc.shortDescription}</div>
         </div>
         <div className="inlineMeta">
+          {canEditLegalDoc ? (
+            <Button
+              variant="secondary"
+              disabled={isOpeningEditModal}
+              onClick={() => void openEditModal()}
+            >
+              {t("legalDocs.action.edit")}
+            </Button>
+          ) : null}
           {!legalDoc.isArchived ? (
               <Button
                 variant="secondary"
@@ -280,6 +317,7 @@ export default function LegalDocPage() {
           )}
         </div>
       </div>
+      {pageError ? <p className="validationText">{pageError}</p> : null}
 
       {runtimeConfig.features.enableHelpHints ? (
         <HelpHintCard
@@ -348,7 +386,19 @@ export default function LegalDocPage() {
             <div className="detailGrid">
               <div>
                 <div className="metaLabel">{t("legalDoc.section.project")}</div>
-                <div className="metaValue">{legalDoc.projectTitle ?? docProject?.title ?? t("common.notAvailable")}</div>
+                <div className="metaValue">
+                  {docProject ? (
+                    <button
+                      type="button"
+                      className="relationLinkButton"
+                      onClick={() => navigate(`/projects/${docProject.id}`)}
+                    >
+                      {docProject.title}
+                    </button>
+                  ) : (
+                    legalDoc.projectTitle ?? t("common.notAssigned")
+                  )}
+                </div>
               </div>
               <div>
                 <div className="metaLabel">{t("legalDoc.section.ref")}</div>
@@ -365,26 +415,46 @@ export default function LegalDocPage() {
             </div>
           </Card>
           <Card>
-            <h2 className="sectionTitle">{t("legalDoc.references.title")}</h2>
-            {referencingProjects.length ? (
+            <h2 className="sectionTitle">{t("legalDoc.projectReference.title")}</h2>
+            {legalDoc.projectId ? (
               <div className="relationLinkList">
-                {referencingProjects.map((projectRow) => (
-                  <div key={projectRow.id} className="relationLinkItem">
+                <div className="relationLinkItem">
+                  {docProject ? (
                     <button
                       type="button"
                       className="relationLinkButton"
-                      onClick={() => navigate(`/projects/${projectRow.id}`)}
+                      onClick={() => navigate(`/projects/${docProject.id}`)}
                     >
-                      {projectRow.title}
+                      {docProject.title}
                     </button>
-                    {isArchivedEntity(projectRow) ? (
-                      <Badge variant="warning">{t("users.archived")}</Badge>
-                    ) : null}
-                  </div>
-                ))}
+                  ) : (
+                    <span className="relationSelectionLabel">
+                      {legalDoc.projectTitle ?? legalDoc.projectId}
+                    </span>
+                  )}
+                  {docProject && isArchivedEntity(docProject) ? (
+                    <Badge variant="warning">{t("users.archived")}</Badge>
+                  ) : null}
+                </div>
               </div>
             ) : (
-              <p className="placeholderText">{t("legalDoc.references.empty")}</p>
+              <p className="placeholderText">{t("common.notAssigned")}</p>
+            )}
+          </Card>
+          <Card>
+            <h2 className="sectionTitle">{t("legalDoc.section.detailedDescription")}</h2>
+            {legalDoc.detailedDescription ? (
+              <p className="longText">{legalDoc.detailedDescription}</p>
+            ) : (
+              <p className="placeholderText">{t("legalDoc.section.noDetailedDescription")}</p>
+            )}
+          </Card>
+          <Card>
+            <h2 className="sectionTitle">{t("legalDoc.section.contentSummary")}</h2>
+            {legalDoc.contentSummary ? (
+              <p className="longText">{legalDoc.contentSummary}</p>
+            ) : (
+              <p className="placeholderText">{t("legalDoc.section.noContentSummary")}</p>
             )}
           </Card>
           {runtimeConfig.features.enableAiAnalysis ? (
@@ -508,6 +578,9 @@ export default function LegalDocPage() {
             ownerId={legalDoc.id}
             titleKey="legalDoc.section.attachments"
             allowUpload={canEditLegalDoc}
+            allowManage={canEditLegalDoc}
+            showManageActions
+            refreshKey={documentsRefreshKey}
             legacyItems={legalDoc.attachments}
           />
         </Card>
@@ -551,6 +624,16 @@ export default function LegalDocPage() {
         initialLegalDocId={legalDoc.id}
         lockProject
         lockLegalDoc
+      />
+      <LegalDocModal
+        open={editModalOpen}
+        onClose={() => setEditModalOpen(false)}
+        legalDoc={legalDoc}
+        onDocumentsChanged={() => setDocumentsRefreshKey((value) => value + 1)}
+        projectOptions={writableProjectOptions.map((project) => ({
+          value: project.id,
+          label: project.title
+        }))}
       />
 
       <Modal

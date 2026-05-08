@@ -381,6 +381,7 @@ export default function ProjectDetailPage() {
   const { entries } = useAuditLog();
   const {
     projects,
+    loadProjectDetail,
     updateProject,
     archiveProject,
     restoreProject,
@@ -398,7 +399,7 @@ export default function ProjectDetailPage() {
   const { getScopeLabel } = useScopes();
   const { authorities, contacts, getAuthorityName, getContactsForAuthority } = useAuthorities();
   const { users, getUser, getDisplayName } = useUsers();
-  const { legalDocs, archiveLegalDoc } = useLegalDocs();
+  const { legalDocs, archiveLegalDoc, loadLegalDocDetail } = useLegalDocs();
   const { deadlines, archiveDeadline, getDeadlineStatus } = useDeadlines();
   const { tasks } = useTasks();
   const { getExternalOrgById } = useExternalOrgs();
@@ -407,6 +408,9 @@ export default function ProjectDetailPage() {
   const [archiveModalOpen, setArchiveModalOpen] = useState(false);
   const [legalDocModalOpen, setLegalDocModalOpen] = useState(false);
   const [editProjectOpen, setEditProjectOpen] = useState(false);
+  const [isOpeningProjectEdit, setIsOpeningProjectEdit] = useState(false);
+  const [openingLegalDocEditId, setOpeningLegalDocEditId] = useState<string | null>(null);
+  const [projectDetailError, setProjectDetailError] = useState("");
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
   const [deadlineModalOpen, setDeadlineModalOpen] = useState(false);
   const [editingDeadlineId, setEditingDeadlineId] = useState<string | null>(null);
@@ -433,6 +437,13 @@ export default function ProjectDetailPage() {
   const [legacyError, setLegacyError] = useState("");
   const [legacyDocumentsRefreshKey, setLegacyDocumentsRefreshKey] = useState(0);
   const checklistTabEnabled = runtimeConfig.features.enableProjectChecklists;
+  const isMountedRef = React.useRef(true);
+
+  React.useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const project = useMemo(() => projects.find((item) => item.id === id), [id, projects]);
   const canView = project ? ProjectPolicy.view(actor, project) : false;
@@ -580,6 +591,12 @@ export default function ProjectDetailPage() {
       setTab("overview");
     }
   }, [checklistTabEnabled, tab]);
+  React.useEffect(() => {
+    if (!id) {
+      return;
+    }
+    void loadProjectDetail(id);
+  }, [id, loadProjectDetail]);
   React.useEffect(() => {
     if (tab === "obligations" && !canViewObligationsTab) {
       setTab("overview");
@@ -856,6 +873,37 @@ export default function ProjectDetailPage() {
     }
   };
 
+  const openProjectEditModal = async () => {
+    setProjectDetailError("");
+    setIsOpeningProjectEdit(true);
+    const detail = await loadProjectDetail(project.id);
+    if (!isMountedRef.current) {
+      return;
+    }
+    setIsOpeningProjectEdit(false);
+    if (!detail) {
+      setProjectDetailError(t("projects.detailLoadError"));
+      return;
+    }
+    setEditProjectOpen(true);
+  };
+
+  const openLegalDocEditModal = async (docId: string) => {
+    setProjectDetailError("");
+    setOpeningLegalDocEditId(docId);
+    const detail = await loadLegalDocDetail(docId);
+    if (!isMountedRef.current) {
+      return;
+    }
+    setOpeningLegalDocEditId(null);
+    if (!detail) {
+      setProjectDetailError(t("legalDocs.detailLoadError"));
+      return;
+    }
+    setEditingDocId(detail.id);
+    setLegalDocModalOpen(true);
+  };
+
   const openDeleteObligationModal = (target: (typeof obligations)[number]) => {
     if (!canWriteProject || !permissions.canDeleteObligations) {
       return;
@@ -1092,7 +1140,11 @@ export default function ProjectDetailPage() {
           </div>
         </div>
         <div className="inlineMeta">
-          <Button variant="secondary" disabled={!canUpdate} onClick={() => setEditProjectOpen(true)}>
+          <Button
+            variant="secondary"
+            disabled={!canUpdate || isOpeningProjectEdit}
+            onClick={() => void openProjectEditModal()}
+          >
             {t("projects.action.edit")}
           </Button>
           {!project.isArchived ? (
@@ -1110,6 +1162,7 @@ export default function ProjectDetailPage() {
           )}
         </div>
       </div>
+      {projectDetailError ? <p className="validationText">{projectDetailError}</p> : null}
 
       {runtimeConfig.features.enableHelpHints ? (
         <HelpHintCard
@@ -1262,6 +1315,14 @@ export default function ProjectDetailPage() {
             </div>
           </Card>
           <Card>
+            <h2 className="sectionTitle">{t("projects.detail.projectDescription")}</h2>
+            {project.detailedDescription ? (
+              <p className="longText">{project.detailedDescription}</p>
+            ) : (
+              <p className="placeholderText">{t("projects.detail.noDetailedDescription")}</p>
+            )}
+          </Card>
+          <Card>
             <h2 className="sectionTitle">{t("projects.relations.title")}</h2>
             <div className="detailGrid">
               <div>
@@ -1365,11 +1426,12 @@ export default function ProjectDetailPage() {
                 </IconButton>
                 <IconButton
                   ariaLabel={t("legalDocs.action.edit")}
-                  disabled={!canWriteProject || !permissions.canEditLegalDocs}
-                  onClick={() => {
-                    setEditingDocId(doc.id);
-                    setLegalDocModalOpen(true);
-                  }}
+                  disabled={
+                    !canWriteProject ||
+                    !permissions.canEditLegalDocs ||
+                    openingLegalDocEditId === doc.id
+                  }
+                  onClick={() => void openLegalDocEditModal(doc.id)}
                 >
                   <EditIcon />
                 </IconButton>

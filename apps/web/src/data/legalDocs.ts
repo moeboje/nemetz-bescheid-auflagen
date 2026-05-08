@@ -13,6 +13,8 @@ export type LegalDoc = {
   type: LegalDocType;
   title: string;
   shortDescription?: string;
+  detailedDescription?: string;
+  contentSummary?: string;
   reference?: string;
   issuedAt?: string;
   authorityId?: string;

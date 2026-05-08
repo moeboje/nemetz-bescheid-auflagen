@@ -46,6 +46,7 @@ export type Project = {
   status?: ProjectStatus;
   submissionType?: ProjectSubmissionType;
   shortDescription?: string;
+  detailedDescription?: string;
   authorityRef?: string;
   companyId: string;
   siteId?: string;

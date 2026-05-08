@@ -23,6 +23,7 @@ const emptyForm = {
   status: "DRAFT" as ProjectFormStatus,
   submissionType: "" as ProjectFormSubmissionType,
   shortDescription: "",
+  detailedDescription: "",
   companyId: "",
   siteId: "",
   facilityId: "",
@@ -99,6 +100,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
         status: project.status ?? "",
         submissionType: project.submissionType ?? "",
         shortDescription: project.shortDescription ?? "",
+        detailedDescription: project.detailedDescription ?? "",
         companyId: project.companyId,
         siteId: project.siteId ?? "",
         facilityId: project.facilityId ?? "",
@@ -445,6 +447,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
         status: form.status || undefined,
         submissionType: form.submissionType || undefined,
         shortDescription: form.shortDescription,
+        detailedDescription: form.detailedDescription,
         companyId: form.companyId,
         siteId: form.siteId || undefined,
         facilityId: form.facilityId || undefined,
@@ -465,6 +468,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
         status: form.status || undefined,
         submissionType: form.submissionType || undefined,
         shortDescription: form.shortDescription,
+        detailedDescription: form.detailedDescription,
         companyId: form.companyId,
         siteId: form.siteId || undefined,
         facilityId: form.facilityId || undefined,
@@ -601,6 +605,19 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
               setForm((prev) => ({ ...prev, shortDescription: event.target.value }))
             }
           />
+        </div>
+        <div className="formField">
+          <span className="fieldLabel">{t("projects.form.detailedDescription")}</span>
+          <textarea
+            className="textarea"
+            rows={5}
+            placeholder={t("projects.form.detailedDescription")}
+            value={form.detailedDescription}
+            onChange={(event) =>
+              setForm((prev) => ({ ...prev, detailedDescription: event.target.value }))
+            }
+          />
+          <span className="placeholderText">{t("projects.form.detailedDescriptionHint")}</span>
         </div>
         <div className="formField">
           <span className="fieldLabel">{t("projects.form.company")}</span>

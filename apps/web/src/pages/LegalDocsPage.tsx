@@ -24,13 +24,16 @@ import LegalDocModal from "../components/LegalDocModal";
 export default function LegalDocsPage() {
   const navigate = useNavigate();
   const runtimeConfig = useRuntimeConfig();
-  const { legalDocs, getEffectiveScopeLabel, writableProjectOptions } = useLegalDocs();
+  const { legalDocs, getEffectiveScopeLabel, writableProjectOptions, loadLegalDocDetail } =
+    useLegalDocs();
   const { projects } = useProjects();
   const { companies, sites, facilities, getScopeLabel } = useScopes();
   const { obligations } = useObligations();
   const { permissions } = useAuthorization();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
+  const [openingEditDocId, setOpeningEditDocId] = useState<string | null>(null);
+  const [pageError, setPageError] = useState("");
   const [filters, setFilters] = useState({
     search: "",
     type: "",
@@ -38,6 +41,14 @@ export default function LegalDocsPage() {
     scopeLabel: "",
     showArchived: false
   });
+  const isMountedRef = React.useRef(true);
+
+  React.useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
   const editingDoc = legalDocs.find((doc) => doc.id === editingDocId);
   const canCreateLegalDoc = permissions.canCreateLegalDocs && writableProjectOptions.length > 0;
   const canEditLegalDoc = (doc: (typeof legalDocs)[number]) =>
@@ -128,6 +139,22 @@ export default function LegalDocsPage() {
     });
   }, [filters, getEffectiveScopeLabel, legalDocs]);
 
+  const openEditModal = async (docId: string) => {
+    setPageError("");
+    setOpeningEditDocId(docId);
+    const detail = await loadLegalDocDetail(docId);
+    if (!isMountedRef.current) {
+      return;
+    }
+    setOpeningEditDocId(null);
+    if (!detail) {
+      setPageError(t("legalDocs.detailLoadError"));
+      return;
+    }
+    setEditingDocId(detail.id);
+    setModalOpen(true);
+  };
+
   const columns = [
     {
       key: "title",
@@ -209,6 +236,7 @@ export default function LegalDocsPage() {
           link={{ labelKey: "common.openHelp", to: getHelpHref(HELP_CONTEXT_SLUGS.legalDocsList) }}
         />
       ) : null}
+      {pageError ? <p className="validationText">{pageError}</p> : null}
 
       <Card>
         <div className="filterRowFour">
@@ -275,11 +303,8 @@ export default function LegalDocsPage() {
             </IconButton>
             <IconButton
               ariaLabel={t("legalDocs.action.edit")}
-              disabled={!canEditLegalDoc(doc)}
-              onClick={() => {
-                setEditingDocId(doc.id);
-                setModalOpen(true);
-              }}
+              disabled={!canEditLegalDoc(doc) || openingEditDocId === doc.id}
+              onClick={() => void openEditModal(doc.id)}
             >
               <EditIcon />
             </IconButton>

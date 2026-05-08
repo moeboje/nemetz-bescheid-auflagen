@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Button, Input, Modal, Select } from "@nemetz/ui";
+import { Badge, Button, Input, Modal, Select } from "@nemetz/ui";
 import { t } from "../i18n";
 import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
@@ -8,9 +8,10 @@ import { useObligations } from "../state/ObligationsStore";
 import { useDeadlines } from "../state/DeadlinesStore";
 import { useAuditLog } from "../state/AuditLogStore";
 import { useAuthorities } from "../state/AuthoritiesStore";
+import { useAuthorization } from "../state/AuthorizationStore";
 import { cloneDefaultObligationEvidenceRequirements } from "../data/obligations";
-import FileUploadStub, { UploadItem } from "./FileUploadStub";
 import type { LegalDoc, LegalDocType } from "../data/legalDocs";
+import { uploadDocument } from "../api/documents";
 import type {
   AiAnalysisResult,
   AiDeadlineSuggestion,
@@ -19,6 +20,7 @@ import type {
 } from "../types/aiAnalysis";
 import { analyzeDocument, AiAnalyzeError } from "../api/ai";
 import AiAnalysisReviewModal, { type AiReviewAcceptedPayload } from "./AiAnalysisReviewModal";
+import FileUploadStub, { UploadItem } from "./FileUploadStub";
 import { useRuntimeConfig } from "../config/runtimeConfig";
 
 const emptyForm = {
@@ -26,6 +28,8 @@ const emptyForm = {
   type: "PERMIT" as LegalDocType,
   title: "",
   shortDescription: "",
+  detailedDescription: "",
+  contentSummary: "",
   reference: "",
   issuedAt: "",
   authorityId: "",
@@ -44,16 +48,34 @@ type LegalDocModalProps = {
   initialProjectId?: string;
   lockProject?: boolean;
   projectOptions?: Array<{ value: string; label: string }>;
+  onDocumentsChanged?: (legalDocId: string) => void;
+};
+
+type PendingDocumentFile = {
+  id: string;
+  file: File;
 };
 
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 
-function createAttachment(file: File): UploadItem {
+function todayStamp() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function createPendingDocumentFile(file: File): PendingDocumentFile {
   return {
-    id: `lda-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    filename: file.name,
-    sizeKb: Math.max(1, Math.ceil(file.size / 1024)),
-    addedAt: new Date().toISOString().slice(0, 10)
+    id: `ldp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    file
+  };
+}
+
+function pendingDocumentFileToUploadItem(pendingFile: PendingDocumentFile): UploadItem {
+  return {
+    id: pendingFile.id,
+    filename: pendingFile.file.name,
+    sizeKb: Math.max(1, Math.ceil(pendingFile.file.size / 1024)),
+    mime: pendingFile.file.type || undefined,
+    addedAt: todayStamp()
   };
 }
 
@@ -143,7 +165,8 @@ export default function LegalDocModal({
   legalDoc,
   initialProjectId,
   lockProject,
-  projectOptions: providedProjectOptions
+  projectOptions: providedProjectOptions,
+  onDocumentsChanged
 }: LegalDocModalProps) {
   const runtimeConfig = useRuntimeConfig();
   const { projects } = useProjects();
@@ -152,6 +175,7 @@ export default function LegalDocModal({
   const { addObligation } = useObligations();
   const { addDeadline } = useDeadlines();
   const { addAuthority, addContact } = useAuthorities();
+  const { permissions } = useAuthorization();
   const { logEvent } = useAuditLog();
 
   const [form, setForm] = useState(emptyForm);
@@ -160,6 +184,11 @@ export default function LegalDocModal({
   const [analysisError, setAnalysisError] = useState<string>("");
   const [analysisResult, setAnalysisResult] = useState<AiAnalysisResult | undefined>(undefined);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [pendingDocumentFiles, setPendingDocumentFiles] = useState<PendingDocumentFile[]>([]);
+  const [legacyAttachmentsDirty, setLegacyAttachmentsDirty] = useState(false);
+  const [documentUploadError, setDocumentUploadError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [createdDocForRetry, setCreatedDocForRetry] = useState<LegalDoc | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const captureInputRef = useRef<HTMLInputElement | null>(null);
@@ -175,6 +204,8 @@ export default function LegalDocModal({
         type: legalDoc.type,
         title: legalDoc.title,
         shortDescription: legalDoc.shortDescription ?? "",
+        detailedDescription: legalDoc.detailedDescription ?? "",
+        contentSummary: legalDoc.contentSummary ?? "",
         reference: legalDoc.reference ?? "",
         issuedAt: legalDoc.issuedAt ?? "",
         authorityId: legalDoc.authorityId ?? "",
@@ -198,6 +229,11 @@ export default function LegalDocModal({
     setAnalysisError("");
     setAnalysisLoading(false);
     setReviewOpen(false);
+    setPendingDocumentFiles([]);
+    setLegacyAttachmentsDirty(false);
+    setDocumentUploadError("");
+    setSaving(false);
+    setCreatedDocForRetry(null);
   }, [initialProjectId, legalDoc, open]);
 
   const fallbackProjectOptions = useMemo(
@@ -277,7 +313,48 @@ export default function LegalDocModal({
 
   const scopeOverrideError =
     form.scopeOverrideEnabled && !form.scopeCompanyId ? t("legalDocs.validation.scopeCompany") : "";
-  const isSaveDisabled = !form.projectId || !form.title || !form.type || Boolean(scopeOverrideError);
+  const isSaveDisabled =
+    saving || !form.projectId || !form.title || !form.type || Boolean(scopeOverrideError);
+  const canUseDocumentAttachmentFlow = permissions.canEditLegalDocs;
+  const pendingUploadItems = useMemo(
+    () => pendingDocumentFiles.map(pendingDocumentFileToUploadItem),
+    [pendingDocumentFiles]
+  );
+
+  function withLegacyAttachmentsIfDirty<T extends { attachments?: UploadItem[] }>(payload: T): T {
+    if (!legacyAttachmentsDirty) {
+      return payload;
+    }
+    return {
+      ...payload,
+      attachments: form.attachments
+    };
+  }
+
+  const uploadPendingDocumentFiles = async (legalDocId: string) => {
+    if (!pendingDocumentFiles.length) {
+      return false;
+    }
+    if (!canUseDocumentAttachmentFlow) {
+      throw new Error("legal_doc_document_upload_forbidden");
+    }
+
+    const uploadedIds: string[] = [];
+    try {
+      for (const pendingFile of pendingDocumentFiles) {
+        await uploadDocument("LEGAL_DOC", legalDocId, pendingFile.file);
+        uploadedIds.push(pendingFile.id);
+      }
+      return uploadedIds.length > 0;
+    } finally {
+      if (uploadedIds.length) {
+        setPendingDocumentFiles((previous) =>
+          previous.filter((pendingFile) => !uploadedIds.includes(pendingFile.id))
+        );
+        onDocumentsChanged?.(legalDocId);
+      }
+    }
+  };
 
   const runAiAnalysis = async () => {
     if (!analysisFile) {
@@ -341,6 +418,15 @@ export default function LegalDocModal({
     payload: AiReviewAcceptedPayload,
     result: AiAnalysisResult
   ) => {
+    if (pendingDocumentFiles.length && !canUseDocumentAttachmentFlow) {
+      setDocumentUploadError(t("legalDocs.form.uploadPermissionError"));
+      return;
+    }
+
+    setSaving(true);
+    setDocumentUploadError("");
+
+    try {
     const resolvedProjectId = payload.meta.projectId || form.projectId;
     const resolvedType = mapAiDocTypeToLegalDocType(payload.meta.docType) || form.type;
 
@@ -389,22 +475,25 @@ export default function LegalDocModal({
       authorityContactId = createdContact.id;
     }
 
-    const legalDocPayload = {
+    const legalDocPayload = withLegacyAttachmentsIfDirty({
       projectId: resolvedProjectId,
       type: resolvedType,
       title: payload.meta.title || form.title || t("legalDocs.modal.title"),
       shortDescription: payload.meta.shortDescription ?? form.shortDescription,
+      detailedDescription: form.detailedDescription,
+      contentSummary: form.contentSummary,
       reference: payload.meta.referenceNumber ?? form.reference,
       issuedAt: payload.meta.issueDate ?? form.issuedAt,
       authorityId,
       authorityContactId,
-      attachments: form.attachments,
       aiExtraction: result,
       scopeOverride
-    };
+    });
 
-    const savedDoc = legalDoc
-      ? await updateLegalDoc(legalDoc.id, legalDocPayload)
+    const targetDoc = legalDoc ?? createdDocForRetry;
+    const isCreate = !targetDoc;
+    const savedDoc = targetDoc
+      ? await updateLegalDoc(targetDoc.id, legalDocPayload)
       : await addLegalDoc(legalDocPayload);
 
     if (!savedDoc) {
@@ -413,6 +502,18 @@ export default function LegalDocModal({
     }
 
     const savedDocId = savedDoc.id;
+    if (isCreate) {
+      setCreatedDocForRetry(savedDoc);
+    }
+
+    try {
+      await uploadPendingDocumentFiles(savedDocId);
+    } catch {
+      setDocumentUploadError(
+        t(isCreate ? "legalDocs.form.uploadCreateFailed" : "legalDocs.form.uploadUpdateFailed")
+      );
+      return;
+    }
 
     const acceptedObligationIds = new Set(payload.obligations.map((obligation) => obligation.id));
 
@@ -491,9 +592,20 @@ export default function LegalDocModal({
     });
 
     onClose();
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleSave = async () => {
+    if (pendingDocumentFiles.length && !canUseDocumentAttachmentFlow) {
+      setDocumentUploadError(t("legalDocs.form.uploadPermissionError"));
+      return;
+    }
+
+    setSaving(true);
+    setDocumentUploadError("");
+
     const scopeOverride = form.scopeOverrideEnabled
       ? {
           companyId: form.scopeCompanyId,
@@ -502,42 +614,48 @@ export default function LegalDocModal({
         }
       : undefined;
 
-    if (legalDoc) {
-      const updated = await updateLegalDoc(legalDoc.id, {
+    try {
+      const targetDoc = legalDoc ?? createdDocForRetry;
+      const isCreate = !targetDoc;
+      const legalDocPayload = withLegacyAttachmentsIfDirty({
         projectId: form.projectId,
         type: form.type,
         title: form.title,
         shortDescription: form.shortDescription,
+        detailedDescription: form.detailedDescription,
+        contentSummary: form.contentSummary,
         reference: form.reference,
         issuedAt: form.issuedAt,
         authorityId: form.authorityId || undefined,
         authorityContactId: form.authorityContactId || undefined,
-        attachments: form.attachments,
         aiExtraction: analysisResult,
         scopeOverride
       });
-      if (!updated) {
+
+      const savedDoc = targetDoc
+        ? await updateLegalDoc(targetDoc.id, legalDocPayload)
+        : await addLegalDoc(legalDocPayload);
+      if (!savedDoc) {
         return;
       }
-    } else {
-      const created = await addLegalDoc({
-        projectId: form.projectId,
-        type: form.type,
-        title: form.title,
-        shortDescription: form.shortDescription,
-        reference: form.reference,
-        issuedAt: form.issuedAt,
-        authorityId: form.authorityId || undefined,
-        authorityContactId: form.authorityContactId || undefined,
-        attachments: form.attachments,
-        aiExtraction: analysisResult,
-        scopeOverride
-      });
-      if (!created) {
+
+      if (isCreate) {
+        setCreatedDocForRetry(savedDoc);
+      }
+
+      try {
+        await uploadPendingDocumentFiles(savedDoc.id);
+      } catch {
+        setDocumentUploadError(
+          t(isCreate ? "legalDocs.form.uploadCreateFailed" : "legalDocs.form.uploadUpdateFailed")
+        );
         return;
       }
+
+      onClose();
+    } finally {
+      setSaving(false);
     }
-    onClose();
   };
 
   return (
@@ -554,7 +672,7 @@ export default function LegalDocModal({
               {t("modal.cancel")}
             </Button>
             <Button onClick={handleSave} disabled={isSaveDisabled}>
-              {t("modal.save")}
+              {saving ? t("documents.loading") : t("modal.save")}
             </Button>
           </div>
         }
@@ -603,6 +721,30 @@ export default function LegalDocModal({
               value={form.shortDescription}
               onChange={(event) =>
                 setForm((prev) => ({ ...prev, shortDescription: event.target.value }))
+              }
+            />
+          </div>
+          <div className="formField">
+            <span className="fieldLabel">{t("legalDocs.form.detailedDescription")}</span>
+            <textarea
+              className="textarea"
+              rows={5}
+              placeholder={t("legalDocs.form.detailedDescription")}
+              value={form.detailedDescription}
+              onChange={(event) =>
+                setForm((prev) => ({ ...prev, detailedDescription: event.target.value }))
+              }
+            />
+          </div>
+          <div className="formField">
+            <span className="fieldLabel">{t("legalDocs.form.contentSummary")}</span>
+            <textarea
+              className="textarea"
+              rows={5}
+              placeholder={t("legalDocs.form.contentSummary")}
+              value={form.contentSummary}
+              onChange={(event) =>
+                setForm((prev) => ({ ...prev, contentSummary: event.target.value }))
               }
             />
           </div>
@@ -787,24 +929,75 @@ export default function LegalDocModal({
             ) : null}
           </div>
 
-          <FileUploadStub
-            label={t("legalDocs.form.upload")}
-            selectLabel={t("common.selectFile")}
-            removeLabel={t("common.remove")}
-            items={form.attachments}
-            onAddFiles={(files) =>
-              setForm((prev) => ({
-                ...prev,
-                attachments: [...prev.attachments, ...files.map(createAttachment)]
-              }))
-            }
-            onRemove={(id) =>
-              setForm((prev) => ({
-                ...prev,
-                attachments: prev.attachments.filter((item) => item.id !== id)
-              }))
-            }
-          />
+          {documentUploadError ? <span className="validationText">{documentUploadError}</span> : null}
+
+          {canUseDocumentAttachmentFlow ? (
+            <FileUploadStub
+              label={t("legalDocs.form.upload")}
+              selectLabel={t("common.selectFile")}
+              removeLabel={t("common.remove")}
+              items={pendingUploadItems}
+              disabled={saving}
+              onAddFiles={(files) => {
+                if (!canUseDocumentAttachmentFlow) {
+                  setDocumentUploadError(t("legalDocs.form.uploadPermissionError"));
+                  return;
+                }
+                setPendingDocumentFiles((previous) => [
+                  ...previous,
+                  ...files.map(createPendingDocumentFile)
+                ]);
+                setDocumentUploadError("");
+              }}
+              onRemove={(id) =>
+                setPendingDocumentFiles((previous) =>
+                  previous.filter((pendingFile) => pendingFile.id !== id)
+                )
+              }
+            />
+          ) : (
+            <div className="formField">
+              <span className="fieldLabel">{t("legalDocs.form.upload")}</span>
+              <p className="placeholderText">{t("legalDocs.form.uploadPermissionHint")}</p>
+            </div>
+          )}
+          {pendingDocumentFiles.length ? (
+            <p className="placeholderText">{t("legalDocs.form.pendingUploadHint")}</p>
+          ) : null}
+
+          {form.attachments.length ? (
+            <div className="documentsLegacy">
+              <span className="fieldLabel">{t("documents.legacyBrowser")}</span>
+              <p className="placeholderText">{t("documents.legacyBrowserHint")}</p>
+              <div className="fileList">
+                {form.attachments.map((item) => (
+                  <div key={item.id} className="documentsItem">
+                    <div className="documentsItemMeta">
+                      <div>{item.filename}</div>
+                      <div className="inlineMeta">
+                        <Badge variant="warning">{t("documents.legacyBrowser")}</Badge>
+                        <span>{item.sizeKb} KB</span>
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={saving}
+                      onClick={() => {
+                        setLegacyAttachmentsDirty(true);
+                        setForm((prev) => ({
+                          ...prev,
+                          attachments: prev.attachments.filter((attachment) => attachment.id !== item.id)
+                        }));
+                      }}
+                    >
+                      {t("common.remove")}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       </Modal>
 

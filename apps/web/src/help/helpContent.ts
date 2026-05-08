@@ -385,6 +385,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
         lines: [
           "Vergib einen klaren Titel.",
           "Waehle Status und Einreichtyp.",
+          "Nutze die detaillierte Beschreibung fuer Zweck, Umfang und fachlichen Inhalt des Projekts.",
           "Ordne Company, Standort und bei Bedarf Anlage zu.",
           "Waehle Behoerde und Kontakt, wenn sie bekannt sind.",
           "Setze Verantwortliche, Stellvertretung, interne Beteiligte und bei Bedarf externe Beteiligte.",
@@ -464,7 +465,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         heading: "Uebersicht",
         lines: [
-          "Hier siehst du die wichtigsten Projektdaten: Status, Einreichtyp, Scope, Behoerde, Kontakt, Verantwortliche, Stellvertretung und Projektbeziehungen.",
+          "Hier siehst du die wichtigsten Projektdaten: Status, Einreichtyp, Scope, Behoerde, Kontakt, Verantwortliche, Stellvertretung, Projektbeschreibung und Projektbeziehungen.",
           "Wenn naechste Fristen oder Aufgaben angezeigt werden, dienen sie als schneller Hinweis auf aktuelle Arbeit."
         ]
       },
@@ -597,6 +598,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
         lines: [
           "Waehle ein Projekt aus.",
           "Pflege Titel, Typ, Referenz oder Aktenzeichen und relevante Datumsangaben.",
+          "Ergaenze Kurzbeschreibung, detaillierte Beschreibung und Zusammenfassung, wenn diese fachlich vorliegen.",
           "Fuelle die im Formular sichtbaren Felder aus.",
           "Zusaetzliche Angaben aus einer AI-Pruefung erscheinen nur im entsprechenden Pruefflow.",
           "Lade Unterlagen hoch, wenn sie zum Dokument gehoeren.",
@@ -630,10 +632,10 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         heading: "Tabs",
         lines: [
-          "Uebersicht zeigt die wichtigsten Dokumentdaten, Projektbezug, Scope, Behoerde und Datumsangaben.",
+          "Uebersicht zeigt die wichtigsten Dokumentdaten, Projektbezug, Scope, Behoerde, Datumsangaben, detaillierte Beschreibung und Zusammenfassung.",
           "Auflagen zeigt Auflagen, die zu diesem Rechtsdokument gehoeren.",
           "Fristen zeigt dokumentbezogene Fristen.",
-          "Unterlagen dient fuer Dateien am Rechtsdokument.",
+          "Unterlagen dient fuer serverseitig gespeicherte Dateien am Rechtsdokument mit Vorschau und Download.",
           "Notizen und Historie dienen der Nachvollziehbarkeit."
         ]
       },
@@ -862,7 +864,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
         heading: "Uploads und Downloads",
         lines: [
           "Hochladen, Vorschau und Download sind nur sichtbar, wenn du Zugriff auf das zugehoerige Projekt und die passende Berechtigung hast.",
-          "Wenn ein Datei-Inhalt nicht mehr verfuegbar ist, muss der Nachweis neu hochgeladen werden."
+          "Wenn ein Datei-Inhalt nicht mehr verfuegbar ist, muss der Nachweis neu hochgeladen werden.",
+          "Alte Browser-Anhaenge sind nur Altbestand. Lade sie erneut hoch, wenn sie serverseitig verfuegbar sein sollen."
         ]
       }
     ]

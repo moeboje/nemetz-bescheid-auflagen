@@ -235,7 +235,8 @@ describe("migration bootstrap classification", () => {
       "baseline-20260422120000_project_status_submission_type",
       "baseline-20260429103000_obligation_recurrence_external_execution",
       "baseline-20260502120000_project_access_legacy_decisions",
-      "baseline-20260503143000_branding_assets"
+      "baseline-20260503143000_branding_assets",
+      "baseline-20260507120000_project_legal_doc_descriptions_preview"
     ] as const;
 
     for (const mode of expectedModes) {
@@ -264,10 +265,28 @@ describe("migration bootstrap classification", () => {
     );
   });
 
-  it("uses the latest baseline when branding assets are complete", () => {
+  it("uses the branding asset baseline when legal document description fields are absent", () => {
     assert.equal(
       classify(fixtureFor("baseline-20260503143000_branding_assets")),
       "baseline-20260503143000_branding_assets"
+    );
+  });
+
+  it("uses the latest baseline when project and legal document description fields are complete", () => {
+    assert.equal(
+      classify(fixtureFor("baseline-20260507120000_project_legal_doc_descriptions_preview")),
+      "baseline-20260507120000_project_legal_doc_descriptions_preview"
+    );
+  });
+
+  it("blocks a partial project/legal document description baseline when one new column is missing", () => {
+    assert.equal(
+      classify(
+        without(fixtureFor("baseline-20260507120000_project_legal_doc_descriptions_preview"), {
+          presentColumns: ["LegalDocument.contentSummary"]
+        })
+      ),
+      "partial"
     );
   });
 

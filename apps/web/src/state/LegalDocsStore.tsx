@@ -17,6 +17,7 @@ import {
   bulkDeleteLegalDocs,
   bulkReplaceLegalDocs,
   createLegalDoc as apiCreateLegalDoc,
+  getLegalDoc as apiGetLegalDoc,
   listLegalDocProjectOptions,
   listLegalDocs,
   restoreLegalDoc as apiRestoreLegalDoc,
@@ -60,6 +61,7 @@ export type LegalDocsContextValue = {
   replaceLegalDocs: (value: LegalDoc[]) => Promise<void>;
   resetLegalDocs: () => Promise<void>;
   reloadLegalDocs: () => Promise<LegalDoc[]>;
+  loadLegalDocDetail: (id: string) => Promise<LegalDoc | null>;
 };
 
 const LegalDocsContext = createContext<LegalDocsContextValue | undefined>(undefined);
@@ -68,6 +70,10 @@ export const LEGAL_DOCS_STORAGE_KEY = makeStorageKey("legalDocs");
 
 function nowStamp() {
   return new Date().toISOString();
+}
+
+function hasOwnInput(value: object, key: string) {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function normalizeAttachment(
@@ -133,6 +139,9 @@ function normalizeLegalDoc(value: Partial<LegalDoc>, index: number): LegalDoc | 
     type: value.type,
     title: value.title,
     shortDescription: value.shortDescription ?? "",
+    detailedDescription:
+      typeof value.detailedDescription === "string" ? value.detailedDescription : undefined,
+    contentSummary: typeof value.contentSummary === "string" ? value.contentSummary : undefined,
     reference: value.reference ?? "",
     issuedAt: value.issuedAt ?? "",
     authorityId: typeof value.authorityId === "string" ? value.authorityId : undefined,
@@ -167,6 +176,12 @@ function mergeLegalDoc(existing: LegalDoc, incoming: LegalDoc) {
     ...existing,
     ...incoming,
     shortDescription: incoming.shortDescription ?? existing.shortDescription ?? "",
+    detailedDescription:
+      incoming.detailedDescription !== undefined
+        ? incoming.detailedDescription
+        : existing.detailedDescription,
+    contentSummary:
+      incoming.contentSummary !== undefined ? incoming.contentSummary : existing.contentSummary,
     reference: incoming.reference ?? existing.reference ?? "",
     issuedAt: incoming.issuedAt ?? existing.issuedAt ?? "",
     attachments: incoming.attachments ?? existing.attachments,
@@ -201,11 +216,52 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
       listLegalDocProjectOptions()
     ]);
     const next = normalizeLegalDocs(nextLegalDocs);
-    setLegalDocs(next);
+    setLegalDocs((prev) => {
+      const previousById = new Map(prev.map((doc) => [doc.id, doc] as const));
+      return next.map((doc) => {
+        const previous = previousById.get(doc.id);
+        return {
+          ...doc,
+          detailedDescription:
+            doc.detailedDescription !== undefined
+              ? doc.detailedDescription
+              : previous?.detailedDescription,
+          contentSummary:
+            doc.contentSummary !== undefined ? doc.contentSummary : previous?.contentSummary
+        };
+      });
+    });
     setWritableProjectOptions(nextProjectOptions);
     clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
     return next;
   }, [authUser]);
+
+  const loadLegalDocDetail = useCallback(
+    async (id: string) => {
+      if (!authUser || authUser.type === "EXTERNAL") {
+        return null;
+      }
+
+      try {
+        const legalDoc = normalizeLegalDoc(await apiGetLegalDoc(id), 0);
+        if (!legalDoc) {
+          return null;
+        }
+
+        setLegalDocs((prev) => {
+          const exists = prev.some((doc) => doc.id === legalDoc.id);
+          return exists
+            ? prev.map((doc) => (doc.id === legalDoc.id ? mergeLegalDoc(doc, legalDoc) : doc))
+            : [legalDoc, ...prev];
+        });
+        clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
+        return legalDoc;
+      } catch {
+        return null;
+      }
+    },
+    [authUser]
+  );
 
   useEffect(() => {
     if (!authUser || authUser.type === "EXTERNAL") {
@@ -228,23 +284,29 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
   const addLegalDoc = useCallback(
     async (input: LegalDocCreateInput) => {
       try {
+        const payload: Parameters<typeof apiCreateLegalDoc>[0] = {
+          id: input.id,
+          projectId: input.projectId,
+          type: input.type,
+          title: input.title,
+          shortDescription: input.shortDescription ?? "",
+          detailedDescription: input.detailedDescription ?? "",
+          contentSummary: input.contentSummary ?? "",
+          reference: input.reference ?? "",
+          issuedAt: input.issuedAt ?? "",
+          authorityId: input.authorityId,
+          authorityContactId: input.authorityContactId,
+          aiExtraction: input.aiExtraction,
+          scopeOverride: input.scopeOverride
+        };
+        if (hasOwnInput(input, "attachments") && Array.isArray(input.attachments)) {
+          payload.attachments = input.attachments.map((attachment, index) =>
+            normalizeAttachment(attachment, `lda-create-${index}`)
+          );
+        }
+
         const createdLegalDoc = normalizeLegalDocs([
-          await apiCreateLegalDoc({
-            id: input.id,
-            projectId: input.projectId,
-            type: input.type,
-            title: input.title,
-            shortDescription: input.shortDescription ?? "",
-            reference: input.reference ?? "",
-            issuedAt: input.issuedAt ?? "",
-            authorityId: input.authorityId,
-            authorityContactId: input.authorityContactId,
-            attachments: (input.attachments ?? []).map((attachment, index) =>
-              normalizeAttachment(attachment, `lda-create-${index}`)
-            ),
-            aiExtraction: input.aiExtraction,
-            scopeOverride: input.scopeOverride
-          })
+          await apiCreateLegalDoc(payload)
         ])[0];
 
         if (!createdLegalDoc) {
@@ -276,37 +338,46 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
+        const payload: Parameters<typeof apiUpdateLegalDoc>[1] = {
+          projectId: input.projectId ?? existing.projectId,
+          type: input.type ?? existing.type,
+          title: input.title ?? existing.title,
+          shortDescription:
+            input.shortDescription !== undefined
+              ? input.shortDescription
+              : existing.shortDescription ?? "",
+          reference:
+            input.reference !== undefined ? input.reference : existing.reference ?? "",
+          issuedAt: input.issuedAt !== undefined ? input.issuedAt : existing.issuedAt ?? "",
+          authorityId:
+            input.authorityId !== undefined ? input.authorityId : existing.authorityId,
+          authorityContactId:
+            input.authorityContactId !== undefined
+              ? input.authorityContactId
+              : existing.authorityContactId,
+          aiExtraction:
+            input.aiExtraction !== undefined ? input.aiExtraction : existing.aiExtraction,
+          scopeOverride:
+            input.scopeOverride !== undefined ? input.scopeOverride : existing.scopeOverride,
+          archivedAt:
+            input.archivedAt !== undefined ? input.archivedAt : existing.archivedAt,
+          isArchived: input.isArchived !== undefined ? input.isArchived : existing.isArchived
+        };
+
+        if (hasOwnInput(input, "detailedDescription") && input.detailedDescription !== undefined) {
+          payload.detailedDescription = input.detailedDescription;
+        }
+        if (hasOwnInput(input, "contentSummary") && input.contentSummary !== undefined) {
+          payload.contentSummary = input.contentSummary;
+        }
+        if (hasOwnInput(input, "attachments") && Array.isArray(input.attachments)) {
+          payload.attachments = input.attachments.map((attachment, index) =>
+            normalizeAttachment(attachment, `lda-${id}-${index}`)
+          );
+        }
+
         const updatedLegalDoc = normalizeLegalDocs([
-          await apiUpdateLegalDoc(id, {
-            projectId: input.projectId ?? existing.projectId,
-            type: input.type ?? existing.type,
-            title: input.title ?? existing.title,
-            shortDescription:
-              input.shortDescription !== undefined
-                ? input.shortDescription
-                : existing.shortDescription ?? "",
-            reference:
-              input.reference !== undefined ? input.reference : existing.reference ?? "",
-            issuedAt: input.issuedAt !== undefined ? input.issuedAt : existing.issuedAt ?? "",
-            authorityId:
-              input.authorityId !== undefined ? input.authorityId : existing.authorityId,
-            authorityContactId:
-              input.authorityContactId !== undefined
-                ? input.authorityContactId
-                : existing.authorityContactId,
-            attachments: Array.isArray(input.attachments)
-              ? input.attachments.map((attachment, index) =>
-                  normalizeAttachment(attachment, `lda-${id}-${index}`)
-                )
-              : existing.attachments,
-            aiExtraction:
-              input.aiExtraction !== undefined ? input.aiExtraction : existing.aiExtraction,
-            scopeOverride:
-              input.scopeOverride !== undefined ? input.scopeOverride : existing.scopeOverride,
-            archivedAt:
-              input.archivedAt !== undefined ? input.archivedAt : existing.archivedAt,
-            isArchived: input.isArchived !== undefined ? input.isArchived : existing.isArchived
-          })
+          await apiUpdateLegalDoc(id, payload)
         ])[0];
 
         if (!updatedLegalDoc) {
@@ -498,7 +569,8 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
       getLegalDocsForProject,
       replaceLegalDocs,
       resetLegalDocs,
-      reloadLegalDocs
+      reloadLegalDocs,
+      loadLegalDocDetail
     }),
     [
       legalDocs,
@@ -512,6 +584,7 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
       getEffectiveScope,
       getEffectiveScopeLabel,
       getLegalDocsForProject,
+      loadLegalDocDetail,
       replaceLegalDocs,
       resetLegalDocs,
       reloadLegalDocs

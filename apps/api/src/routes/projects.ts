@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   Prisma,
-  type PrismaClient,
-  type Project as DbProject
+  type PrismaClient
 } from "@prisma/client";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import {
@@ -85,6 +84,7 @@ type ProjectDto = {
   status?: ProjectStatus;
   submissionType?: ProjectSubmissionType;
   shortDescription?: string;
+  detailedDescription?: string;
   authorityRef?: string;
   companyId: string;
   siteId?: string;
@@ -136,6 +136,41 @@ type ProjectStatusRow = {
   id: string;
   status: string | null;
 };
+
+const projectListSelect = {
+  id: true,
+  title: true,
+  status: true,
+  submissionType: true,
+  shortDescription: true,
+  authorityRef: true,
+  companyId: true,
+  siteId: true,
+  facilityId: true,
+  authorityId: true,
+  authorityContactId: true,
+  ownerUserId: true,
+  deputyUserId: true,
+  participantUserIds: true,
+  internalParticipants: true,
+  externalParticipants: true,
+  attachments: true,
+  dependsOnProjectIds: true,
+  referenceLegalDocIds: true,
+  archivedAt: true,
+  isArchived: true,
+  createdAt: true,
+  updatedAt: true
+} satisfies Prisma.ProjectSelect;
+
+type ProjectDbRow = Prisma.ProjectGetPayload<{ select: typeof projectListSelect }> & {
+  detailedDescription?: string | null;
+};
+
+const projectDetailSelect = {
+  ...projectListSelect,
+  detailedDescription: true
+} satisfies Prisma.ProjectSelect;
 
 type ProjectRelationValidationResult =
   | {
@@ -662,6 +697,7 @@ function normalizeProjectDto(value: unknown, index: number): ProjectDto | null {
     status,
     submissionType,
     shortDescription: row.shortDescription ?? "",
+    detailedDescription: row.detailedDescription ?? "",
     authorityRef: row.authorityRef ?? "",
     companyId: row.companyId,
     siteId: row.siteId ?? undefined,
@@ -699,8 +735,9 @@ function normalizeProjectsSnapshot(value: unknown): ProjectDto[] {
 }
 
 function toProjectDto(
-  project: DbProject,
-  status?: ProjectStatus
+  project: ProjectDbRow,
+  status?: ProjectStatus,
+  options: { includeDetailedDescription?: boolean } = {}
 ): ProjectDto {
   const participantUserIds = normalizeParticipantUserIds({
     participantUserIds: project.participantUserIds,
@@ -732,7 +769,7 @@ function toProjectDto(
         .filter(isPresent)
     : [];
 
-  return {
+  const dto: ProjectDto = {
     id: project.id,
     title: project.title,
     status,
@@ -757,6 +794,12 @@ function toProjectDto(
     createdAt: project.createdAt.toISOString(),
     updatedAt: project.updatedAt.toISOString()
   };
+
+  if (options.includeDetailedDescription) {
+    dto.detailedDescription = project.detailedDescription ?? "";
+  }
+
+  return dto;
 }
 
 function toProjectCreateInput(project: ProjectDto): Prisma.ProjectUncheckedCreateInput {
@@ -765,6 +808,7 @@ function toProjectCreateInput(project: ProjectDto): Prisma.ProjectUncheckedCreat
     title: project.title,
     submissionType: project.submissionType ?? null,
     shortDescription: project.shortDescription || null,
+    detailedDescription: project.detailedDescription || null,
     authorityRef: project.authorityRef || null,
     companyId: project.companyId,
     siteId: project.siteId ?? null,
@@ -791,6 +835,7 @@ function toProjectUpdateInput(project: ProjectDto): Prisma.ProjectUncheckedUpdat
     title: project.title,
     submissionType: project.submissionType ?? null,
     shortDescription: project.shortDescription || null,
+    detailedDescription: project.detailedDescription || null,
     authorityRef: project.authorityRef || null,
     companyId: project.companyId,
     siteId: project.siteId ?? null,
@@ -846,6 +891,7 @@ async function updateProjectStatus(
 async function listProjectsSnapshot(db: DbClient, where?: Prisma.ProjectWhereInput): Promise<ProjectDto[]> {
   const projects = await db.project.findMany({
     where,
+    select: projectListSelect,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }]
   });
 
@@ -856,6 +902,26 @@ async function listProjectsSnapshot(db: DbClient, where?: Prisma.ProjectWhereInp
 
   return sanitizeProjectRelations(
     projects.map((project) => toProjectDto(project, statusByProjectId.get(project.id)))
+  ).projects;
+}
+
+async function listProjectsExportSnapshot(db: DbClient): Promise<ProjectDto[]> {
+  const projects = await db.project.findMany({
+    select: projectDetailSelect,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }]
+  });
+
+  const statusByProjectId = await readProjectStatusMap(
+    db,
+    projects.map((project) => project.id)
+  );
+
+  return sanitizeProjectRelations(
+    projects.map((project) =>
+      toProjectDto(project, statusByProjectId.get(project.id), {
+        includeDetailedDescription: true
+      })
+    )
   ).projects;
 }
 
@@ -888,7 +954,8 @@ async function findProjectById(db: DbClient, id: string) {
   return db.project.findUnique({
     where: {
       id
-    }
+    },
+    select: projectDetailSelect
   });
 }
 
@@ -899,7 +966,7 @@ async function findProjectSnapshotById(db: DbClient, id: string) {
   }
 
   const status = await readProjectStatus(db, id);
-  return toProjectDto(project, status);
+  return toProjectDto(project, status, { includeDetailedDescription: true });
 }
 
 async function listProjectIds(db: DbClient) {
@@ -1325,6 +1392,7 @@ async function normalizeProjectForWrite(
       ownerUserId: relationValidation.ownerUserId,
       deputyUserId: relationValidation.deputyUserId,
       shortDescription: input.shortDescription ?? "",
+      detailedDescription: input.detailedDescription ?? "",
       authorityRef: input.authorityRef ?? "",
       internalParticipants,
       participantUserIds:
@@ -1806,6 +1874,7 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
           status,
           submissionType,
           shortDescription: ensureStringField(req.body?.shortDescription),
+          detailedDescription: ensureStringField(req.body?.detailedDescription),
           authorityRef: ensureStringField(req.body?.authorityRef),
           companyId,
           siteId: toOptionalTrimmedString(req.body?.siteId),
@@ -1889,7 +1958,11 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
 
       res.status(201).json({
         ok: true,
-        project: await annotateProjectForUser(prisma, user, toProjectDto(project, normalized.project.status))
+        project: await annotateProjectForUser(
+          prisma,
+          user,
+          toProjectDto(project, normalized.project.status, { includeDetailedDescription: true })
+        )
       });
     } catch (error) {
       if (
@@ -1951,6 +2024,9 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
         shortDescription: hasOwn(req.body, "shortDescription")
           ? ensureStringField(req.body?.shortDescription)
           : existing.shortDescription ?? "",
+        detailedDescription: hasOwn(req.body, "detailedDescription")
+          ? ensureStringField(req.body?.detailedDescription)
+          : existing.detailedDescription ?? "",
         authorityRef: hasOwn(req.body, "authorityRef")
           ? ensureStringField(req.body?.authorityRef)
           : existing.authorityRef ?? "",
@@ -2039,7 +2115,11 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
 
       res.json({
         ok: true,
-        project: await annotateProjectForUser(prisma, user, toProjectDto(updated, normalized.project.status))
+        project: await annotateProjectForUser(
+          prisma,
+          user,
+          toProjectDto(updated, normalized.project.status, { includeDetailedDescription: true })
+        )
       });
     } catch (error) {
       if (
@@ -2097,7 +2177,11 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
 
       res.json({
         ok: true,
-        project: await annotateProjectForUser(prisma, user, toProjectDto(updated, status))
+        project: await annotateProjectForUser(
+          prisma,
+          user,
+          toProjectDto(updated, status, { includeDetailedDescription: true })
+        )
       });
     } catch (error) {
       next(error);
@@ -2146,7 +2230,11 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
 
       res.json({
         ok: true,
-        project: await annotateProjectForUser(prisma, user, toProjectDto(updated, status))
+        project: await annotateProjectForUser(
+          prisma,
+          user,
+          toProjectDto(updated, status, { includeDetailedDescription: true })
+        )
       });
     } catch (error) {
       next(error);
@@ -2301,7 +2389,7 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
         return;
       }
 
-      const projects = await listProjectsSnapshot(prisma);
+      const projects = await listProjectsExportSnapshot(prisma);
       await writeProjectsSnapshotToPortal(prisma, projects, user.id);
 
       res.json({
