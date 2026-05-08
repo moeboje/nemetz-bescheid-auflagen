@@ -3,10 +3,10 @@ import { clearAllFiles } from "../../services/fileStorage";
 import { listAuthorities } from "../../api/authorities";
 import { listDeadlines } from "../../api/deadlines";
 import { listLegacyDecisions } from "../../api/legacyDecisions";
-import { listLegalDocs } from "../../api/legalDocs";
+import { getLegalDoc, listLegalDocs } from "../../api/legalDocs";
 import { listObligations } from "../../api/obligations";
 import { listProjectChecklists } from "../../api/projectChecklists";
-import { listProjects } from "../../api/projects";
+import { getProject, listProjects } from "../../api/projects";
 import { listScopes } from "../../api/scopes";
 import { listTaskState } from "../../api/taskState";
 import {
@@ -31,6 +31,8 @@ type ServerDomainReaderResult = {
 };
 
 type StorageExportPayloadOverrides = Pick<ExportDataBundle, "auditLog" | "notifications">;
+
+const EXPORT_DETAIL_REQUEST_CONCURRENCY = 5;
 
 export const GENERIC_EXPORT_LIMITATION_META: NonNullable<ExportPayload["meta"]> = {
   warnings: [
@@ -108,6 +110,41 @@ export function buildExportPayload(
   return payload;
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>
+) {
+  if (!items.length) {
+    return [];
+  }
+
+  const results = new Array<R>(items.length);
+  const workerCount = Math.min(items.length, Math.max(1, Math.floor(limit)));
+  let nextIndex = 0;
+  let failed = false;
+
+  async function runWorker() {
+    while (!failed) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) {
+        return;
+      }
+
+      try {
+        results[index] = await mapper(items[index], index);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  return results;
+}
+
 async function readAuthoritiesForExport() {
   return listAuthorities();
 }
@@ -117,7 +154,12 @@ async function readScopesForExport() {
 }
 
 async function readProjectsForExport() {
-  return listProjects();
+  const projects = await listProjects();
+  return mapWithConcurrency(
+    projects,
+    EXPORT_DETAIL_REQUEST_CONCURRENCY,
+    (project) => getProject(project.id)
+  );
 }
 
 async function readProjectChecklistsForExport() {
@@ -125,7 +167,12 @@ async function readProjectChecklistsForExport() {
 }
 
 async function readLegalDocsForExport() {
-  return listLegalDocs();
+  const legalDocs = await listLegalDocs();
+  return mapWithConcurrency(
+    legalDocs,
+    EXPORT_DETAIL_REQUEST_CONCURRENCY,
+    (legalDoc) => getLegalDoc(legalDoc.id)
+  );
 }
 
 async function readLegacyDecisionsForExport() {

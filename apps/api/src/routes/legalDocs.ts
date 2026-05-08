@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
   Prisma,
-  type LegalDocument as DbLegalDocument,
   type PrismaClient
 } from "@prisma/client";
 import { Router, type NextFunction, type Request, type Response } from "express";
@@ -44,6 +43,8 @@ type LegalDocDto = {
   type: string;
   title: string;
   shortDescription?: string;
+  detailedDescription?: string;
+  contentSummary?: string;
   reference?: string;
   issuedAt?: string;
   authorityId?: string;
@@ -60,6 +61,36 @@ type LegalDocDto = {
 };
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
+
+const legalDocListSelect = {
+  id: true,
+  projectId: true,
+  type: true,
+  title: true,
+  shortDescription: true,
+  reference: true,
+  issuedAt: true,
+  authorityId: true,
+  authorityContactId: true,
+  attachments: true,
+  aiExtraction: true,
+  scopeOverride: true,
+  archivedAt: true,
+  isArchived: true,
+  createdAt: true,
+  updatedAt: true
+} satisfies Prisma.LegalDocumentSelect;
+
+type LegalDocDbRow = Prisma.LegalDocumentGetPayload<{ select: typeof legalDocListSelect }> & {
+  detailedDescription?: string | null;
+  contentSummary?: string | null;
+};
+
+const legalDocDetailSelect = {
+  ...legalDocListSelect,
+  detailedDescription: true,
+  contentSummary: true
+} satisfies Prisma.LegalDocumentSelect;
 
 type LegalDocRelationValidationResult =
   | {
@@ -205,6 +236,8 @@ function normalizeLegalDocDto(value: unknown, index: number): LegalDocDto | null
     type: row.type,
     title: row.title,
     shortDescription: row.shortDescription ?? "",
+    detailedDescription: row.detailedDescription ?? "",
+    contentSummary: row.contentSummary ?? "",
     reference: row.reference ?? "",
     issuedAt: row.issuedAt ?? "",
     authorityId: toOptionalTrimmedString(row.authorityId),
@@ -235,7 +268,10 @@ function normalizeLegalDocsSnapshot(value: unknown): LegalDocDto[] {
     .filter((legalDoc): legalDoc is LegalDocDto => Boolean(legalDoc));
 }
 
-function toLegalDocDto(legalDoc: DbLegalDocument): LegalDocDto {
+function toLegalDocDto(
+  legalDoc: LegalDocDbRow,
+  options: { includeLongText?: boolean } = {}
+): LegalDocDto {
   const rawAttachments = Array.isArray(legalDoc.attachments)
     ? (legalDoc.attachments as unknown[])
     : [];
@@ -247,7 +283,7 @@ function toLegalDocDto(legalDoc: DbLegalDocument): LegalDocDto {
         )
       );
 
-  return {
+  const dto: LegalDocDto = {
     id: legalDoc.id,
     projectId: legalDoc.projectId,
     type: legalDoc.type,
@@ -265,6 +301,13 @@ function toLegalDocDto(legalDoc: DbLegalDocument): LegalDocDto {
     createdAt: legalDoc.createdAt.toISOString(),
     updatedAt: legalDoc.updatedAt.toISOString()
   };
+
+  if (options.includeLongText) {
+    dto.detailedDescription = legalDoc.detailedDescription ?? "";
+    dto.contentSummary = legalDoc.contentSummary ?? "";
+  }
+
+  return dto;
 }
 
 function toLegalDocCreateInput(input: LegalDocDto): Prisma.LegalDocumentUncheckedCreateInput {
@@ -274,6 +317,8 @@ function toLegalDocCreateInput(input: LegalDocDto): Prisma.LegalDocumentUnchecke
     type: input.type,
     title: input.title,
     shortDescription: input.shortDescription || null,
+    detailedDescription: input.detailedDescription || null,
+    contentSummary: input.contentSummary || null,
     reference: input.reference || null,
     issuedAt: input.issuedAt || null,
     authorityId: input.authorityId ?? null,
@@ -294,6 +339,8 @@ function toLegalDocUpdateInput(input: LegalDocDto): Prisma.LegalDocumentUnchecke
     type: input.type,
     title: input.title,
     shortDescription: input.shortDescription || null,
+    detailedDescription: input.detailedDescription || null,
+    contentSummary: input.contentSummary || null,
     reference: input.reference || null,
     issuedAt: input.issuedAt || null,
     authorityId: input.authorityId ?? null,
@@ -310,10 +357,20 @@ function toLegalDocUpdateInput(input: LegalDocDto): Prisma.LegalDocumentUnchecke
 async function listLegalDocsFromDb(db: DbClient, where?: Prisma.LegalDocumentWhereInput): Promise<LegalDocDto[]> {
   const legalDocs = await db.legalDocument.findMany({
     where,
+    select: legalDocListSelect,
     orderBy: [{ createdAt: "desc" }, { id: "desc" }]
   });
 
   return legalDocs.map((legalDoc) => toLegalDocDto(legalDoc));
+}
+
+async function listLegalDocsForExport(db: DbClient): Promise<LegalDocDto[]> {
+  const legalDocs = await db.legalDocument.findMany({
+    select: legalDocDetailSelect,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }]
+  });
+
+  return legalDocs.map((legalDoc) => toLegalDocDto(legalDoc, { includeLongText: true }));
 }
 
 async function enrichLegalDocDtosWithProjectAccess(
@@ -352,9 +409,11 @@ async function enrichLegalDocDtosWithProjectAccess(
 async function toLegalDocDtoForUser(
   db: DbClient,
   user: RouteUser,
-  legalDoc: DbLegalDocument
+  legalDoc: LegalDocDbRow
 ) {
-  const [dto] = await enrichLegalDocDtosWithProjectAccess(db, user, [toLegalDocDto(legalDoc)]);
+  const [dto] = await enrichLegalDocDtosWithProjectAccess(db, user, [
+    toLegalDocDto(legalDoc, { includeLongText: true })
+  ]);
   return dto;
 }
 
@@ -362,7 +421,8 @@ async function findLegalDocById(db: DbClient, id: string) {
   return db.legalDocument.findUnique({
     where: {
       id
-    }
+    },
+    select: legalDocDetailSelect
   });
 }
 
@@ -685,6 +745,8 @@ async function normalizeLegalDocForWrite(
       authorityId: relationValidation.authorityId,
       authorityContactId: relationValidation.authorityContactId,
       shortDescription: input.shortDescription ?? "",
+      detailedDescription: input.detailedDescription ?? "",
+      contentSummary: input.contentSummary ?? "",
       reference: input.reference ?? "",
       issuedAt: input.issuedAt ?? "",
       attachments: input.attachments,
@@ -820,6 +882,8 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
         type,
         title,
         shortDescription: ensureStringField(req.body?.shortDescription),
+        detailedDescription: ensureStringField(req.body?.detailedDescription),
+        contentSummary: ensureStringField(req.body?.contentSummary),
         reference: ensureStringField(req.body?.reference),
         issuedAt: ensureStringField(req.body?.issuedAt),
         authorityId: toOptionalTrimmedString(req.body?.authorityId),
@@ -898,7 +962,7 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
         return;
       }
 
-      const existing = toLegalDocDto(existingRecord);
+      const existing = toLegalDocDto(existingRecord, { includeLongText: true });
       const merged: LegalDocDto = {
         ...existing,
         projectId: hasOwn(req.body, "projectId") ? ensureStringField(req.body?.projectId) : existing.projectId,
@@ -907,6 +971,12 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
         shortDescription: hasOwn(req.body, "shortDescription")
           ? ensureStringField(req.body?.shortDescription)
           : existing.shortDescription ?? "",
+        detailedDescription: hasOwn(req.body, "detailedDescription")
+          ? ensureStringField(req.body?.detailedDescription)
+          : existing.detailedDescription ?? "",
+        contentSummary: hasOwn(req.body, "contentSummary")
+          ? ensureStringField(req.body?.contentSummary)
+          : existing.contentSummary ?? "",
         reference: hasOwn(req.body, "reference")
           ? ensureStringField(req.body?.reference)
           : existing.reference ?? "",
@@ -1188,7 +1258,7 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
         return;
       }
 
-      const legalDocs = await listLegalDocsFromDb(prisma);
+      const legalDocs = await listLegalDocsForExport(prisma);
       await writeLegalDocsSnapshotToPortal(prisma, legalDocs, user.id);
 
       res.json({

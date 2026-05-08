@@ -7,6 +7,7 @@ type ProjectInput = {
   status?: Project["status"];
   submissionType?: Project["submissionType"];
   shortDescription?: string;
+  detailedDescription?: string;
   authorityRef?: string;
   companyId: string;
   siteId?: string;

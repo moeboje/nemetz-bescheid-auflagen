@@ -15,6 +15,7 @@ import {
   archiveProject as apiArchiveProject,
   bulkReplaceProjects,
   createProject as apiCreateProject,
+  getProject as apiGetProject,
   listProjects,
   restoreProject as apiRestoreProject,
   updateProject as apiUpdateProject
@@ -83,6 +84,7 @@ export type ProjectsContextValue = {
   replaceProjects: (projects: Project[]) => Promise<void>;
   resetProjects: () => Promise<void>;
   reloadProjects: () => Promise<Project[]>;
+  loadProjectDetail: (id: string) => Promise<Project | null>;
 };
 
 const ProjectsContext = createContext<ProjectsContextValue | undefined>(undefined);
@@ -91,6 +93,10 @@ export const PROJECTS_STORAGE_KEY = makeStorageKey("projects");
 
 function nowStamp() {
   return new Date().toISOString();
+}
+
+function hasOwnInput(value: object, key: string) {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function toBoolean(value: unknown) {
@@ -219,6 +225,8 @@ function normalizeProject(value: Partial<Project>, index: number): Project | nul
     status: normalizeProjectStatus(value.status),
     submissionType: normalizeProjectSubmissionType(value.submissionType),
     shortDescription: value.shortDescription ?? "",
+    detailedDescription:
+      typeof value.detailedDescription === "string" ? value.detailedDescription : undefined,
     authorityRef: value.authorityRef ?? "",
     companyId: value.companyId,
     siteId: value.siteId ?? undefined,
@@ -277,10 +285,49 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
     }
 
     const next = normalizeProjects(await listProjects());
-    setProjects(next);
+    setProjects((prev) => {
+      const previousById = new Map(prev.map((project) => [project.id, project] as const));
+      return sanitizeProjectRelations(
+        next.map((project) => ({
+          ...project,
+          detailedDescription:
+            project.detailedDescription !== undefined
+              ? project.detailedDescription
+              : previousById.get(project.id)?.detailedDescription
+        }))
+      ).projects;
+    });
     clearPersistedValue(PROJECTS_STORAGE_KEY);
     return next;
   }, [authUser]);
+
+  const loadProjectDetail = useCallback(
+    async (id: string) => {
+      if (!authUser) {
+        return null;
+      }
+
+      try {
+        const project = normalizeProject(await apiGetProject(id), 0);
+        if (!project) {
+          return null;
+        }
+
+        setProjects((prev) => {
+          const exists = prev.some((item) => item.id === project.id);
+          const merged = exists
+            ? prev.map((item) => (item.id === project.id ? { ...item, ...project } : item))
+            : [project, ...prev];
+          return sanitizeProjectRelations(merged).projects;
+        });
+        clearPersistedValue(PROJECTS_STORAGE_KEY);
+        return project;
+      } catch {
+        return null;
+      }
+    },
+    [authUser]
+  );
 
   useEffect(() => {
     if (!authUser) {
@@ -320,6 +367,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
           await apiCreateProject({
             ...input,
             shortDescription: input.shortDescription ?? "",
+            detailedDescription: input.detailedDescription ?? "",
             authorityRef: input.authorityRef ?? "",
             internalParticipants,
             participantUserIds:
@@ -393,35 +441,41 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
           input.referenceLegalDocIds !== undefined
             ? normalizeRelationIds(input.referenceLegalDocIds)
             : currentProject.referenceLegalDocIds;
-        const updatedProject = normalizeProjects([
-          await apiUpdateProject(id, {
-            ...input,
-            shortDescription:
-              input.shortDescription !== undefined
-                ? input.shortDescription
-                : currentProject.shortDescription,
-            authorityRef:
-              input.authorityRef !== undefined ? input.authorityRef : currentProject.authorityRef,
-            internalParticipants: nextInternalParticipants,
-            participantUserIds:
-              input.internalParticipants !== undefined || input.participantUserIds !== undefined
-                ? participantUserIds
-                : currentProject.participantUserIds,
-            dependsOnProjectIds: nextDependencyIds,
-            referenceLegalDocIds: nextReferenceLegalDocIds,
-            attachments: Array.isArray(input.attachments)
-              ? input.attachments.map((attachment, index) =>
-                  normalizeAttachment(attachment, `pa-${id}-${index}`)
+        const payload: Partial<ProjectCreateInput> = {
+          ...input,
+          shortDescription:
+            input.shortDescription !== undefined
+              ? input.shortDescription
+              : currentProject.shortDescription,
+          authorityRef:
+            input.authorityRef !== undefined ? input.authorityRef : currentProject.authorityRef,
+          internalParticipants: nextInternalParticipants,
+          participantUserIds:
+            input.internalParticipants !== undefined || input.participantUserIds !== undefined
+              ? participantUserIds
+              : currentProject.participantUserIds,
+          dependsOnProjectIds: nextDependencyIds,
+          referenceLegalDocIds: nextReferenceLegalDocIds,
+          attachments: Array.isArray(input.attachments)
+            ? input.attachments.map((attachment, index) =>
+                normalizeAttachment(attachment, `pa-${id}-${index}`)
+              )
+            : undefined,
+          externalParticipants: Array.isArray(input.externalParticipants)
+            ? input.externalParticipants
+                .map((participant, index) =>
+                  normalizeExternalParticipant(participant, `ep-${id}-${index}`)
                 )
-              : undefined,
-            externalParticipants: Array.isArray(input.externalParticipants)
-              ? input.externalParticipants
-                  .map((participant, index) =>
-                    normalizeExternalParticipant(participant, `ep-${id}-${index}`)
-                  )
-                  .filter((participant): participant is ExternalParticipant => Boolean(participant))
-              : undefined
-          })
+                .filter((participant): participant is ExternalParticipant => Boolean(participant))
+            : undefined
+        };
+
+        if (hasOwnInput(input, "detailedDescription") && input.detailedDescription !== undefined) {
+          payload.detailedDescription = input.detailedDescription;
+        }
+
+        const updatedProject = normalizeProjects([
+          await apiUpdateProject(id, payload)
         ])[0];
 
         if (!updatedProject) {
@@ -729,7 +783,8 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       validateDependencyCandidate,
       replaceProjects,
       resetProjects,
-      reloadProjects
+      reloadProjects,
+      loadProjectDetail
     }),
     [
       addExternalParticipant,
@@ -737,6 +792,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       addProjectAttachment,
       archiveExternalParticipant,
       archiveProject,
+      loadProjectDetail,
       projects,
       reloadProjects,
       removeProjectAttachment,

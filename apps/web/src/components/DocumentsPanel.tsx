@@ -363,11 +363,16 @@ export default function DocumentsPanel({
       {legacyItems?.length ? (
         <div className="documentsLegacy">
           <span className="fieldLabel">{t("documents.legacyBrowser")}</span>
+          <p className="placeholderText">{t("documents.legacyBrowserHint")}</p>
           <div className="fileList">
             {legacyItems.map((item) => (
-              <div key={item.id} className="fileItem">
-                <div>
-                  {item.filename} ({item.sizeKb} KB)
+              <div key={item.id} className="documentsItem">
+                <div className="documentsItemMeta">
+                  <div>{item.filename}</div>
+                  <div className="inlineMeta">
+                    <Badge variant="warning">{t("documents.legacyBrowser")}</Badge>
+                    <span>{item.sizeKb} KB</span>
+                  </div>
                 </div>
               </div>
             ))}

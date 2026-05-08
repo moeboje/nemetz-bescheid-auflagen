@@ -324,6 +324,7 @@ model Project {
   status               ProjectStatus?
   submissionType       ProjectSubmissionType?
   shortDescription     String?
+  detailedDescription  String?                @db.Text
   authorityRef         String?
   companyId            String
   siteId               String?
@@ -428,6 +429,8 @@ model LegalDocument {
   type               String
   title              String
   shortDescription   String?
+  detailedDescription  String?           @db.Text
+  contentSummary       String?           @db.Text
   reference          String?
   issuedAt           String?
   authorityId        String?

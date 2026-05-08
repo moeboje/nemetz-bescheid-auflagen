@@ -15,6 +15,7 @@ export type BootstrapMode =
   | "baseline-20260429103000_obligation_recurrence_external_execution"
   | "baseline-20260502120000_project_access_legacy_decisions"
   | "baseline-20260503143000_branding_assets"
+  | "baseline-20260507120000_project_legal_doc_descriptions_preview"
   | "partial";
 
 type TableRow = {
@@ -450,6 +451,15 @@ const brandingAssetRequirements = {
       onDelete: "SET NULL",
       onUpdate: "CASCADE"
     })
+  ]
+} satisfies SchemaRequirements;
+
+const projectLegalDocDescriptionsPreviewRequirements = {
+  tables: [],
+  columns: [
+    "Project.detailedDescription",
+    "LegalDocument.detailedDescription",
+    "LegalDocument.contentSummary"
   ]
 } satisfies SchemaRequirements;
 
@@ -1333,6 +1343,17 @@ const projectStatusSubmissionTypeBaselineRequirements = mergeRequirements(
 );
 
 export const baselineStages = [
+  {
+    mode: "baseline-20260507120000_project_legal_doc_descriptions_preview",
+    introduced: projectLegalDocDescriptionsPreviewRequirements,
+    requirements: mergeRequirements(
+      projectStatusSubmissionTypeBaselineRequirements,
+      obligationExternalRecurrenceRequirements,
+      projectAccessLegacyDecisionsRequirements,
+      brandingAssetRequirements,
+      projectLegalDocDescriptionsPreviewRequirements
+    )
+  },
   {
     mode: "baseline-20260503143000_branding_assets",
     introduced: brandingAssetRequirements,

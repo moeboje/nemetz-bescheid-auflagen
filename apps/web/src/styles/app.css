@@ -548,6 +548,13 @@
   font-weight: var(--font-weight-medium);
 }
 
+.longText {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
 .obligationEvidenceMeta {
   min-width: 0;
 }
