@@ -40,6 +40,7 @@ type DeadlineEvidenceInput = {
   note?: string;
   outcome?: EvidenceOutcome;
   attachments: AttachmentMeta[];
+  completedAt?: string;
 };
 
 type DeadlineCreateInput = Omit<

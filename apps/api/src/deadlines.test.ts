@@ -347,12 +347,14 @@ describe("Deadlines API", () => {
       method: "POST",
       cookie,
       body: {
-        note: "Done"
+        note: "Done",
+        completedAt: "2026-05-08"
       }
     });
     assert.equal(completeResponse.status, 200);
-    const completePayload = (await completeResponse.json()) as { deadline: { status: string } };
+    const completePayload = (await completeResponse.json()) as { deadline: { status: string; completedAt?: string } };
     assert.equal(completePayload.deadline.status, "DONE");
+    assert.equal(completePayload.deadline.completedAt?.slice(0, 10), "2026-05-08");
 
     const completeSlashResponse = await request(`/deadlines/${completeSlashDeadline.id}/complete/`, {
       method: "POST",

@@ -18,4 +18,5 @@ export type EvidenceInput = {
   note?: string;
   outcome?: EvidenceOutcome;
   attachments: AttachmentMeta[];
+  evidenceDocumentIds?: string[];
 };

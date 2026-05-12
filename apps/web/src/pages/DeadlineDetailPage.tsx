@@ -13,6 +13,7 @@ import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
 import { useUsers } from "../state/UsersStore";
 import { useAuthorization } from "../state/AuthorizationStore";
+import { createEvidenceUploadError, uploadEvidenceDocuments } from "../services/evidenceDocuments";
 
 const statusVariant = {
   OPEN: "warning",
@@ -161,11 +162,11 @@ export default function DeadlineDetailPage() {
               >
                 {t("deadlines.action.reopen")}
               </Button>
-              <Button variant="secondary" onClick={() => setEvidenceModalOpen(true)}>
-                {t("tasks.action.viewEvidence")}
-              </Button>
             </>
           )}
+          <Button variant="secondary" onClick={() => setEvidenceModalOpen(true)}>
+            {t("tasks.action.viewEvidence")}
+          </Button>
           <Button
             disabled={!canEditDeadline}
             onClick={() => setModalOpen(true)}
@@ -232,10 +233,23 @@ export default function DeadlineDetailPage() {
         open={completionModalOpen}
         onClose={() => setCompletionModalOpen(false)}
         header={t("tasks.complete.modal.title")}
-        ownerType="DEADLINE"
-        ownerId={deadline.id}
-        onSave={(input) => {
-          markDeadlineDoneWithEvidence(deadline.id, input);
+        onSave={async (input) => {
+          const completed = await markDeadlineDoneWithEvidence(deadline.id, {
+            note: input.note,
+            outcome: input.outcome,
+            attachments: input.attachments,
+            completedAt: input.completedAt
+          });
+          if (!completed) {
+            throw new Error(t("evidence.documents.completeSaveError"));
+          }
+          if (input.files.length) {
+            try {
+              await uploadEvidenceDocuments("DEADLINE", deadline.id, input.files);
+            } catch {
+              throw createEvidenceUploadError(t("evidence.documents.partialUploadError"));
+            }
+          }
         }}
       />
 
@@ -246,6 +260,8 @@ export default function DeadlineDetailPage() {
         evidence={deadline.evidence ?? []}
         ownerType="DEADLINE"
         ownerId={deadline.id}
+        allowUpload={(permissions.canCompleteTasks || permissions.canEditDeadlines) && canWriteProject}
+        allowManage={canEditDeadline}
       />
     </div>
   );

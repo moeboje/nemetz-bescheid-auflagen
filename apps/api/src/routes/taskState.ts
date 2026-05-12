@@ -5,6 +5,8 @@ import {
   type TaskStateEntry as DbTaskStateEntry
 } from "@prisma/client";
 import { Router, type NextFunction, type Request, type Response } from "express";
+import type { AppConfig } from "../config.js";
+import { resolveExistingStoredDocumentPath } from "../documentStorage.js";
 import {
   applyNoStoreHeaders,
   requireAdminRoutePermissions,
@@ -65,6 +67,7 @@ type TaskStateMapDto = Record<string, TaskStateEntryDto>;
 type AttachmentKindCountsDto = Record<AttachmentKindDto, number>;
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
+const DOCUMENT_FILE_MISSING_ERROR_CODE = "FILE_MISSING";
 
 function hasOwn(value: unknown, key: string) {
   return typeof value === "object" && value !== null && Object.prototype.hasOwnProperty.call(value, key);
@@ -310,6 +313,140 @@ function getMissingRequiredAttachmentKinds(
   return missing;
 }
 
+function hasRequiredEvidenceRequirements(requirements: AttachmentRequirementsDto | undefined) {
+  return Boolean(requirements?.requirePhoto || requirements?.requireDocument || requirements?.requireReport);
+}
+
+function normalizeEvidenceDocumentIds(value: unknown) {
+  if (value === undefined) {
+    return {
+      ok: true as const,
+      ids: []
+    };
+  }
+
+  if (!Array.isArray(value)) {
+    return {
+      ok: false as const,
+      ids: []
+    };
+  }
+
+  const ids: string[] = [];
+  for (const entry of value) {
+    const id = toOptionalTrimmedString(entry);
+    if (!id) {
+      return {
+        ok: false as const,
+        ids: []
+      };
+    }
+    ids.push(id);
+  }
+
+  return {
+    ok: true as const,
+    ids: Array.from(new Set(ids))
+  };
+}
+
+function documentToAttachmentMeta(document: {
+  id: string;
+  filename: string;
+  originalFilename: string | null;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: Date;
+}): AttachmentMetaDto {
+  const filename = document.originalFilename || document.filename;
+  return {
+    id: `doc-${document.id}`,
+    kind: normalizeAttachmentKind(undefined, document.mimeType, filename),
+    filename,
+    sizeKb: Math.max(1, Math.ceil(document.sizeBytes / 1024)),
+    mime: document.mimeType,
+    addedAt: document.createdAt.toISOString().slice(0, 10),
+    storage: "none"
+  };
+}
+
+async function getServerEvidenceAttachments(
+  prisma: DbClient,
+  config: AppConfig,
+  taskInstanceId: string,
+  evidenceDocumentIds: string[]
+) {
+  const documents = await prisma.document.findMany({
+    where: {
+      ownerType: "TASK_EVIDENCE",
+      ownerId: taskInstanceId,
+      isArchived: false
+    },
+    select: {
+      id: true,
+      filename: true,
+      originalFilename: true,
+      mimeType: true,
+      sizeBytes: true,
+      createdAt: true,
+      storagePath: true
+    }
+  });
+
+  const explicitDocumentIdSet = new Set(evidenceDocumentIds);
+  const ownerDocumentIdSet = new Set(documents.map((document) => document.id));
+  if (evidenceDocumentIds.some((documentId) => !ownerDocumentIdSet.has(documentId))) {
+    return {
+      ok: false as const,
+      fileMissing: false,
+      attachments: []
+    };
+  }
+
+  const attachments: AttachmentMetaDto[] = [];
+  let hasMissingFile = false;
+  let hasInvalidStoragePath = false;
+
+  for (const document of documents) {
+    const storageResolution = await resolveExistingStoredDocumentPath(config, document.storagePath);
+    if (!storageResolution.isSafe) {
+      if (explicitDocumentIdSet.has(document.id)) {
+        hasInvalidStoragePath = true;
+      }
+      continue;
+    }
+    if (!storageResolution.absoluteFilePath) {
+      if (explicitDocumentIdSet.has(document.id)) {
+        hasMissingFile = true;
+      }
+      continue;
+    }
+    attachments.push(documentToAttachmentMeta(document));
+  }
+
+  if (hasInvalidStoragePath) {
+    return {
+      ok: false as const,
+      fileMissing: false,
+      attachments: []
+    };
+  }
+
+  if (hasMissingFile) {
+    return {
+      ok: false as const,
+      fileMissing: true,
+      attachments: []
+    };
+  }
+
+  return {
+    ok: true as const,
+    fileMissing: false,
+    attachments
+  };
+}
+
 function flattenEvidenceAttachments(evidence: EvidenceDto[] | undefined) {
   return (evidence ?? []).flatMap((entry) => entry.attachments ?? []);
 }
@@ -337,11 +474,36 @@ async function getObligationRequirementsForTaskInstance(
 
 async function getMissingTaskCompletionRequirements(
   prisma: DbClient,
+  config: AppConfig,
   taskInstanceId: string,
-  attachments: AttachmentMetaDto[]
+  evidenceDocumentIds: string[] = []
 ) {
   const requirements = await getObligationRequirementsForTaskInstance(prisma, taskInstanceId);
-  return getMissingRequiredAttachmentKinds(requirements, attachments);
+  const hasRequirements = hasRequiredEvidenceRequirements(requirements);
+  if (!hasRequirements && evidenceDocumentIds.length === 0) {
+    return {
+      invalidEvidenceDocuments: false,
+      fileMissingEvidenceDocuments: false,
+      missingAttachmentKinds: [] as AttachmentKindDto[]
+    };
+  }
+
+  const serverEvidenceAttachments = await getServerEvidenceAttachments(prisma, config, taskInstanceId, evidenceDocumentIds);
+  if (!serverEvidenceAttachments.ok) {
+    return {
+      invalidEvidenceDocuments: !serverEvidenceAttachments.fileMissing,
+      fileMissingEvidenceDocuments: serverEvidenceAttachments.fileMissing,
+      missingAttachmentKinds: [] as AttachmentKindDto[]
+    };
+  }
+
+  return {
+    invalidEvidenceDocuments: false,
+    fileMissingEvidenceDocuments: false,
+    missingAttachmentKinds: hasRequirements
+      ? getMissingRequiredAttachmentKinds(requirements, serverEvidenceAttachments.attachments)
+      : []
+  };
 }
 
 function sendMissingEvidenceRequirementsResponse(res: Response, missingAttachmentKinds: AttachmentKindDto[]) {
@@ -349,6 +511,21 @@ function sendMissingEvidenceRequirementsResponse(res: Response, missingAttachmen
     ok: false,
     message: "Missing required evidence attachments.",
     missingAttachmentKinds
+  });
+}
+
+function sendInvalidEvidenceDocumentsResponse(res: Response) {
+  res.status(400).json({
+    ok: false,
+    message: "Invalid evidence documents."
+  });
+}
+
+function sendMissingEvidenceDocumentFileResponse(res: Response) {
+  res.status(400).json({
+    ok: false,
+    errorCode: DOCUMENT_FILE_MISSING_ERROR_CODE,
+    message: "Evidence document content missing."
   });
 }
 
@@ -695,7 +872,7 @@ async function reconcileLegacyTaskStateInDb(
   });
 }
 
-export function createTaskStateRouter(prisma: PrismaClient) {
+export function createTaskStateRouter(prisma: PrismaClient, config: AppConfig) {
   const router = Router();
 
   router.get("/task-state", async (req: Request, res: Response, next: NextFunction) => {
@@ -794,13 +971,21 @@ export function createTaskStateRouter(prisma: PrismaClient) {
       const existing = await findTaskStateEntry(prisma, taskInstanceId);
       const previous = existing ? toTaskStateEntryDto(existing) : undefined;
       if (req.body.status === "DONE") {
-        const missingAttachmentKinds = await getMissingTaskCompletionRequirements(
+        const requirementsResult = await getMissingTaskCompletionRequirements(
           prisma,
-          taskInstanceId,
-          flattenEvidenceAttachments(previous?.evidence)
+          config,
+          taskInstanceId
         );
-        if (missingAttachmentKinds.length) {
-          sendMissingEvidenceRequirementsResponse(res, missingAttachmentKinds);
+        if (requirementsResult.invalidEvidenceDocuments) {
+          sendInvalidEvidenceDocumentsResponse(res);
+          return;
+        }
+        if (requirementsResult.fileMissingEvidenceDocuments) {
+          sendMissingEvidenceDocumentFileResponse(res);
+          return;
+        }
+        if (requirementsResult.missingAttachmentKinds.length) {
+          sendMissingEvidenceRequirementsResponse(res, requirementsResult.missingAttachmentKinds);
           return;
         }
       }
@@ -877,13 +1062,28 @@ export function createTaskStateRouter(prisma: PrismaClient) {
         createdByUserId: user.id,
         createdByLabel
       };
-      const missingAttachmentKinds = await getMissingTaskCompletionRequirements(
+      const evidenceDocumentIds = normalizeEvidenceDocumentIds(req.body?.evidenceDocumentIds);
+      if (!evidenceDocumentIds.ok) {
+        sendInvalidEvidenceDocumentsResponse(res);
+        return;
+      }
+
+      const requirementsResult = await getMissingTaskCompletionRequirements(
         prisma,
+        config,
         taskInstanceId,
-        [...evidenceEntry.attachments, ...flattenEvidenceAttachments(previous?.evidence)]
+        evidenceDocumentIds.ids
       );
-      if (missingAttachmentKinds.length) {
-        sendMissingEvidenceRequirementsResponse(res, missingAttachmentKinds);
+      if (requirementsResult.invalidEvidenceDocuments) {
+        sendInvalidEvidenceDocumentsResponse(res);
+        return;
+      }
+      if (requirementsResult.fileMissingEvidenceDocuments) {
+        sendMissingEvidenceDocumentFileResponse(res);
+        return;
+      }
+      if (requirementsResult.missingAttachmentKinds.length) {
+        sendMissingEvidenceRequirementsResponse(res, requirementsResult.missingAttachmentKinds);
         return;
       }
 
@@ -957,13 +1157,28 @@ export function createTaskStateRouter(prisma: PrismaClient) {
         createdByUserId: user.id,
         createdByLabel
       };
-      const missingAttachmentKinds = await getMissingTaskCompletionRequirements(
+      const evidenceDocumentIds = normalizeEvidenceDocumentIds(req.body?.evidenceDocumentIds);
+      if (!evidenceDocumentIds.ok) {
+        sendInvalidEvidenceDocumentsResponse(res);
+        return;
+      }
+
+      const requirementsResult = await getMissingTaskCompletionRequirements(
         prisma,
+        config,
         taskInstanceId,
-        [...evidenceEntry.attachments, ...flattenEvidenceAttachments(previous?.evidence)]
+        evidenceDocumentIds.ids
       );
-      if (missingAttachmentKinds.length) {
-        sendMissingEvidenceRequirementsResponse(res, missingAttachmentKinds);
+      if (requirementsResult.invalidEvidenceDocuments) {
+        sendInvalidEvidenceDocumentsResponse(res);
+        return;
+      }
+      if (requirementsResult.fileMissingEvidenceDocuments) {
+        sendMissingEvidenceDocumentFileResponse(res);
+        return;
+      }
+      if (requirementsResult.missingAttachmentKinds.length) {
+        sendMissingEvidenceRequirementsResponse(res, requirementsResult.missingAttachmentKinds);
         return;
       }
 

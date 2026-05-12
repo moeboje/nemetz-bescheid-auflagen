@@ -1,18 +1,26 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Button, Modal, Select } from "@nemetz/ui";
 import { t } from "../i18n";
-import { validateEvidenceRequirements } from "../services/evidenceValidation";
+import {
+  evidenceAttachmentsForValidation,
+  persistedEvidenceDocumentIdsForCompletionSubmit,
+  taskEvidenceDocumentsForOwner,
+  validateEvidenceRequirements
+} from "../services/evidenceValidation";
+import { listEvidenceDocuments } from "../services/evidenceDocuments";
 import { useObligations } from "../state/ObligationsStore";
 import type { Task } from "../state/TasksStore";
 import type { AttachmentMeta } from "../types/attachments";
 import type { EvidenceOutcome } from "../types/evidence";
-import DocumentsPanel from "./DocumentsPanel";
-import EvidenceUploader from "./EvidenceUploader";
+import type { DocumentDto } from "../api/documents";
+import PendingDocumentsPicker from "./PendingDocumentsPicker";
 
 export type TaskCompleteInput = {
   outcome?: EvidenceOutcome;
   note?: string;
   attachments: AttachmentMeta[];
+  files: File[];
+  evidenceDocumentIds: string[];
 };
 
 type TaskCompleteModalProps = {
@@ -38,9 +46,13 @@ export default function TaskCompleteModal({
   const { obligations } = useObligations();
   const [outcome, setOutcome] = useState<string>("OK");
   const [note, setNote] = useState("");
-  const [attachments, setAttachments] = useState<AttachmentMeta[]>([]);
+  const [files, setFiles] = useState<File[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [completionSavedWithUploadError, setCompletionSavedWithUploadError] = useState(false);
+  const [persistedEvidenceDocuments, setPersistedEvidenceDocuments] = useState<DocumentDto[]>([]);
+  const [persistedEvidenceLoading, setPersistedEvidenceLoading] = useState(false);
+  const [persistedEvidenceLoadError, setPersistedEvidenceLoadError] = useState(false);
 
   useEffect(() => {
     if (!open) {
@@ -48,10 +60,46 @@ export default function TaskCompleteModal({
     }
     setOutcome("OK");
     setNote("");
-    setAttachments([]);
+    setFiles([]);
     setIsSaving(false);
     setSaveError("");
+    setCompletionSavedWithUploadError(false);
+    setPersistedEvidenceDocuments([]);
+    setPersistedEvidenceLoading(false);
+    setPersistedEvidenceLoadError(false);
   }, [open, task?.id]);
+
+  useEffect(() => {
+    if (!open || !task || task.type !== "OBLIGATION") {
+      return;
+    }
+
+    let cancelled = false;
+    setPersistedEvidenceLoading(true);
+    setPersistedEvidenceLoadError(false);
+    setPersistedEvidenceDocuments([]);
+
+    listEvidenceDocuments("TASK_EVIDENCE", task.id)
+      .then((documents) => {
+        if (!cancelled) {
+          setPersistedEvidenceDocuments(documents);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPersistedEvidenceLoadError(true);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPersistedEvidenceLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, task?.id, task?.type]);
 
   const obligationRequirements = useMemo(() => {
     if (!task || task.type !== "OBLIGATION") {
@@ -61,9 +109,66 @@ export default function TaskCompleteModal({
     return obligation?.evidenceRequirements ?? task.requiredEvidence;
   }, [obligations, task]);
 
+  const hasRequiredEvidence = Boolean(
+    obligationRequirements?.requirePhoto ||
+      obligationRequirements?.requireDocument ||
+      obligationRequirements?.requireReport
+  );
+
+  const validPersistedEvidenceDocuments = useMemo(
+    () => taskEvidenceDocumentsForOwner(persistedEvidenceDocuments, task?.type === "OBLIGATION" ? task.id : undefined),
+    [persistedEvidenceDocuments, task?.id, task?.type]
+  );
+
+  const validationAttachments = useMemo(
+    () =>
+      evidenceAttachmentsForValidation({
+        persistedDocuments: validPersistedEvidenceDocuments,
+        pendingFiles: files
+      }),
+    [files, validPersistedEvidenceDocuments]
+  );
+
+  const evidenceDocumentIds = useMemo(
+    () => persistedEvidenceDocumentIdsForCompletionSubmit(validPersistedEvidenceDocuments),
+    [validPersistedEvidenceDocuments]
+  );
+
   const validation = useMemo(
-    () => validateEvidenceRequirements(obligationRequirements, attachments),
-    [attachments, obligationRequirements]
+    () => validateEvidenceRequirements(obligationRequirements, validationAttachments),
+    [obligationRequirements, validationAttachments]
+  );
+
+  const requiredRows = useMemo(
+    () =>
+      [
+        {
+          key: "PHOTO",
+          enabled: Boolean(obligationRequirements?.requirePhoto),
+          current: validation.counts.photos,
+          label: t("evidence.required.photo")
+        },
+        {
+          key: "DOCUMENT",
+          enabled: Boolean(obligationRequirements?.requireDocument),
+          current: validation.counts.docs,
+          label: t("evidence.required.document")
+        },
+        {
+          key: "REPORT",
+          enabled: Boolean(obligationRequirements?.requireReport),
+          current: validation.counts.reports,
+          label: t("evidence.required.report")
+        }
+      ].filter((row) => row.enabled),
+    [
+      obligationRequirements?.requireDocument,
+      obligationRequirements?.requirePhoto,
+      obligationRequirements?.requireReport,
+      validation.counts.docs,
+      validation.counts.photos,
+      validation.counts.reports
+    ]
   );
 
   const errors = useMemo(
@@ -71,10 +176,20 @@ export default function TaskCompleteModal({
     [validation.errors]
   );
 
-  const saveDisabled = isSaving || !task || (task.type === "OBLIGATION" && !validation.ok);
+  const evidenceLoadBlocksSave = Boolean(
+    task?.type === "OBLIGATION" &&
+      hasRequiredEvidence &&
+      (persistedEvidenceLoading || persistedEvidenceLoadError)
+  );
+  const saveDisabled =
+    isSaving ||
+    completionSavedWithUploadError ||
+    !task ||
+    evidenceLoadBlocksSave ||
+    (task.type === "OBLIGATION" && !validation.ok);
 
   const handleSave = async () => {
-    if (!task || (task.type === "OBLIGATION" && !validation.ok)) {
+    if (!task || evidenceLoadBlocksSave || (task.type === "OBLIGATION" && !validation.ok)) {
       return;
     }
     setIsSaving(true);
@@ -83,11 +198,21 @@ export default function TaskCompleteModal({
       await onSaved({
         outcome: normalizeOutcome(outcome),
         note: note.trim() || undefined,
-        attachments
+        attachments: [],
+        files,
+        evidenceDocumentIds
       });
       onClose();
-    } catch {
-      setSaveError(t("tasks.complete.saveError"));
+    } catch (error) {
+      const completionWasSaved =
+        error instanceof Error &&
+        error.name === "EvidenceUploadError" &&
+        (error as Error & { completionSaved?: boolean }).completionSaved !== false;
+      if (completionWasSaved) {
+        setFiles([]);
+        setCompletionSavedWithUploadError(true);
+      }
+      setSaveError(error instanceof Error && error.message ? error.message : t("tasks.complete.saveError"));
     } finally {
       setIsSaving(false);
     }
@@ -104,11 +229,13 @@ export default function TaskCompleteModal({
       footer={
         <div className="modalFooter taskCompleteModalFooter">
           <Button variant="secondary" onClick={onClose}>
-            {t("common.cancel")}
+            {completionSavedWithUploadError ? t("common.close") : t("common.cancel")}
           </Button>
-          <Button onClick={handleSave} disabled={saveDisabled}>
-            {t("common.save")}
-          </Button>
+          {completionSavedWithUploadError ? null : (
+            <Button onClick={handleSave} disabled={saveDisabled}>
+              {isSaving ? t("documents.loading") : t("common.save")}
+            </Button>
+          )}
         </div>
       }
     >
@@ -137,19 +264,35 @@ export default function TaskCompleteModal({
           />
         </div>
 
-        <div className="formField">
-          <EvidenceUploader
-            value={attachments}
-            onChange={setAttachments}
-            required={task?.type === "OBLIGATION" ? obligationRequirements : undefined}
-            errors={task?.type === "OBLIGATION" ? errors : undefined}
-            mode="edit"
-          />
-        </div>
-        {saveError ? <p className="validationText">{saveError}</p> : null}
-        {task ? (
-          <DocumentsPanel ownerType="TASK_EVIDENCE" ownerId={task.id} titleKey="documents.title" />
+        {task?.type === "OBLIGATION" && requiredRows.length ? (
+          <div className="evidenceRequirementBox">
+            <div className="fieldLabel">{t("evidence.requirements.title")}</div>
+            <div className="evidenceRequirementList">
+              {requiredRows.map((row) => (
+                <div key={row.key} className={row.current < 1 ? "validationText" : "placeholderText"}>
+                  {row.label}: {row.current}/1
+                </div>
+              ))}
+            </div>
+          </div>
         ) : null}
+        <PendingDocumentsPicker files={files} onChange={setFiles} disabled={isSaving || completionSavedWithUploadError} />
+        {task?.type === "OBLIGATION" && hasRequiredEvidence && persistedEvidenceLoading ? (
+          <p className="placeholderText">{t("documents.loading")}</p>
+        ) : null}
+        {task?.type === "OBLIGATION" && hasRequiredEvidence && persistedEvidenceLoadError ? (
+          <p className="validationText">{t("documents.error")}</p>
+        ) : null}
+        {task?.type === "OBLIGATION" && errors.length ? (
+          <ul className="validationList">
+            {errors.map((error) => (
+              <li key={error} className="validationText">
+                {error}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {saveError ? <p className="validationText">{saveError}</p> : null}
       </div>
     </Modal>
   );

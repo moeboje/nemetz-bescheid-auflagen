@@ -26,6 +26,7 @@ import { useUsers } from "../state/UsersStore";
 import { useAuthorization } from "../state/AuthorizationStore";
 import EvidenceCompletionModal from "../components/EvidenceCompletionModal";
 import EvidenceListModal from "../components/EvidenceListModal";
+import { createEvidenceUploadError, uploadEvidenceDocuments } from "../services/evidenceDocuments";
 
 const statusVariant = {
   OPEN: "warning",
@@ -88,6 +89,7 @@ export default function DeadlinesPage() {
     period: "",
     showArchived: false
   });
+  const evidenceDeadline = deadlines.find((deadline) => deadline.id === evidenceDeadlineId);
 
   const handleCalendarExport = () => {
     exportDeadlinesToIcs(rows, {
@@ -474,20 +476,31 @@ export default function DeadlinesPage() {
                 ) : null}
               </>
             ) : (
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={!permissions.canCompleteTasks || !row.projectCanWrite}
-                onClick={() => {
-                  if (!runtimeConfig.features.enableEvidence) {
-                    markDeadlineDone(row.id);
-                    return;
-                  }
-                  setCompletionDeadlineId(row.id);
-                }}
-              >
-                {t("deadlines.action.markDone")}
-              </Button>
+              <>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!permissions.canCompleteTasks || !row.projectCanWrite}
+                  onClick={() => {
+                    if (!runtimeConfig.features.enableEvidence) {
+                      markDeadlineDone(row.id);
+                      return;
+                    }
+                    setCompletionDeadlineId(row.id);
+                  }}
+                >
+                  {t("deadlines.action.markDone")}
+                </Button>
+                {runtimeConfig.features.enableEvidence ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setEvidenceDeadlineId(row.id)}
+                  >
+                    {t("tasks.action.viewEvidence")}
+                  </Button>
+                ) : null}
+              </>
             )}
             <IconButton
               ariaLabel={t("common.view")}
@@ -525,13 +538,26 @@ export default function DeadlinesPage() {
           open={Boolean(completionDeadlineId)}
           onClose={() => setCompletionDeadlineId(null)}
           header={t("tasks.complete.modal.title")}
-          ownerType="DEADLINE"
-          ownerId={completionDeadlineId ?? ""}
-          onSave={(input) => {
+          onSave={async (input) => {
             if (!completionDeadlineId) {
               return;
             }
-            markDeadlineDoneWithEvidence(completionDeadlineId, input);
+            const completed = await markDeadlineDoneWithEvidence(completionDeadlineId, {
+              note: input.note,
+              outcome: input.outcome,
+              attachments: input.attachments,
+              completedAt: input.completedAt
+            });
+            if (!completed) {
+              throw new Error(t("evidence.documents.completeSaveError"));
+            }
+            if (input.files.length) {
+              try {
+                await uploadEvidenceDocuments("DEADLINE", completionDeadlineId, input.files);
+              } catch {
+                throw createEvidenceUploadError(t("evidence.documents.partialUploadError"));
+              }
+            }
           }}
         />
       ) : null}
@@ -541,9 +567,14 @@ export default function DeadlinesPage() {
           open={Boolean(evidenceDeadlineId)}
           onClose={() => setEvidenceDeadlineId(null)}
           title={t("tasks.evidence.modal.title")}
-          evidence={deadlines.find((deadline) => deadline.id === evidenceDeadlineId)?.evidence ?? []}
+          evidence={evidenceDeadline?.evidence ?? []}
           ownerType="DEADLINE"
           ownerId={evidenceDeadlineId ?? ""}
+          allowUpload={Boolean(
+            evidenceDeadline?.currentUserCanWriteProject &&
+              (permissions.canCompleteTasks || permissions.canEditDeadlines)
+          )}
+          allowManage={Boolean(evidenceDeadline?.currentUserCanWriteProject && permissions.canEditDeadlines)}
         />
       ) : null}
     </div>

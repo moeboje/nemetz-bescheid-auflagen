@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import fs from "node:fs/promises";
 import { after, before, beforeEach, describe, it } from "node:test";
 import type { AddressInfo } from "node:net";
 import { createApp } from "./app.js";
 import { resolveDatabaseUrl, type AppConfig } from "./config.js";
+import { resolveStoredDocumentPath } from "./documentStorage.js";
 import { prisma } from "./prisma.js";
 import { hashPassword } from "./security.js";
 
 let baseUrl = "";
 let server: ReturnType<ReturnType<typeof createApp>["listen"]>;
 let requestCounter = 0;
+let appConfig: AppConfig;
 
 async function request(pathname: string, options: { method?: string; body?: unknown; cookie?: string } = {}) {
   const headers: Record<string, string> = {};
@@ -156,6 +159,43 @@ function attachment(kind: "PHOTO" | "DOCUMENT" | "REPORT", filename: string, mim
   };
 }
 
+async function uploadEvidenceDocument(
+  cookie: string,
+  ownerId: string,
+  filename = "nachweis.pdf",
+  mimeType = "application/pdf"
+) {
+  requestCounter += 1;
+  const form = new FormData();
+  form.set("ownerType", "TASK_EVIDENCE");
+  form.set("ownerId", ownerId);
+  form.set("file", new Blob(["task-evidence-content"], { type: mimeType }), filename);
+
+  const headers = new Headers();
+  headers.set("X-Forwarded-For", `127.0.0.${(requestCounter % 200) + 1}`);
+  headers.set("Cookie", cookie);
+
+  return fetch(`${baseUrl}/documents`, {
+    method: "POST",
+    headers,
+    body: form
+  });
+}
+
+async function removeUploadedDocumentFile(documentId: string) {
+  const document = await prisma.document.findUniqueOrThrow({
+    where: {
+      id: documentId
+    },
+    select: {
+      storagePath: true
+    }
+  });
+  const absoluteFilePath = resolveStoredDocumentPath(appConfig, document.storagePath);
+  assert.ok(absoluteFilePath);
+  await fs.rm(absoluteFilePath, { force: true });
+}
+
 describe("Task state evidence requirements", () => {
   before(async () => {
     const config: AppConfig = {
@@ -191,6 +231,7 @@ describe("Task state evidence requirements", () => {
       documentsStorageDir: "storage",
       documentsMaxUploadBytes: 20 * 1024 * 1024
     };
+    appConfig = config;
 
     const app = createApp(config);
     server = app.listen(0);
@@ -209,6 +250,7 @@ describe("Task state evidence requirements", () => {
     await prisma.session.deleteMany();
     await prisma.auditLog.deleteMany();
     await prisma.taskStateEntry.deleteMany();
+    await prisma.document.deleteMany();
     await prisma.obligation.deleteMany();
     await prisma.legalDocument.deleteMany();
     await prisma.project.deleteMany();
@@ -288,8 +330,8 @@ describe("Task state evidence requirements", () => {
     assert.deepEqual(await domainNoAccessList.json(), {});
   });
 
-  it("accepts completion with photo and report for photo and document requirements", async () => {
-    const user = await createUser("task-state-accept@example.com", "ValidPassword1!");
+  it("rejects completion with only client-side attachments for required evidence", async () => {
+    const user = await createUser("task-state-client-only-reject@example.com", "ValidPassword1!");
     const obligation = await seedObligation({ requirePhoto: true, requireDocument: true }, user.id);
     const cookie = await login(user.email, "ValidPassword1!");
     const id = taskInstanceId(obligation.id);
@@ -307,15 +349,352 @@ describe("Task state evidence requirements", () => {
       }
     });
 
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { missingAttachmentKinds: string[] };
+    assert.deepEqual(payload.missingAttachmentKinds, ["PHOTO", "DOCUMENT"]);
+    assert.equal(await prisma.taskStateEntry.findUnique({ where: { taskInstanceId: id } }), null);
+  });
+
+  it("accepts completion with a server-side TASK_EVIDENCE document for a document requirement", async () => {
+    const user = await createUser("task-state-server-doc-accept@example.com", "ValidPassword1!");
+    const obligation = await seedObligation({ requireDocument: true }, user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const uploadResponse = await uploadEvidenceDocument(cookie, id, "nachweis.pdf", "application/pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+
+    const response = await request(`/task-state/${encodeURIComponent(id)}/complete`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        attachments: [],
+        evidenceDocumentIds: [uploadPayload.document.id]
+      }
+    });
+
     assert.equal(response.status, 200);
-    const payload = (await response.json()) as {
-      taskStateEntry: { status: string; evidence: Array<{ attachments: Array<{ kind: string }> }> };
-    };
+    const payload = (await response.json()) as { taskStateEntry: { status: string } };
     assert.equal(payload.taskStateEntry.status, "DONE");
-    assert.deepEqual(
-      payload.taskStateEntry.evidence[0].attachments.map((item) => item.kind).sort(),
-      ["PHOTO", "REPORT"]
-    );
+  });
+
+  it("accepts completion with an existing server-side TASK_EVIDENCE document for a document requirement", async () => {
+    const user = await createUser("task-state-server-doc-existing@example.com", "ValidPassword1!");
+    const obligation = await seedObligation({ requireDocument: true }, user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const uploadResponse = await uploadEvidenceDocument(cookie, id, "existing-nachweis.pdf", "application/pdf");
+    assert.equal(uploadResponse.status, 201);
+
+    const response = await request(`/task-state/${encodeURIComponent(id)}/complete`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        attachments: []
+      }
+    });
+
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as { taskStateEntry: { status: string } };
+    assert.equal(payload.taskStateEntry.status, "DONE");
+  });
+
+  it("rejects completion with an explicit TASK_EVIDENCE document whose file is missing", async () => {
+    const user = await createUser("task-state-server-doc-file-missing-explicit@example.com", "ValidPassword1!");
+    const obligation = await seedObligation({ requireDocument: true }, user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const uploadResponse = await uploadEvidenceDocument(cookie, id, "missing-file-nachweis.pdf", "application/pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    await removeUploadedDocumentFile(uploadPayload.document.id);
+
+    const response = await request(`/task-state/${encodeURIComponent(id)}/complete`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        attachments: [],
+        evidenceDocumentIds: [uploadPayload.document.id]
+      }
+    });
+
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { errorCode?: string };
+    assert.equal(payload.errorCode, "FILE_MISSING");
+    assert.equal(await prisma.taskStateEntry.findUnique({ where: { taskInstanceId: id } }), null);
+  });
+
+  it("does not count existing TASK_EVIDENCE metadata when the backing file is missing", async () => {
+    const user = await createUser("task-state-server-doc-file-missing-existing@example.com", "ValidPassword1!");
+    const obligation = await seedObligation({ requireDocument: true }, user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const uploadResponse = await uploadEvidenceDocument(cookie, id, "missing-existing-nachweis.pdf", "application/pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    await removeUploadedDocumentFile(uploadPayload.document.id);
+
+    const response = await request(`/task-state/${encodeURIComponent(id)}/complete`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        attachments: []
+      }
+    });
+
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { missingAttachmentKinds: string[] };
+    assert.deepEqual(payload.missingAttachmentKinds, ["DOCUMENT"]);
+    assert.equal(await prisma.taskStateEntry.findUnique({ where: { taskInstanceId: id } }), null);
+  });
+
+  it("accepts a new valid evidence document when an existing TASK_EVIDENCE file is missing", async () => {
+    const user = await createUser("task-state-server-doc-missing-existing-valid-new@example.com", "ValidPassword1!");
+    const obligation = await seedObligation({ requireDocument: true }, user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const missingUploadResponse = await uploadEvidenceDocument(cookie, id, "missing-existing.pdf", "application/pdf");
+    assert.equal(missingUploadResponse.status, 201);
+    const missingUploadPayload = (await missingUploadResponse.json()) as { document: { id: string } };
+    await removeUploadedDocumentFile(missingUploadPayload.document.id);
+
+    const validUploadResponse = await uploadEvidenceDocument(cookie, id, "new-valid.pdf", "application/pdf");
+    assert.equal(validUploadResponse.status, 201);
+    const validUploadPayload = (await validUploadResponse.json()) as { document: { id: string } };
+
+    const response = await request(`/task-state/${encodeURIComponent(id)}/complete`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        attachments: [],
+        evidenceDocumentIds: [validUploadPayload.document.id]
+      }
+    });
+
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as { taskStateEntry: { status: string } };
+    assert.equal(payload.taskStateEntry.status, "DONE");
+  });
+
+  it("accepts explicit document evidence together with existing valid photo evidence", async () => {
+    const user = await createUser("task-state-server-doc-existing-photo-explicit-doc@example.com", "ValidPassword1!");
+    const obligation = await seedObligation({ requirePhoto: true, requireDocument: true }, user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const photoUploadResponse = await uploadEvidenceDocument(cookie, id, "existing-photo.jpg", "image/jpeg");
+    assert.equal(photoUploadResponse.status, 201);
+
+    const documentUploadResponse = await uploadEvidenceDocument(cookie, id, "new-document.pdf", "application/pdf");
+    assert.equal(documentUploadResponse.status, 201);
+    const documentUploadPayload = (await documentUploadResponse.json()) as { document: { id: string } };
+
+    const response = await request(`/task-state/${encodeURIComponent(id)}/complete`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        attachments: [],
+        evidenceDocumentIds: [documentUploadPayload.document.id]
+      }
+    });
+
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as { taskStateEntry: { status: string } };
+    assert.equal(payload.taskStateEntry.status, "DONE");
+  });
+
+  it("accepts explicit photo evidence together with existing valid document evidence", async () => {
+    const user = await createUser("task-state-server-doc-existing-doc-explicit-photo@example.com", "ValidPassword1!");
+    const obligation = await seedObligation({ requirePhoto: true, requireDocument: true }, user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const documentUploadResponse = await uploadEvidenceDocument(cookie, id, "existing-document.pdf", "application/pdf");
+    assert.equal(documentUploadResponse.status, 201);
+
+    const photoUploadResponse = await uploadEvidenceDocument(cookie, id, "new-photo.jpg", "image/jpeg");
+    assert.equal(photoUploadResponse.status, 201);
+    const photoUploadPayload = (await photoUploadResponse.json()) as { document: { id: string } };
+
+    const response = await request(`/task-state/${encodeURIComponent(id)}/complete`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        attachments: [],
+        evidenceDocumentIds: [photoUploadPayload.document.id]
+      }
+    });
+
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as { taskStateEntry: { status: string } };
+    assert.equal(payload.taskStateEntry.status, "DONE");
+  });
+
+  it("does not count missing existing photo evidence when explicit document evidence is valid", async () => {
+    const user = await createUser("task-state-server-doc-missing-photo-explicit-doc@example.com", "ValidPassword1!");
+    const obligation = await seedObligation({ requirePhoto: true, requireDocument: true }, user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const missingPhotoUploadResponse = await uploadEvidenceDocument(cookie, id, "missing-photo.jpg", "image/jpeg");
+    assert.equal(missingPhotoUploadResponse.status, 201);
+    const missingPhotoUploadPayload = (await missingPhotoUploadResponse.json()) as { document: { id: string } };
+    await removeUploadedDocumentFile(missingPhotoUploadPayload.document.id);
+
+    const documentUploadResponse = await uploadEvidenceDocument(cookie, id, "new-document.pdf", "application/pdf");
+    assert.equal(documentUploadResponse.status, 201);
+    const documentUploadPayload = (await documentUploadResponse.json()) as { document: { id: string } };
+
+    const response = await request(`/task-state/${encodeURIComponent(id)}/complete`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        attachments: [],
+        evidenceDocumentIds: [documentUploadPayload.document.id]
+      }
+    });
+
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { missingAttachmentKinds: string[] };
+    assert.deepEqual(payload.missingAttachmentKinds, ["PHOTO"]);
+    assert.equal(await prisma.taskStateEntry.findUnique({ where: { taskInstanceId: id } }), null);
+  });
+
+  it("rejects completion when the server-side evidence document has the wrong kind", async () => {
+    const user = await createUser("task-state-server-doc-kind-reject@example.com", "ValidPassword1!");
+    const obligation = await seedObligation({ requireDocument: true }, user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const uploadResponse = await uploadEvidenceDocument(cookie, id, "foto.jpg", "image/jpeg");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+
+    const response = await request(`/task-state/${encodeURIComponent(id)}/complete`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        attachments: [],
+        evidenceDocumentIds: [uploadPayload.document.id]
+      }
+    });
+
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { missingAttachmentKinds: string[] };
+    assert.deepEqual(payload.missingAttachmentKinds, ["DOCUMENT"]);
+    assert.equal(await prisma.taskStateEntry.findUnique({ where: { taskInstanceId: id } }), null);
+  });
+
+  it("rejects completion with server-side evidence from another task owner", async () => {
+    const user = await createUser("task-state-server-doc-foreign-reject@example.com", "ValidPassword1!");
+    const sourceObligation = await seedObligation({ requireDocument: true }, user.id);
+    requestCounter += 1;
+    const targetObligation = await seedObligation({ requireDocument: true }, user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const sourceId = taskInstanceId(sourceObligation.id);
+    const targetId = taskInstanceId(targetObligation.id);
+
+    const uploadResponse = await uploadEvidenceDocument(cookie, sourceId, "fremder-nachweis.pdf", "application/pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+
+    const response = await request(`/task-state/${encodeURIComponent(targetId)}/complete`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        attachments: [],
+        evidenceDocumentIds: [uploadPayload.document.id]
+      }
+    });
+
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { message: string };
+    assert.equal(payload.message, "Invalid evidence documents.");
+    assert.equal(await prisma.taskStateEntry.findUnique({ where: { taskInstanceId: targetId } }), null);
+  });
+
+  it("rejects completion with an archived server-side evidence document", async () => {
+    const user = await createUser("task-state-server-doc-archived-reject@example.com", "ValidPassword1!");
+    const obligation = await seedObligation({ requireDocument: true }, user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const uploadResponse = await uploadEvidenceDocument(cookie, id, "archivierter-nachweis.pdf", "application/pdf");
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    await prisma.document.update({
+      where: {
+        id: uploadPayload.document.id
+      },
+      data: {
+        isArchived: true
+      }
+    });
+
+    const response = await request(`/task-state/${encodeURIComponent(id)}/complete`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        attachments: [],
+        evidenceDocumentIds: [uploadPayload.document.id]
+      }
+    });
+
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { message: string };
+    assert.equal(payload.message, "Invalid evidence documents.");
+    assert.equal(await prisma.taskStateEntry.findUnique({ where: { taskInstanceId: id } }), null);
+  });
+
+  it("rejects completion with an evidence document id from the wrong owner type", async () => {
+    const user = await createUser("task-state-server-doc-owner-type-reject@example.com", "ValidPassword1!");
+    const obligation = await seedObligation({ requireDocument: true }, user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+    const id = taskInstanceId(obligation.id);
+
+    const wrongOwnerDocument = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: id,
+        filename: "wrong-owner-type.pdf",
+        originalFilename: "wrong-owner-type.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 12,
+        storagePath: "documents/test/wrong-owner-type.pdf",
+        sha256: "wrong-owner-type"
+      }
+    });
+
+    const response = await request(`/task-state/${encodeURIComponent(id)}/complete`, {
+      method: "POST",
+      cookie,
+      body: {
+        outcome: "OK",
+        attachments: [],
+        evidenceDocumentIds: [wrongOwnerDocument.id]
+      }
+    });
+
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { message: string };
+    assert.equal(payload.message, "Invalid evidence documents.");
+    assert.equal(await prisma.taskStateEntry.findUnique({ where: { taskInstanceId: id } }), null);
   });
 
   it("rejects completion when a required document is missing", async () => {

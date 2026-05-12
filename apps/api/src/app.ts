@@ -94,6 +94,11 @@ import {
   logPerfRequestError,
   startPerfRuntimeLogging
 } from "./perf.js";
+import {
+  createDocumentStoragePath,
+  resolveExistingStoredDocumentPath,
+  resolveStoredDocumentPath
+} from "./documentStorage.js";
 
 const SESSION_COOKIE_NAME = "nemetz_session";
 const DEFAULT_ADMIN_PAGE = 1;
@@ -135,7 +140,6 @@ const BRANDING_ASSET_CONFIG = {
 const DEFAULT_EXTERNAL_ORG_TYPE = "Firma";
 const MAX_COMMENT_ENTITY_ID_LENGTH = 200;
 const MAX_COMMENT_BODY_LENGTH = 10_000;
-const LEGACY_DOCUMENT_STORAGE_PREFIX = "uploads/";
 const DOCUMENT_NOT_FOUND_ERROR_CODE = "DOCUMENT_NOT_FOUND";
 const DOCUMENT_FILE_MISSING_ERROR_CODE = "FILE_MISSING";
 const INVALID_DOCUMENT_STORAGE_PATH_ERROR_CODE = "INVALID_STORAGE_PATH";
@@ -332,6 +336,8 @@ type DocumentDto = {
   mimeType: string;
   sizeBytes: number;
   createdAt: string;
+  createdByUserId?: string;
+  createdByLabel?: string;
 };
 
 type BrandingAssetMetadataDto = {
@@ -926,7 +932,15 @@ function toDocumentDto(document: {
   mimeType: string;
   sizeBytes: number;
   createdAt: Date;
+  createdByUserId?: string | null;
+  createdByUser?: {
+    firstName: string;
+    lastName: string;
+  } | null;
 }): DocumentDto {
+  const createdByLabel = document.createdByUser
+    ? `${document.createdByUser.firstName} ${document.createdByUser.lastName}`.trim()
+    : "";
   return {
     id: document.id,
     ownerType: document.ownerType,
@@ -935,7 +949,9 @@ function toDocumentDto(document: {
     originalFilename: document.originalFilename ?? undefined,
     mimeType: document.mimeType,
     sizeBytes: document.sizeBytes,
-    createdAt: document.createdAt.toISOString()
+    createdAt: document.createdAt.toISOString(),
+    createdByUserId: document.createdByUserId ?? undefined,
+    createdByLabel: createdByLabel || undefined
   };
 }
 
@@ -1030,178 +1046,6 @@ function canManageComment(user: PrismaUser, comment: { authorUserId: string }) {
     comment.authorUserId === user.id ||
     (normalizeRoleValue(user.role) === "ADMIN" && normalizeTypeValue(user.type) === "INTERNAL")
   );
-}
-
-function resolveConfiguredStorageRoot(configured: string) {
-  return path.isAbsolute(configured)
-    ? path.resolve(configured)
-    : path.resolve(process.cwd(), configured);
-}
-
-function resolveUploadDir(config: AppConfig) {
-  const explicitUploadRoot = config.uploadDir?.trim();
-  if (explicitUploadRoot) {
-    return resolveConfiguredStorageRoot(explicitUploadRoot);
-  }
-
-  const configured = config.documentsStorageDir.trim() || (config.nodeEnv === "production" ? "/data/uploads" : "storage/uploads");
-  const resolved = resolveConfiguredStorageRoot(configured);
-
-  return path.basename(resolved) === "uploads" ? resolved : path.resolve(resolved, "uploads");
-}
-
-function resolveLegacyDocumentsStorageRoot(config: AppConfig) {
-  const configured = config.legacyDocumentsStorageDir?.trim();
-  return configured ? resolveConfiguredStorageRoot(configured) : null;
-}
-
-function isPathInsideDirectory(candidatePath: string, rootPath: string) {
-  const relative = path.relative(rootPath, candidatePath);
-  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
-}
-
-function safeDocumentStorageKeySegment(value: string) {
-  return value
-    .replace(/\\/g, "_")
-    .replace(/\//g, "_")
-    .replace(/\0/g, "")
-    .replace(/\s+/g, " ")
-    .trim() || "document";
-}
-
-function createDocumentStoragePath(documentId: string, createdAt = new Date()) {
-  const year = String(createdAt.getUTCFullYear());
-  const month = String(createdAt.getUTCMonth() + 1).padStart(2, "0");
-  const safeDocumentId = safeDocumentStorageKeySegment(documentId).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80);
-  return path.posix.join(
-    "documents",
-    year,
-    month,
-    `${safeDocumentId || "document"}-${randomUUID()}`
-  );
-}
-
-function normalizeStoredDocumentStorageKey(storagePath: string, options: { stripLegacyPrefix: boolean }) {
-  const trimmed = storagePath.replace(/\0/g, "").trim();
-  if (!trimmed || path.isAbsolute(trimmed)) {
-    return null;
-  }
-
-  const posixPath = trimmed.replace(/\\/g, "/");
-  const segments = posixPath.split("/").filter(Boolean);
-  if (segments.length === 0 || segments.some((segment) => segment === "." || segment === "..")) {
-    return null;
-  }
-
-  const normalized = path.posix.normalize(segments.join("/"));
-  if (normalized === "." || normalized.startsWith("../") || normalized.includes("/../")) {
-    return null;
-  }
-
-  return options.stripLegacyPrefix && normalized.startsWith(LEGACY_DOCUMENT_STORAGE_PREFIX)
-    ? normalized.slice(LEGACY_DOCUMENT_STORAGE_PREFIX.length)
-    : normalized;
-}
-
-function addSafeDocumentPathCandidate(candidates: string[], candidatePath: string, rootPath: string) {
-  const resolvedCandidate = path.resolve(candidatePath);
-  if (!isPathInsideDirectory(resolvedCandidate, rootPath)) {
-    return;
-  }
-
-  if (!candidates.includes(resolvedCandidate)) {
-    candidates.push(resolvedCandidate);
-  }
-}
-
-function resolveStoredDocumentPathCandidates(config: AppConfig, storagePath: string) {
-  const uploadRoot = resolveUploadDir(config);
-  const legacyRoot = resolveLegacyDocumentsStorageRoot(config);
-  const candidates: string[] = [];
-
-  if (path.isAbsolute(storagePath)) {
-    const absolutePath = path.resolve(storagePath);
-    addSafeDocumentPathCandidate(candidates, absolutePath, uploadRoot);
-    if (legacyRoot) {
-      addSafeDocumentPathCandidate(candidates, absolutePath, legacyRoot);
-    }
-
-    return {
-      isSafe: candidates.length > 0,
-      candidates
-    };
-  }
-
-  const currentStorageKey = normalizeStoredDocumentStorageKey(storagePath, { stripLegacyPrefix: true });
-  const legacyExactStorageKey = normalizeStoredDocumentStorageKey(storagePath, { stripLegacyPrefix: false });
-  if (!currentStorageKey || !legacyExactStorageKey) {
-    return {
-      isSafe: false,
-      candidates
-    };
-  }
-
-  const isLegacyUploadsKey = legacyExactStorageKey.startsWith(LEGACY_DOCUMENT_STORAGE_PREFIX);
-  if (legacyRoot && isLegacyUploadsKey) {
-    addSafeDocumentPathCandidate(candidates, path.resolve(legacyRoot, legacyExactStorageKey), legacyRoot);
-    addSafeDocumentPathCandidate(candidates, path.resolve(uploadRoot, legacyExactStorageKey), uploadRoot);
-    if (currentStorageKey !== legacyExactStorageKey) {
-      addSafeDocumentPathCandidate(candidates, path.resolve(uploadRoot, currentStorageKey), uploadRoot);
-      addSafeDocumentPathCandidate(candidates, path.resolve(legacyRoot, currentStorageKey), legacyRoot);
-    }
-  } else {
-    addSafeDocumentPathCandidate(candidates, path.resolve(uploadRoot, legacyExactStorageKey), uploadRoot);
-    if (currentStorageKey !== legacyExactStorageKey) {
-      addSafeDocumentPathCandidate(candidates, path.resolve(uploadRoot, currentStorageKey), uploadRoot);
-    }
-    if (legacyRoot) {
-      addSafeDocumentPathCandidate(candidates, path.resolve(legacyRoot, legacyExactStorageKey), legacyRoot);
-    }
-  }
-
-  if (legacyRoot && !isLegacyUploadsKey && currentStorageKey !== legacyExactStorageKey) {
-    addSafeDocumentPathCandidate(candidates, path.resolve(legacyRoot, currentStorageKey), legacyRoot);
-  }
-
-  return {
-    isSafe: true,
-    candidates
-  };
-}
-
-function resolveStoredDocumentPath(config: AppConfig, storagePath: string) {
-  const resolution = resolveStoredDocumentPathCandidates(config, storagePath);
-  return resolution.isSafe ? resolution.candidates[0] ?? null : null;
-}
-
-async function resolveExistingStoredDocumentPath(config: AppConfig, storagePath: string) {
-  const resolution = resolveStoredDocumentPathCandidates(config, storagePath);
-  if (!resolution.isSafe) {
-    return {
-      isSafe: false,
-      absoluteFilePath: null
-    };
-  }
-
-  for (const candidate of resolution.candidates) {
-    try {
-      await fs.stat(candidate);
-      return {
-        isSafe: true,
-        absoluteFilePath: candidate
-      };
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") {
-        throw error;
-      }
-    }
-  }
-
-  return {
-    isSafe: true,
-    absoluteFilePath: null
-  };
 }
 
 function sanitizeFilename(filename: string | undefined) {
@@ -1854,6 +1698,24 @@ function documentOwnerDomain(ownerType: string): ProjectDomain {
   }
 }
 
+function documentOwnerUploadPermissions(ownerType: string): PermissionKey[] {
+  const normalizedOwnerType = ownerType.trim().toUpperCase();
+  if (normalizedOwnerType === "DEADLINE") {
+    return ["tasks.complete", "deadlines.edit"];
+  }
+  if (normalizedOwnerType === "TASK_EVIDENCE") {
+    return ["tasks.complete"];
+  }
+
+  const permission = getDocumentOwnerWritePermission(ownerType);
+  return permission ? [permission] : [];
+}
+
+function documentOwnerManagePermissions(ownerType: string): PermissionKey[] {
+  const permission = getDocumentOwnerWritePermission(ownerType);
+  return permission ? [permission] : [];
+}
+
 function commentDomainWritePermission(domain: ProjectDomain): PermissionKey | null {
   switch (domain) {
     case "comments":
@@ -1942,7 +1804,8 @@ async function assertCanWriteDocumentOwner(
   req: AuthenticatedRequest,
   res: Response,
   ownerType: string,
-  ownerId: string
+  ownerId: string,
+  action: "upload" | "manage" = "manage"
 ) {
   const user = routeUserFromAuthenticatedRequest(req);
   if (!user) {
@@ -1950,8 +1813,11 @@ async function assertCanWriteDocumentOwner(
     return false;
   }
 
-  const permission = getDocumentOwnerWritePermission(ownerType);
-  if (!permission || !hasPermission(user.permissionKeys, permission)) {
+  const permissions = action === "upload"
+    ? documentOwnerUploadPermissions(ownerType)
+    : documentOwnerManagePermissions(ownerType);
+  const permission = permissions.find((candidate) => hasPermission(user.permissionKeys, candidate));
+  if (!permission) {
     res.status(403).json({
       ok: false,
       message: "Forbidden."
@@ -1967,7 +1833,7 @@ async function assertCanWriteDocumentOwner(
   }
 
   if (!context.projectId) {
-    if (hasGlobalProjectReadAccess(user) && hasPermission(req.authPermissionKeys ?? [], permission)) {
+    if (hasGlobalProjectReadAccess(user) && permission) {
       return true;
     }
     res.status(403).json({ ok: false, message: "Forbidden." });
@@ -2345,7 +2211,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.use(createProjectChecklistsRouter(prisma, config));
   router.use(createProjectsRouter(prisma, config));
   router.use(createScopesRouter(prisma));
-  router.use(createTaskStateRouter(prisma));
+  router.use(createTaskStateRouter(prisma, config));
   const entraStateStore = createEntraStateStore();
   const entraEnabled = isEntraConfigured(config);
   let entraClientPromise: ReturnType<typeof discoverEntraClient> | null = null;
@@ -3068,7 +2934,7 @@ export function createApp(config: AppConfig = loadConfig()) {
           return;
         }
 
-        if (!(await assertCanWriteDocumentOwner(req, res, ownerTypeRaw, ownerId))) {
+        if (!(await assertCanWriteDocumentOwner(req, res, ownerTypeRaw, ownerId, "upload"))) {
           return;
         }
 
@@ -3136,6 +3002,14 @@ export function createApp(config: AppConfig = loadConfig()) {
           },
           data: {
             storagePath
+          },
+          include: {
+            createdByUser: {
+              select: {
+                firstName: true,
+                lastName: true
+              }
+            }
           }
         });
 
@@ -3189,6 +3063,14 @@ export function createApp(config: AppConfig = loadConfig()) {
           },
           orderBy: {
             createdAt: "desc"
+          },
+          include: {
+            createdByUser: {
+              select: {
+                firstName: true,
+                lastName: true
+              }
+            }
           }
         })
       );
@@ -3213,6 +3095,14 @@ export function createApp(config: AppConfig = loadConfig()) {
         where: {
           id: documentId,
           isArchived: false
+        },
+        include: {
+          createdByUser: {
+            select: {
+              firstName: true,
+              lastName: true
+            }
+          }
         }
       });
 
@@ -3390,6 +3280,14 @@ export function createApp(config: AppConfig = loadConfig()) {
               sizeBytes: fileData.length,
               storagePath,
               sha256
+            },
+            include: {
+              createdByUser: {
+                select: {
+                  firstName: true,
+                  lastName: true
+                }
+              }
             }
           });
         } catch (error) {

@@ -168,6 +168,28 @@ function toDateValue(value?: string) {
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
 }
 
+function parseCompletionTimestamp(value: unknown):
+  | { ok: true; value: Date }
+  | { ok: false; message: string } {
+  if (value === undefined || value === null) {
+    return { ok: true, value: new Date() };
+  }
+
+  const raw = toOptionalTrimmedString(value);
+  if (!raw) {
+    return { ok: true, value: new Date() };
+  }
+
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(raw)
+    ? new Date(`${raw}T00:00:00.000Z`)
+    : new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return { ok: false, message: "completedAt must be a valid date." };
+  }
+
+  return { ok: true, value: parsed };
+}
+
 function createServerId(prefix: string) {
   return `${prefix}-${randomUUID()}`;
 }
@@ -1258,7 +1280,13 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
         return;
       }
 
-      const timestamp = nowStamp();
+      const completionTimestamp = parseCompletionTimestamp(req.body?.completedAt ?? req.body?.completionDate);
+      if (!completionTimestamp.ok) {
+        res.status(400).json({ ok: false, message: completionTimestamp.message });
+        return;
+      }
+
+      const timestamp = completionTimestamp.value.toISOString();
       const createdByLabel = await getUserDisplayLabel(prisma, user.id);
       const evidenceEntry: EvidenceDto = {
         id: createStableId("ev"),
@@ -1279,7 +1307,7 @@ export function createDeadlinesRouter(prisma: PrismaClient) {
         where: { id: existing.id },
         data: {
           status: "DONE",
-          completedAt: new Date(timestamp),
+          completedAt: completionTimestamp.value,
           completedByUserId: user.id,
           evidence: toJsonInput([evidenceEntry, ...existing.evidence])
         }

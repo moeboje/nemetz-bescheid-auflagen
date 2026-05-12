@@ -65,7 +65,7 @@ export async function setDeadlineStatus(id: string, status: Deadline["status"]) 
 
 export async function completeDeadline(
   id: string,
-  input: { note?: string; outcome?: EvidenceOutcome; attachments: AttachmentMeta[] }
+  input: { note?: string; outcome?: EvidenceOutcome; attachments: AttachmentMeta[]; completedAt?: string }
 ) {
   const payload = await apiRequest<{ ok: boolean; deadline: Deadline }>(`/deadlines/${id}/complete`, {
     method: "POST",

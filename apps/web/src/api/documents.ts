@@ -17,6 +17,8 @@ export type DocumentDto = {
   mimeType: string;
   sizeBytes: number;
   createdAt: string;
+  createdByUserId?: string;
+  createdByLabel?: string;
 };
 
 export type DocumentApiErrorCode =

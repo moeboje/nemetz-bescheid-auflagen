@@ -786,8 +786,9 @@ export const HELP_ARTICLES: HelpArticle[] = [
         heading: "Abschliessen und wieder oeffnen",
         lines: [
           "Fristen koennen abgeschlossen werden, wenn du die passende Berechtigung hast.",
-          "Beim Abschluss kann ein Nachweis erfasst werden.",
-          "Abgeschlossene Fristen bleiben nachvollziehbar und koennen bei Bedarf wieder geoeffnet werden, wenn du das darfst."
+          "Beim Abschluss koennen ein Erledigungsdatum, ein Kommentar und serverseitige Nachweisdateien erfasst werden.",
+          "Abgeschlossene Fristen bleiben nachvollziehbar und koennen bei Bedarf wieder geoeffnet werden, wenn du das darfst.",
+          "Nachweise bleiben auch nach dem Wieder oeffnen erhalten."
         ]
       }
     ]
@@ -826,6 +827,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
         heading: "Nachweise",
         lines: [
           "Nachweise zeigen, warum eine Aufgabe oder Frist als erledigt gilt.",
+          "Serverseitig hochgeladene Nachweise bleiben auch bei erledigten und wieder geoeffneten Aufgaben sichtbar.",
           "Wenn Pflichtnachweise verlangt werden, kann die Aufgabe ohne diese Nachweise nicht abgeschlossen werden.",
           "Vorhandene Nachweise schuetzen Auflagen vor unabsichtlichem endgueltigem Loeschen."
         ]
@@ -864,6 +866,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
         heading: "Uploads und Downloads",
         lines: [
           "Hochladen, Vorschau und Download sind nur sichtbar, wenn du Zugriff auf das zugehoerige Projekt und die passende Berechtigung hast.",
+          "Serverseitige Nachweisdateien werden ueber die geschuetzte Document API geladen; es gibt keine oeffentlichen Dateilinks.",
           "Wenn ein Datei-Inhalt nicht mehr verfuegbar ist, muss der Nachweis neu hochgeladen werden.",
           "Alte Browser-Anhaenge sind nur Altbestand. Lade sie erneut hoch, wenn sie serverseitig verfuegbar sein sollen."
         ]

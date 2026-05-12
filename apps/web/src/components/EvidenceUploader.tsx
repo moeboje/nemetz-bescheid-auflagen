@@ -6,6 +6,7 @@ import {
   countAttachmentsForRequirements,
   createStableId,
   inferAttachmentKind,
+  type AttachmentKindCounts,
   type AttachmentKind,
   type AttachmentMeta,
   type AttachmentRequirements
@@ -19,6 +20,7 @@ type EvidenceUploaderProps = {
   // Backward compatibility for existing call sites.
   allowKinds?: AttachmentKind[];
   required?: AttachmentRequirements;
+  requirementCounts?: AttachmentKindCounts;
   errors?: string[];
   mode?: "edit" | "view";
 };
@@ -50,6 +52,7 @@ export default function EvidenceUploader({
   allowedKinds,
   allowKinds,
   required,
+  requirementCounts,
   errors,
   mode = "edit"
 }: EvidenceUploaderProps) {
@@ -83,7 +86,10 @@ export default function EvidenceUploader({
     return ATTACHMENT_KIND_ORDER.filter((kind) => source.includes(kind));
   }, [allowKinds, allowedKinds]);
 
-  const counts = useMemo(() => countAttachmentsForRequirements(required, value), [required, value]);
+  const counts = useMemo(
+    () => requirementCounts ?? countAttachmentsForRequirements(required, value),
+    [requirementCounts, required, value]
+  );
   const requiredRows = useMemo(
     () =>
       [

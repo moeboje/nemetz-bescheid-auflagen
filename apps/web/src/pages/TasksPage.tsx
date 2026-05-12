@@ -25,6 +25,15 @@ import { useAuthorization } from "../state/AuthorizationStore";
 import EvidenceListModal from "../components/EvidenceListModal";
 import TaskCompleteModal from "../components/TaskCompleteModal";
 import UserSelect from "../components/UserSelect";
+import type { DocumentOwnerType } from "../api/documents";
+import { createEvidenceUploadError, uploadEvidenceDocument, uploadEvidenceDocuments } from "../services/evidenceDocuments";
+import { canUploadTaskEvidence } from "../services/taskEvidencePermissions";
+import {
+  getPendingEvidenceFilesToUpload,
+  mergeEvidenceDocumentIds,
+  mergeUploadedEvidenceFiles,
+  type UploadedEvidenceFile
+} from "../services/evidenceUploadRetry";
 
 const statusVariant = {
   OPEN: "warning",
@@ -38,6 +47,11 @@ const levelVariant = {
   RECOMMENDED: "warning"
 } as const;
 
+type CompletionUploadCache = {
+  taskId: string | null;
+  uploadedFiles: UploadedEvidenceFile[];
+};
+
 function getPeriodLimit(period: string) {
   if (period !== "30" && period !== "90" && period !== "365") {
     return "";
@@ -45,6 +59,16 @@ function getPeriodLimit(period: string) {
   const date = new Date();
   date.setDate(date.getDate() + Number(period));
   return date.toISOString().slice(0, 10);
+}
+
+function getTaskEvidenceOwner(task?: { type: string; id: string; deadlineId?: string }) {
+  if (!task) {
+    return null;
+  }
+  if (task.type === "DEADLINE") {
+    return task.deadlineId ? { ownerType: "DEADLINE" as DocumentOwnerType, ownerId: task.deadlineId } : null;
+  }
+  return { ownerType: "TASK_EVIDENCE" as DocumentOwnerType, ownerId: task.id };
 }
 
 export default function TasksPage() {
@@ -58,6 +82,10 @@ export default function TasksPage() {
   const { actor, permissions } = useAuthorization();
   const [completionTaskId, setCompletionTaskId] = useState<string | null>(null);
   const [evidenceTaskId, setEvidenceTaskId] = useState<string | null>(null);
+  const [completionUploadCache, setCompletionUploadCache] = useState<CompletionUploadCache>({
+    taskId: null,
+    uploadedFiles: []
+  });
 
   const [filters, setFilters] = useState({
     search: "",
@@ -154,6 +182,11 @@ export default function TasksPage() {
     () => tasks.find((task) => task.id === completionTaskId),
     [completionTaskId, tasks]
   );
+  const evidenceTask = useMemo(
+    () => tasks.find((task) => task.id === evidenceTaskId),
+    [evidenceTaskId, tasks]
+  );
+  const evidenceOwner = getTaskEvidenceOwner(evidenceTask);
 
   const handleCalendarExport = () => {
     exportTasksToIcs(
@@ -373,14 +406,19 @@ export default function TasksPage() {
               <EyeIcon />
             </IconButton>
             {task.status !== "DONE" ? (
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={!permissions.canCompleteTasks || !canWriteTaskProject(task)}
-                onClick={() => setCompletionTaskId(task.id)}
-              >
-                {t("tasks.actions.complete")}
-              </Button>
+              <>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!permissions.canCompleteTasks || !canWriteTaskProject(task)}
+                  onClick={() => setCompletionTaskId(task.id)}
+                >
+                  {t("tasks.actions.complete")}
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => setEvidenceTaskId(task.id)}>
+                  {t("tasks.actions.viewEvidence")}
+                </Button>
+              </>
             ) : (
               <>
                 <Button
@@ -403,12 +441,65 @@ export default function TasksPage() {
       <TaskCompleteModal
         open={Boolean(completionTaskId)}
         task={completionTask}
-        onClose={() => setCompletionTaskId(null)}
-        onSaved={(input) => {
+        onClose={() => {
+          setCompletionUploadCache({ taskId: null, uploadedFiles: [] });
+          setCompletionTaskId(null);
+        }}
+        onSaved={async (input) => {
           if (!completionTaskId) {
             return;
           }
-          return markTaskDoneWithEvidence(completionTaskId, input);
+          const owner = getTaskEvidenceOwner(completionTask);
+          const uploadBeforeComplete = Boolean(owner && input.files.length && completionTask?.type === "OBLIGATION");
+          const cachedUploadedFiles =
+            completionUploadCache.taskId === completionTaskId ? completionUploadCache.uploadedFiles : [];
+          let uploadedFiles = cachedUploadedFiles;
+          let evidenceDocumentIds = mergeEvidenceDocumentIds(
+            input.evidenceDocumentIds,
+            uploadedFiles.map((entry) => entry.documentId)
+          );
+
+          if (owner && uploadBeforeComplete) {
+            const pendingUploads = getPendingEvidenceFilesToUpload(input.files, uploadedFiles);
+            for (const pendingUpload of pendingUploads) {
+              try {
+                const uploadedDocument = await uploadEvidenceDocument(owner.ownerType, owner.ownerId, pendingUpload.file);
+                const uploadedFile = {
+                  fileKey: pendingUpload.fileKey,
+                  documentId: uploadedDocument.id
+                };
+                uploadedFiles = mergeUploadedEvidenceFiles(uploadedFiles, uploadedFile);
+                evidenceDocumentIds = mergeEvidenceDocumentIds(evidenceDocumentIds, [uploadedDocument.id]);
+                setCompletionUploadCache((previous) => ({
+                  taskId: completionTaskId,
+                  uploadedFiles:
+                    previous.taskId === completionTaskId
+                      ? mergeUploadedEvidenceFiles(previous.uploadedFiles, uploadedFile)
+                      : [uploadedFile]
+                }));
+              } catch {
+                throw createEvidenceUploadError(t("documents.uploadError"), { completionSaved: false });
+              }
+            }
+          }
+
+          const completed = await markTaskDoneWithEvidence(completionTaskId, {
+            note: input.note,
+            outcome: input.outcome,
+            attachments: input.attachments,
+            evidenceDocumentIds
+          });
+          if (!completed) {
+            throw new Error(t("tasks.complete.saveError"));
+          }
+          setCompletionUploadCache({ taskId: null, uploadedFiles: [] });
+          if (owner && input.files.length && !uploadBeforeComplete) {
+            try {
+              await uploadEvidenceDocuments(owner.ownerType, owner.ownerId, input.files);
+            } catch {
+              throw createEvidenceUploadError(t("evidence.documents.partialTaskUploadError"));
+            }
+          }
         }}
       />
 
@@ -416,9 +507,22 @@ export default function TasksPage() {
         open={Boolean(evidenceTaskId)}
         onClose={() => setEvidenceTaskId(null)}
         title={t("tasks.actions.viewEvidence")}
-        evidence={tasks.find((task) => task.id === evidenceTaskId)?.evidence ?? []}
-        ownerType="TASK_EVIDENCE"
-        ownerId={evidenceTaskId ?? ""}
+        evidence={evidenceTask?.evidence ?? []}
+        ownerType={evidenceOwner?.ownerType}
+        ownerId={evidenceOwner?.ownerId}
+        allowUpload={canUploadTaskEvidence({
+          ownerType: evidenceOwner?.ownerType,
+          projectCanWrite: evidenceTask?.projectCanWrite,
+          canCompleteTasks: permissions.canCompleteTasks,
+          canEditDeadlines: permissions.canEditDeadlines,
+          isExternal: actor.isExternal
+        })}
+        allowManage={Boolean(
+          !actor.isExternal &&
+            evidenceOwner?.ownerType === "DEADLINE" &&
+            evidenceTask?.projectCanWrite &&
+            permissions.canEditDeadlines
+        )}
       />
     </div>
   );

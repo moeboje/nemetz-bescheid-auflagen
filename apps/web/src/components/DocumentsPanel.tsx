@@ -12,6 +12,7 @@ import {
 } from "../api/documents";
 import { ApiError } from "../api/client";
 import { t, type I18nKey } from "../i18n";
+import { getPendingDocumentUploads, uploadDocumentsSequentially } from "../services/documentUploadBatch";
 import type { Attachment } from "../types/models";
 import DocumentPreviewModal from "./DocumentPreviewModal";
 
@@ -33,6 +34,20 @@ function formatSize(sizeBytes: number) {
   }
   const kb = Math.max(1, Math.ceil(sizeBytes / 1024));
   return `${kb} KB`;
+}
+
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString("de-AT", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 function getExtension(filename: string) {
@@ -88,6 +103,9 @@ export default function DocumentsPanel({
   const [actionError, setActionError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [brokenIds, setBrokenIds] = useState<Set<string>>(() => new Set());
+  const [uploadedFileKeysAfterPartialFailure, setUploadedFileKeysAfterPartialFailure] = useState<Set<string>>(
+    () => new Set()
+  );
   const [previewDocument, setPreviewDocument] = useState<DocumentDto | undefined>(undefined);
   const [replaceTarget, setReplaceTarget] = useState<DocumentDto | undefined>(undefined);
   const [deleteTarget, setDeleteTarget] = useState<DocumentDto | undefined>(undefined);
@@ -119,6 +137,10 @@ export default function DocumentsPanel({
     void loadDocuments();
   }, [loadDocuments, refreshKey]);
 
+  React.useEffect(() => {
+    setUploadedFileKeysAfterPartialFailure(new Set());
+  }, [ownerId, ownerType]);
+
   const previewableById = useMemo(
     () =>
       new Map(
@@ -137,14 +159,39 @@ export default function DocumentsPanel({
     setActionError("");
     setActionMessage("");
     try {
-      for (const file of files) {
-        await uploadDocument(ownerType, ownerId, file);
+      const pendingUploads = getPendingDocumentUploads(files, uploadedFileKeysAfterPartialFailure);
+      const skippedUploadedFiles = files.length - pendingUploads.length;
+      if (!pendingUploads.length) {
+        setActionError(t("documents.partialUploadError"));
+        return;
       }
-      await loadDocuments();
-      onChanged?.();
-    } catch {
-      setError(true);
+
+      const result = await uploadDocumentsSequentially(pendingUploads, (entry) =>
+        uploadDocument(ownerType, ownerId, entry.file)
+      );
+      const uploadedFileKeys = pendingUploads
+        .slice(0, result.uploaded.length)
+        .map((entry) => entry.fileKey);
+      if (result.uploaded.length) {
+        await loadDocuments();
+        onChanged?.();
+      }
+      if (!result.completed) {
+        if (uploadedFileKeys.length) {
+          setUploadedFileKeysAfterPartialFailure((previous) => new Set([...previous, ...uploadedFileKeys]));
+        }
+        setActionError(
+          result.uploaded.length || skippedUploadedFiles
+            ? t("documents.partialUploadError")
+            : getActionErrorMessage(result.error, "documents.uploadError")
+        );
+      } else {
+        setUploadedFileKeysAfterPartialFailure(new Set());
+      }
     } finally {
+      if (inputRef.current) {
+        inputRef.current.value = "";
+      }
       setUploading(false);
     }
   };
@@ -312,6 +359,12 @@ export default function DocumentsPanel({
                       <Badge variant="neutral">{item.mimeType || t("common.notAvailable")}</Badge>
                       {isBroken ? <Badge variant="warning">{t("documents.fileMissing")}</Badge> : null}
                       <span>{formatSize(item.sizeBytes)}</span>
+                    </div>
+                    <div className="inlineMeta">
+                      <span>{t("documents.uploadedAt")}: {formatDateTime(item.createdAt)}</span>
+                      <span>
+                        {t("documents.uploadedBy")}: {item.createdByLabel || t("common.notAvailable")}
+                      </span>
                     </div>
                     {isBroken ? (
                       <p className="placeholderText">{t("documents.fileMissingDetails")}</p>

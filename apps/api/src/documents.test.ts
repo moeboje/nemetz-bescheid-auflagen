@@ -447,6 +447,8 @@ describe("Documents API", () => {
         ownerType: string;
         ownerId: string;
         filename: string;
+        createdByUserId?: string;
+        createdByLabel?: string;
       };
     };
 
@@ -454,6 +456,8 @@ describe("Documents API", () => {
     assert.equal(payload.document.ownerType, "PROJECT");
     assert.equal(payload.document.ownerId, project.id);
     assert.ok(payload.document.id);
+    assert.equal(payload.document.createdByUserId, user.id);
+    assert.equal(payload.document.createdByLabel, "Doc Tester");
 
     const record = await prisma.document.findUniqueOrThrow({
       where: {
@@ -1872,7 +1876,7 @@ describe("Documents API", () => {
     assert.equal(downloadResponse.status, 200);
   });
 
-  it("keeps direct task evidence document writes on tasks.edit", async () => {
+  it("uses completion permission for task and deadline evidence uploads", async () => {
     await createRole("TASK_EVIDENCE_EDIT_ONLY", [
       "projects.view",
       "projects.edit",
@@ -1904,17 +1908,25 @@ describe("Documents API", () => {
       editOnlyCookie,
       "TASK_EVIDENCE",
       editOnlyBundle.taskOwnerId,
-      "task-allowed.pdf"
+      "task-blocked.pdf"
     );
-    assert.equal(editOnlyTaskEvidenceUpload.status, 201);
+    assert.equal(editOnlyTaskEvidenceUpload.status, 403);
 
     const completeOnlyTaskEvidenceUpload = await uploadDocument(
       completeCookie,
       "TASK_EVIDENCE",
       completeBundle.taskOwnerId,
-      "task-blocked.pdf"
+      "task-allowed.pdf"
     );
-    assert.equal(completeOnlyTaskEvidenceUpload.status, 403);
+    assert.equal(completeOnlyTaskEvidenceUpload.status, 201);
+
+    const completeOnlyDeadlineUpload = await uploadDocument(
+      completeCookie,
+      "DEADLINE",
+      completeBundle.deadline.id,
+      "deadline-allowed.pdf"
+    );
+    assert.equal(completeOnlyDeadlineUpload.status, 201);
   });
 
   it("blocks direct task evidence delete and replace fail-closed", async () => {
@@ -1922,7 +1934,8 @@ describe("Documents API", () => {
       "projects.view",
       "projects.edit",
       "tasks.view",
-      "tasks.edit"
+      "tasks.edit",
+      "tasks.complete"
     ]);
     await createRole("TASK_EVIDENCE_READ_ONLY", ["projects.view", "tasks.view"]);
     const user = await createUser("docs-task-evidence-delete@example.com", "ValidPassword1!", {

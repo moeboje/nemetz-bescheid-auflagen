@@ -13,6 +13,9 @@ type EvidenceListModalProps = {
   evidence: Evidence[];
   ownerType?: DocumentOwnerType;
   ownerId?: string;
+  allowUpload?: boolean;
+  allowManage?: boolean;
+  onDocumentsChanged?: () => void;
 };
 
 function getOutcomeLabel(value?: "OK" | "NOK" | "FOLLOW_UP") {
@@ -34,7 +37,10 @@ export default function EvidenceListModal({
   title,
   evidence,
   ownerType,
-  ownerId
+  ownerId,
+  allowUpload = false,
+  allowManage = false,
+  onDocumentsChanged
 }: EvidenceListModalProps) {
   return (
     <Modal
@@ -82,7 +88,10 @@ export default function EvidenceListModal({
             ownerType={ownerType}
             ownerId={ownerId}
             titleKey="documents.title"
-            allowUpload={false}
+            allowUpload={allowUpload}
+            allowManage={allowManage}
+            showManageActions={allowManage}
+            onChanged={onDocumentsChanged}
           />
         </div>
       ) : null}

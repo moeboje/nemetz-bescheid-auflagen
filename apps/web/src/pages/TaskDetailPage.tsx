@@ -6,6 +6,15 @@ import { useTasks } from "../state/TasksStore";
 import EvidenceListModal from "../components/EvidenceListModal";
 import { useAuthorization } from "../state/AuthorizationStore";
 import TaskCompleteModal from "../components/TaskCompleteModal";
+import DocumentsPanel from "../components/DocumentsPanel";
+import type { DocumentOwnerType } from "../api/documents";
+import { createEvidenceUploadError, uploadEvidenceDocument, uploadEvidenceDocuments } from "../services/evidenceDocuments";
+import {
+  getPendingEvidenceFilesToUpload,
+  mergeEvidenceDocumentIds,
+  mergeUploadedEvidenceFiles,
+  type UploadedEvidenceFile
+} from "../services/evidenceUploadRetry";
 
 const statusVariant = {
   OPEN: "warning",
@@ -19,6 +28,21 @@ const levelVariant = {
   RECOMMENDED: "warning"
 } as const;
 
+type CompletionUploadCache = {
+  taskId: string | null;
+  uploadedFiles: UploadedEvidenceFile[];
+};
+
+function getTaskEvidenceOwner(task?: { type: string; id: string; deadlineId?: string }) {
+  if (!task) {
+    return null;
+  }
+  if (task.type === "DEADLINE") {
+    return task.deadlineId ? { ownerType: "DEADLINE" as DocumentOwnerType, ownerId: task.deadlineId } : null;
+  }
+  return { ownerType: "TASK_EVIDENCE" as DocumentOwnerType, ownerId: task.id };
+}
+
 export default function TaskDetailPage() {
   const { id } = useParams();
   const { tasks, setTaskStatus, markTaskDoneWithEvidence } = useTasks();
@@ -26,11 +50,25 @@ export default function TaskDetailPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [completionModalOpen, setCompletionModalOpen] = useState(false);
   const [evidenceModalOpen, setEvidenceModalOpen] = useState(false);
+  const [evidenceRefreshKey, setEvidenceRefreshKey] = useState(0);
+  const [completionUploadCache, setCompletionUploadCache] = useState<CompletionUploadCache>({
+    taskId: null,
+    uploadedFiles: []
+  });
 
   const task = useMemo(() => tasks.find((t) => t.id === id), [id, tasks]);
   const canWriteTaskProject = Boolean(task?.projectCanWrite);
   const canEditTaskStatus = permissions.canEditTasks && canWriteTaskProject;
   const canCompleteTask = permissions.canCompleteTasks && canWriteTaskProject;
+  const evidenceOwner = getTaskEvidenceOwner(task);
+  const canUploadEvidence = Boolean(
+    evidenceOwner &&
+      canWriteTaskProject &&
+      (permissions.canCompleteTasks || (evidenceOwner.ownerType === "DEADLINE" && permissions.canEditDeadlines))
+  );
+  const canManageEvidence = Boolean(
+    evidenceOwner?.ownerType === "DEADLINE" && canWriteTaskProject && permissions.canEditDeadlines
+  );
 
   if (!task) {
     return (
@@ -116,6 +154,21 @@ export default function TaskDetailPage() {
         </div>
       </Card>
 
+      {evidenceOwner ? (
+        <Card>
+          <h2 className="sectionTitle">{t("tasks.evidence.modal.title")}</h2>
+          <DocumentsPanel
+            ownerType={evidenceOwner.ownerType}
+            ownerId={evidenceOwner.ownerId}
+            titleKey="documents.title"
+            allowUpload={canUploadEvidence}
+            allowManage={canManageEvidence}
+            showManageActions={canManageEvidence}
+            refreshKey={evidenceRefreshKey}
+          />
+        </Card>
+      ) : null}
+
       <Modal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
@@ -163,12 +216,66 @@ export default function TaskDetailPage() {
       <TaskCompleteModal
         open={completionModalOpen}
         task={task}
-        onClose={() => setCompletionModalOpen(false)}
-        onSaved={(input) => {
+        onClose={() => {
+          setCompletionUploadCache({ taskId: null, uploadedFiles: [] });
+          setCompletionModalOpen(false);
+        }}
+        onSaved={async (input) => {
           if (!canCompleteTask) {
             return;
           }
-          return markTaskDoneWithEvidence(task.id, input);
+          const uploadBeforeComplete = Boolean(evidenceOwner && input.files.length && task.type === "OBLIGATION");
+          const cachedUploadedFiles =
+            completionUploadCache.taskId === task.id ? completionUploadCache.uploadedFiles : [];
+          let uploadedFiles = cachedUploadedFiles;
+          let evidenceDocumentIds = mergeEvidenceDocumentIds(
+            input.evidenceDocumentIds,
+            uploadedFiles.map((entry) => entry.documentId)
+          );
+
+          if (evidenceOwner && uploadBeforeComplete) {
+            const pendingUploads = getPendingEvidenceFilesToUpload(input.files, uploadedFiles);
+            for (const pendingUpload of pendingUploads) {
+              try {
+                const uploadedDocument = await uploadEvidenceDocument(evidenceOwner.ownerType, evidenceOwner.ownerId, pendingUpload.file);
+                const uploadedFile = {
+                  fileKey: pendingUpload.fileKey,
+                  documentId: uploadedDocument.id
+                };
+                uploadedFiles = mergeUploadedEvidenceFiles(uploadedFiles, uploadedFile);
+                evidenceDocumentIds = mergeEvidenceDocumentIds(evidenceDocumentIds, [uploadedDocument.id]);
+                setCompletionUploadCache((previous) => ({
+                  taskId: task.id,
+                  uploadedFiles:
+                    previous.taskId === task.id
+                      ? mergeUploadedEvidenceFiles(previous.uploadedFiles, uploadedFile)
+                      : [uploadedFile]
+                }));
+                setEvidenceRefreshKey((value) => value + 1);
+              } catch {
+                throw createEvidenceUploadError(t("documents.uploadError"), { completionSaved: false });
+              }
+            }
+          }
+
+          const completed = await markTaskDoneWithEvidence(task.id, {
+            note: input.note,
+            outcome: input.outcome,
+            attachments: input.attachments,
+            evidenceDocumentIds
+          });
+          if (!completed) {
+            throw new Error(t("tasks.complete.saveError"));
+          }
+          setCompletionUploadCache({ taskId: null, uploadedFiles: [] });
+          if (evidenceOwner && input.files.length && !uploadBeforeComplete) {
+            try {
+              await uploadEvidenceDocuments(evidenceOwner.ownerType, evidenceOwner.ownerId, input.files);
+              setEvidenceRefreshKey((value) => value + 1);
+            } catch {
+              throw createEvidenceUploadError(t("evidence.documents.partialTaskUploadError"));
+            }
+          }
         }}
       />
 
@@ -177,8 +284,11 @@ export default function TaskDetailPage() {
         onClose={() => setEvidenceModalOpen(false)}
         title={t("tasks.actions.viewEvidence")}
         evidence={task.evidence ?? []}
-        ownerType="TASK_EVIDENCE"
-        ownerId={task.id}
+        ownerType={evidenceOwner?.ownerType}
+        ownerId={evidenceOwner?.ownerId}
+        allowUpload={canUploadEvidence}
+        allowManage={canManageEvidence}
+        onDocumentsChanged={() => setEvidenceRefreshKey((value) => value + 1)}
       />
     </div>
   );
