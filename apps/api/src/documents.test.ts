@@ -242,13 +242,37 @@ async function uploadDocumentTo(
   cookie: string,
   ownerType: string,
   ownerId: string,
-  filename = "example.pdf"
+  filename = "example.pdf",
+  options: {
+    content?: string;
+    contentType?: string;
+    category?: string;
+    approvalRequired?: boolean;
+    approvalRequestedComment?: string;
+    approverUserId?: string;
+  } = {}
 ) {
   requestCounter += 1;
   const form = new FormData();
   form.set("ownerType", ownerType);
   form.set("ownerId", ownerId);
-  form.set("file", new Blob(["test-pdf-content"], { type: "application/pdf" }), filename);
+  if (options.category) {
+    form.set("category", options.category);
+  }
+  if (options.approvalRequired) {
+    form.set("approvalRequired", "true");
+  }
+  if (options.approvalRequestedComment) {
+    form.set("approvalRequestedComment", options.approvalRequestedComment);
+  }
+  if (options.approverUserId) {
+    form.set("approverUserId", options.approverUserId);
+  }
+  form.set(
+    "file",
+    new Blob([options.content ?? "test-pdf-content"], { type: options.contentType ?? testMimeTypeForFilename(filename) }),
+    filename
+  );
 
   const headers = new Headers();
   headers.set("X-Forwarded-For", `127.0.0.${(requestCounter % 200) + 1}`);
@@ -265,6 +289,40 @@ async function uploadDocument(cookie: string, ownerType: string, ownerId: string
   return uploadDocumentTo(baseUrl, cookie, ownerType, ownerId, filename);
 }
 
+function testMimeTypeForFilename(filename: string) {
+  const extension = path.extname(filename).toLowerCase();
+  switch (extension) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".doc":
+      return "application/msword";
+    case ".docx":
+      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    case ".xls":
+      return "application/vnd.ms-excel";
+    case ".xlsx":
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    case ".csv":
+      return "text/csv";
+    case ".ppt":
+      return "application/vnd.ms-powerpoint";
+    case ".pptx":
+      return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    case ".txt":
+      return "text/plain";
+    case ".pdf":
+    default:
+      return "application/pdf";
+  }
+}
+
 async function replaceDocumentFileTo(
   apiBaseUrl: string,
   cookie: string,
@@ -274,7 +332,7 @@ async function replaceDocumentFileTo(
 ) {
   requestCounter += 1;
   const form = new FormData();
-  form.set("file", new Blob([content], { type: "application/pdf" }), filename);
+  form.set("file", new Blob([content], { type: testMimeTypeForFilename(filename) }), filename);
 
   const headers = new Headers();
   headers.set("X-Forwarded-For", `127.0.0.${(requestCounter % 200) + 1}`);
@@ -390,6 +448,12 @@ async function closeTestServer(testServer: ReturnType<ReturnType<typeof createAp
   });
 }
 
+function waitForApprovalRaceWindow() {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, 150);
+  });
+}
+
 describe("Documents API", () => {
   before(async () => {
     const started = await startDocumentsTestServer();
@@ -470,6 +534,803 @@ describe("Documents API", () => {
     const expectedPath = resolveTestDocumentPath(record.storagePath);
     const stat = await fs.stat(expectedPath);
     assert.equal(stat.isFile(), true);
+  });
+
+  it("stores category and approval metadata and allows the assigned approver to approve", async () => {
+    const uploader = await createUser("docs-approval-uploader@example.com", "ValidPassword1!");
+    const approver = await createUser("docs-approval-approver@example.com", "ValidPassword1!");
+    const viewer = await createUser("docs-approval-viewer@example.com", "ValidPassword1!");
+    const project = await seedProject(uploader.id);
+    await grantProjectAccess(project.id, approver.id, "PROJECT_VIEWER");
+    await grantProjectAccess(project.id, viewer.id, "PROJECT_VIEWER");
+    const uploaderCookie = await login(uploader.email, "ValidPassword1!");
+    const approverCookie = await login(approver.email, "ValidPassword1!");
+    const viewerCookie = await login(viewer.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocumentTo(baseUrl, uploaderCookie, "PROJECT", project.id, "submission.pdf", {
+      category: "SUBMISSION",
+      approvalRequired: true,
+      approvalRequestedComment: "Bitte vor Einreichung pruefen.",
+      approverUserId: approver.id
+    });
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as {
+      document: {
+        id: string;
+        category: string;
+        approvalRequired: boolean;
+        approvalStatus: string;
+        approvalRequestedComment?: string;
+        approverUserId?: string;
+      };
+    };
+    assert.equal(uploadPayload.document.category, "SUBMISSION");
+    assert.equal(uploadPayload.document.approvalRequired, true);
+    assert.equal(uploadPayload.document.approvalStatus, "PENDING");
+    assert.equal(uploadPayload.document.approvalRequestedComment, "Bitte vor Einreichung pruefen.");
+    assert.equal(uploadPayload.document.approverUserId, approver.id);
+
+    const requestRecord = await prisma.documentApprovalRequest.findFirstOrThrow({
+      where: {
+        documentId: uploadPayload.document.id
+      }
+    });
+    assert.equal(requestRecord.status, "PENDING");
+
+    const unauthorizedDecision = await request(`/documents/${uploadPayload.document.id}/approval`, {
+      method: "PATCH",
+      cookie: viewerCookie,
+      body: {
+        action: "approve",
+        comment: "Nope"
+      }
+    });
+    assert.equal(unauthorizedDecision.status, 403);
+
+    const unauthorizedReject = await request(`/documents/${uploadPayload.document.id}/approval`, {
+      method: "PATCH",
+      cookie: viewerCookie,
+      body: {
+        action: "reject",
+        comment: "Nope"
+      }
+    });
+    assert.equal(unauthorizedReject.status, 403);
+
+    const approveResponse = await request(`/documents/${uploadPayload.document.id}/approval`, {
+      method: "PATCH",
+      cookie: approverCookie,
+      body: {
+        action: "approve",
+        comment: "Passt."
+      }
+    });
+    assert.equal(approveResponse.status, 200);
+    const approvePayload = (await approveResponse.json()) as {
+      document: {
+        approvalStatus: string;
+        approvalDecidedByUserId?: string;
+        approvalDecisionComment?: string;
+      };
+    };
+    assert.equal(approvePayload.document.approvalStatus, "APPROVED");
+    assert.equal(approvePayload.document.approvalDecidedByUserId, approver.id);
+    assert.equal(approvePayload.document.approvalDecisionComment, "Passt.");
+
+    const repeatApprove = await request(`/documents/${uploadPayload.document.id}/approval`, {
+      method: "PATCH",
+      cookie: approverCookie,
+      body: {
+        action: "approve",
+        comment: "Nochmal"
+      }
+    });
+    assert.equal(repeatApprove.status, 409);
+
+    const rejectAfterApproved = await request(`/documents/${uploadPayload.document.id}/approval`, {
+      method: "PATCH",
+      cookie: approverCookie,
+      body: {
+        action: "reject",
+        comment: "Zu spaet"
+      }
+    });
+    assert.equal(rejectAfterApproved.status, 409);
+  });
+
+  it("rejects a pending approval request with decision metadata", async () => {
+    const uploader = await createUser("docs-approval-reject-uploader@example.com", "ValidPassword1!");
+    const approver = await createUser("docs-approval-reject-approver@example.com", "ValidPassword1!");
+    const project = await seedProject(uploader.id);
+    await grantProjectAccess(project.id, approver.id, "PROJECT_VIEWER");
+    const uploaderCookie = await login(uploader.email, "ValidPassword1!");
+    const approverCookie = await login(approver.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocumentTo(baseUrl, uploaderCookie, "PROJECT", project.id, "reject.pdf", {
+      approvalRequired: true,
+      approverUserId: approver.id
+    });
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+
+    const rejectResponse = await request(`/documents/${uploadPayload.document.id}/approval`, {
+      method: "PATCH",
+      cookie: approverCookie,
+      body: {
+        action: "reject",
+        comment: "Bitte ueberarbeiten."
+      }
+    });
+    assert.equal(rejectResponse.status, 200);
+    const rejectPayload = (await rejectResponse.json()) as {
+      document: {
+        approvalStatus: string;
+        approvalDecidedByUserId?: string;
+        approvalDecisionComment?: string;
+      };
+    };
+    assert.equal(rejectPayload.document.approvalStatus, "REJECTED");
+    assert.equal(rejectPayload.document.approvalDecidedByUserId, approver.id);
+    assert.equal(rejectPayload.document.approvalDecisionComment, "Bitte ueberarbeiten.");
+  });
+
+  it("guards concurrent approval decisions so only one pending request can be decided", async () => {
+    const uploader = await createUser("docs-approval-race-uploader@example.com", "ValidPassword1!");
+    const approver = await createUser("docs-approval-race-approver@example.com", "ValidPassword1!");
+    const project = await seedProject(uploader.id);
+    await grantProjectAccess(project.id, approver.id, "PROJECT_VIEWER");
+    const uploaderCookie = await login(uploader.email, "ValidPassword1!");
+    const approverCookie = await login(approver.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocumentTo(baseUrl, uploaderCookie, "PROJECT", project.id, "race.pdf", {
+      approvalRequired: true,
+      approverUserId: approver.id
+    });
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+
+    const [approveResponse, rejectResponse] = await Promise.all([
+      request(`/documents/${uploadPayload.document.id}/approval`, {
+        method: "PATCH",
+        cookie: approverCookie,
+        body: {
+          action: "approve",
+          comment: "Parallel approve"
+        }
+      }),
+      request(`/documents/${uploadPayload.document.id}/approval`, {
+        method: "PATCH",
+        cookie: approverCookie,
+        body: {
+          action: "reject",
+          comment: "Parallel reject"
+        }
+      })
+    ]);
+
+    const statuses = [approveResponse.status, rejectResponse.status].sort((left, right) => left - right);
+    assert.deepEqual(statuses, [200, 409]);
+
+    const finalRequest = await prisma.documentApprovalRequest.findFirstOrThrow({
+      where: {
+        documentId: uploadPayload.document.id
+      }
+    });
+    assert.ok(finalRequest.status === "APPROVED" || finalRequest.status === "REJECTED");
+
+    const decisionEvents = await prisma.documentApprovalEvent.findMany({
+      where: {
+        documentId: uploadPayload.document.id,
+        eventType: {
+          in: ["APPROVED", "REJECTED", "CHANGES_REQUESTED"]
+        }
+      }
+    });
+    assert.equal(decisionEvents.length, 1);
+    assert.equal(decisionEvents[0]?.status, finalRequest.status);
+  });
+
+  it("updates pending approval request metadata and assignment", async () => {
+    const uploader = await createUser("docs-approval-update-uploader@example.com", "ValidPassword1!");
+    const firstApprover = await createUser("docs-approval-update-first@example.com", "ValidPassword1!");
+    const nextApprover = await createUser("docs-approval-update-next@example.com", "ValidPassword1!");
+    const project = await seedProject(uploader.id);
+    await grantProjectAccess(project.id, firstApprover.id, "PROJECT_VIEWER");
+    await grantProjectAccess(project.id, nextApprover.id, "PROJECT_VIEWER");
+    const uploaderCookie = await login(uploader.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocumentTo(baseUrl, uploaderCookie, "PROJECT", project.id, "request-update.pdf", {
+      approvalRequired: true,
+      approverUserId: firstApprover.id
+    });
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+
+    const updateResponse = await request(`/documents/${uploadPayload.document.id}/approval`, {
+      method: "PATCH",
+      cookie: uploaderCookie,
+      body: {
+        action: "request",
+        approverUserId: nextApprover.id,
+        comment: "Bitte neu pruefen."
+      }
+    });
+    assert.equal(updateResponse.status, 200);
+    const updatePayload = (await updateResponse.json()) as {
+      document: {
+        approvalStatus: string;
+        approvalRequestedComment?: string;
+        approverUserId?: string;
+      };
+    };
+    assert.equal(updatePayload.document.approvalStatus, "PENDING");
+    assert.equal(updatePayload.document.approvalRequestedComment, "Bitte neu pruefen.");
+    assert.equal(updatePayload.document.approverUserId, nextApprover.id);
+
+    const updateEvents = await prisma.documentApprovalEvent.count({
+      where: {
+        documentId: uploadPayload.document.id,
+        eventType: "REQUEST_UPDATED"
+      }
+    });
+    assert.equal(updateEvents, 1);
+  });
+
+  it("serializes concurrent approval request creation for the current file version", async () => {
+    const uploader = await createUser("docs-approval-create-race-uploader@example.com", "ValidPassword1!");
+    const approver = await createUser("docs-approval-create-race-approver@example.com", "ValidPassword1!");
+    const project = await seedProject(uploader.id);
+    await grantProjectAccess(project.id, approver.id, "PROJECT_VIEWER");
+    const uploaderCookie = await login(uploader.email, "ValidPassword1!");
+    const approverCookie = await login(approver.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocumentTo(baseUrl, uploaderCookie, "PROJECT", project.id, "request-create-race.pdf", {
+      approvalRequired: true,
+      approverUserId: approver.id
+    });
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+
+    const approveResponse = await request(`/documents/${uploadPayload.document.id}/approval`, {
+      method: "PATCH",
+      cookie: approverCookie,
+      body: {
+        action: "approve"
+      }
+    });
+    assert.equal(approveResponse.status, 200);
+
+    const [firstRequestResponse, secondRequestResponse] = await Promise.all([
+      request(`/documents/${uploadPayload.document.id}/approval`, {
+        method: "PATCH",
+        cookie: uploaderCookie,
+        body: {
+          action: "request",
+          approverUserId: approver.id,
+          comment: "Parallel request A"
+        }
+      }),
+      request(`/documents/${uploadPayload.document.id}/approval`, {
+        method: "PATCH",
+        cookie: uploaderCookie,
+        body: {
+          action: "request",
+          approverUserId: approver.id,
+          comment: "Parallel request B"
+        }
+      })
+    ]);
+
+    assert.deepEqual(
+      [firstRequestResponse.status, secondRequestResponse.status].sort((left, right) => left - right),
+      [200, 200]
+    );
+
+    const currentDocument = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      },
+      include: {
+        approvalRequests: true
+      }
+    });
+    assert.equal(currentDocument.fileVersion, 1);
+    assert.equal(
+      currentDocument.approvalRequests.filter((requestEntry) => requestEntry.fileVersion === 1 && requestEntry.status === "PENDING").length,
+      1
+    );
+    assert.equal(currentDocument.approvalRequests.length, 2);
+
+    const requestedEvents = await prisma.documentApprovalEvent.count({
+      where: {
+        documentId: uploadPayload.document.id,
+        eventType: "REQUESTED"
+      }
+    });
+    assert.equal(requestedEvents, 2);
+
+    const updatedEvents = await prisma.documentApprovalEvent.count({
+      where: {
+        documentId: uploadPayload.document.id,
+        eventType: "REQUEST_UPDATED"
+      }
+    });
+    assert.equal(updatedEvents, 1);
+  });
+
+  it("does not let stale approval request updates overwrite finalized requests", async () => {
+    const uploader = await createUser("docs-approval-update-race-uploader@example.com", "ValidPassword1!");
+    const approver = await createUser("docs-approval-update-race-approver@example.com", "ValidPassword1!");
+    const project = await seedProject(uploader.id);
+    await grantProjectAccess(project.id, approver.id, "PROJECT_VIEWER");
+    const uploaderCookie = await login(uploader.email, "ValidPassword1!");
+
+    for (const finalStatus of ["APPROVED", "REJECTED", "CANCELLED"] as const) {
+      const uploadResponse = await uploadDocumentTo(baseUrl, uploaderCookie, "PROJECT", project.id, `${finalStatus}.pdf`, {
+        approvalRequired: true,
+        approverUserId: approver.id
+      });
+      assert.equal(uploadResponse.status, 201);
+      const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+      const requestRecord = await prisma.documentApprovalRequest.findFirstOrThrow({
+        where: {
+          documentId: uploadPayload.document.id,
+          fileVersion: 1
+        }
+      });
+
+      let updatePromise: Promise<Response> | undefined;
+      await prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "DocumentApprovalRequest" WHERE "id" = ${requestRecord.id} FOR UPDATE`;
+        updatePromise = request(`/documents/${uploadPayload.document.id}/approval`, {
+          method: "PATCH",
+          cookie: uploaderCookie,
+          body: {
+            action: "request",
+            approverUserId: approver.id,
+            comment: `Stale ${finalStatus}`
+          }
+        });
+        await waitForApprovalRaceWindow();
+        await tx.documentApprovalRequest.update({
+          where: {
+            id: requestRecord.id
+          },
+          data: {
+            status: finalStatus,
+            decidedByUserId: uploader.id,
+            decidedAt: new Date(),
+            decisionComment: `Final ${finalStatus}`
+          }
+        });
+      });
+
+      assert.ok(updatePromise);
+      const updateResponse = await updatePromise;
+      assert.equal(updateResponse.status, 409);
+
+      const finalRequest = await prisma.documentApprovalRequest.findUniqueOrThrow({
+        where: {
+          id: requestRecord.id
+        }
+      });
+      assert.equal(finalRequest.status, finalStatus);
+      assert.equal(finalRequest.requestedComment, null);
+
+      const updateEvents = await prisma.documentApprovalEvent.count({
+        where: {
+          documentId: uploadPayload.document.id,
+          eventType: "REQUEST_UPDATED"
+        }
+      });
+      assert.equal(updateEvents, 0);
+    }
+  });
+
+  it("does not let stale metadata approval updates overwrite finalized requests", async () => {
+    const uploader = await createUser("docs-approval-metadata-race-uploader@example.com", "ValidPassword1!");
+    const approver = await createUser("docs-approval-metadata-race-approver@example.com", "ValidPassword1!");
+    const project = await seedProject(uploader.id);
+    await grantProjectAccess(project.id, approver.id, "PROJECT_VIEWER");
+    const uploaderCookie = await login(uploader.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocumentTo(baseUrl, uploaderCookie, "PROJECT", project.id, "metadata-race.pdf", {
+      category: "SUBMISSION",
+      approvalRequired: true,
+      approverUserId: approver.id
+    });
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    const requestRecord = await prisma.documentApprovalRequest.findFirstOrThrow({
+      where: {
+        documentId: uploadPayload.document.id,
+        fileVersion: 1
+      }
+    });
+
+    let updatePromise: Promise<Response> | undefined;
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "DocumentApprovalRequest" WHERE "id" = ${requestRecord.id} FOR UPDATE`;
+      updatePromise = request(`/documents/${uploadPayload.document.id}`, {
+        method: "PATCH",
+        cookie: uploaderCookie,
+        body: {
+          category: "REPORTS_INSPECTIONS",
+          approvalRequired: true,
+          approverUserId: approver.id,
+          approvalRequestedComment: "Stale metadata update"
+        }
+      });
+      await waitForApprovalRaceWindow();
+      await tx.documentApprovalRequest.update({
+        where: {
+          id: requestRecord.id
+        },
+        data: {
+          status: "APPROVED",
+          decidedByUserId: uploader.id,
+          decidedAt: new Date(),
+          decisionComment: "Final approval"
+        }
+      });
+    });
+
+    assert.ok(updatePromise);
+    const updateResponse = await updatePromise;
+    assert.equal(updateResponse.status, 409);
+
+    const finalRequest = await prisma.documentApprovalRequest.findUniqueOrThrow({
+      where: {
+        id: requestRecord.id
+      }
+    });
+    assert.equal(finalRequest.status, "APPROVED");
+    assert.equal(finalRequest.requestedComment, null);
+
+    const documentRecord = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      }
+    });
+    assert.equal(documentRecord.category, "SUBMISSION");
+
+    const updateEvents = await prisma.documentApprovalEvent.count({
+      where: {
+        documentId: uploadPayload.document.id,
+        eventType: "REQUEST_UPDATED"
+      }
+    });
+    assert.equal(updateEvents, 0);
+  });
+
+  it("blocks stale decisions after a concurrent approver change", async () => {
+    const uploader = await createUser("docs-approval-approver-race-uploader@example.com", "ValidPassword1!");
+    const firstApprover = await createUser("docs-approval-approver-race-first@example.com", "ValidPassword1!");
+    const nextApprover = await createUser("docs-approval-approver-race-next@example.com", "ValidPassword1!");
+    const project = await seedProject(uploader.id);
+    await grantProjectAccess(project.id, firstApprover.id, "PROJECT_VIEWER");
+    await grantProjectAccess(project.id, nextApprover.id, "PROJECT_VIEWER");
+    const uploaderCookie = await login(uploader.email, "ValidPassword1!");
+    const firstApproverCookie = await login(firstApprover.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocumentTo(baseUrl, uploaderCookie, "PROJECT", project.id, "approver-race.pdf", {
+      approvalRequired: true,
+      approverUserId: firstApprover.id
+    });
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    const requestRecord = await prisma.documentApprovalRequest.findFirstOrThrow({
+      where: {
+        documentId: uploadPayload.document.id,
+        fileVersion: 1
+      }
+    });
+
+    let decisionPromise: Promise<Response> | undefined;
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "DocumentApprovalRequest" WHERE "id" = ${requestRecord.id} FOR UPDATE`;
+      decisionPromise = request(`/documents/${uploadPayload.document.id}/approval`, {
+        method: "PATCH",
+        cookie: firstApproverCookie,
+        body: {
+          action: "approve",
+          comment: "Stale approver decision"
+        }
+      });
+      await waitForApprovalRaceWindow();
+      await tx.documentApprovalRequest.update({
+        where: {
+          id: requestRecord.id
+        },
+        data: {
+          approverUserId: nextApprover.id
+        }
+      });
+    });
+
+    assert.ok(decisionPromise);
+    const decisionResponse = await decisionPromise;
+    assert.equal(decisionResponse.status, 409);
+
+    const finalRequest = await prisma.documentApprovalRequest.findUniqueOrThrow({
+      where: {
+        id: requestRecord.id
+      }
+    });
+    assert.equal(finalRequest.status, "PENDING");
+    assert.equal(finalRequest.approverUserId, nextApprover.id);
+    assert.equal(finalRequest.decidedByUserId, null);
+
+    const decisionEvents = await prisma.documentApprovalEvent.count({
+      where: {
+        documentId: uploadPayload.document.id,
+        eventType: {
+          in: ["APPROVED", "REJECTED", "CHANGES_REQUESTED"]
+        }
+      }
+    });
+    assert.equal(decisionEvents, 0);
+  });
+
+  it("blocks stale decisions after a concurrent file replacement", async () => {
+    const uploader = await createUser("docs-approval-file-race-uploader@example.com", "ValidPassword1!");
+    const approver = await createUser("docs-approval-file-race-approver@example.com", "ValidPassword1!");
+    const project = await seedProject(uploader.id);
+    await grantProjectAccess(project.id, approver.id, "PROJECT_VIEWER");
+    const uploaderCookie = await login(uploader.email, "ValidPassword1!");
+    const approverCookie = await login(approver.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocumentTo(baseUrl, uploaderCookie, "PROJECT", project.id, "file-race.pdf", {
+      approvalRequired: true,
+      approverUserId: approver.id
+    });
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+    const requestRecord = await prisma.documentApprovalRequest.findFirstOrThrow({
+      where: {
+        documentId: uploadPayload.document.id,
+        fileVersion: 1
+      }
+    });
+
+    let replacePromise: Promise<Response> | undefined;
+    let decisionPromise: Promise<Response> | undefined;
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Document" WHERE "id" = ${uploadPayload.document.id} FOR UPDATE`;
+      replacePromise = replaceDocumentFile(uploaderCookie, uploadPayload.document.id, "file-race-v2.pdf", "v2");
+      await waitForApprovalRaceWindow();
+      decisionPromise = request(`/documents/${uploadPayload.document.id}/approval`, {
+        method: "PATCH",
+        cookie: approverCookie,
+        body: {
+          action: "approve",
+          comment: "Stale file decision"
+        }
+      });
+      await waitForApprovalRaceWindow();
+    });
+
+    assert.ok(replacePromise);
+    assert.ok(decisionPromise);
+    const replaceResponse = await replacePromise;
+    const decisionResponse = await decisionPromise;
+    assert.equal(replaceResponse.status, 200);
+    assert.equal(decisionResponse.status, 409);
+
+    const oldRequest = await prisma.documentApprovalRequest.findUniqueOrThrow({
+      where: {
+        id: requestRecord.id
+      }
+    });
+    assert.equal(oldRequest.status, "PENDING");
+    assert.equal(oldRequest.decidedByUserId, null);
+
+    const currentDocument = await prisma.document.findUniqueOrThrow({
+      where: {
+        id: uploadPayload.document.id
+      },
+      include: {
+        approvalRequests: true
+      }
+    });
+    assert.equal(currentDocument.fileVersion, 2);
+    assert.equal(currentDocument.approvalRequests.length, 2);
+    assert.equal(currentDocument.approvalRequests.some((requestEntry) => requestEntry.fileVersion === 2 && requestEntry.status === "PENDING"), true);
+
+    const decisionEvents = await prisma.documentApprovalEvent.count({
+      where: {
+        documentId: uploadPayload.document.id,
+        eventType: {
+          in: ["APPROVED", "REJECTED", "CHANGES_REQUESTED"]
+        }
+      }
+    });
+    assert.equal(decisionEvents, 0);
+  });
+
+  it("rejects approvers who cannot read the document owner", async () => {
+    await createRole("DOC_APPROVAL_PROJECT_EDITOR", ["projects.view", "projects.edit"]);
+    await createRole("DOC_APPROVAL_PROJECT_READER", ["projects.view"]);
+    await createRole("DOC_APPROVAL_PROJECT_GLOBAL_READER", ["projects.viewAll"]);
+    await createRole("DOC_APPROVAL_LEGAL_EDITOR", ["legalDocs.view", "legalDocs.edit"]);
+    await createRole("DOC_APPROVAL_LEGAL_READER", ["legalDocs.view"]);
+
+    const uploader = await createUser("docs-approval-rbac-uploader@example.com", "ValidPassword1!", {
+      role: "DOC_APPROVAL_PROJECT_EDITOR"
+    });
+    const allowedApprover = await createUser("docs-approval-rbac-allowed@example.com", "ValidPassword1!", {
+      role: "DOC_APPROVAL_PROJECT_READER"
+    });
+    const noProjectAccessApprover = await createUser("docs-approval-rbac-no-project@example.com", "ValidPassword1!", {
+      role: "DOC_APPROVAL_PROJECT_READER"
+    });
+    const globalApprover = await createUser("docs-approval-rbac-global@example.com", "ValidPassword1!", {
+      role: "DOC_APPROVAL_PROJECT_GLOBAL_READER"
+    });
+    const externalApprover = await createUser("docs-approval-rbac-external@example.com", "ValidPassword1!", {
+      role: "EXTERNAL",
+      type: "EXTERNAL"
+    });
+    const archivedApprover = await createUser("docs-approval-rbac-archived@example.com", "ValidPassword1!", {
+      role: "DOC_APPROVAL_PROJECT_READER"
+    });
+    await prisma.user.update({
+      where: {
+        id: archivedApprover.id
+      },
+      data: {
+        isArchived: true
+      }
+    });
+
+    const project = await seedProject(uploader.id);
+    await grantProjectAccess(project.id, allowedApprover.id, "PROJECT_VIEWER");
+    const uploaderCookie = await login(uploader.email, "ValidPassword1!");
+
+    const noAccessUpload = await uploadDocumentTo(baseUrl, uploaderCookie, "PROJECT", project.id, "blocked-approver.pdf", {
+      approvalRequired: true,
+      approverUserId: noProjectAccessApprover.id
+    });
+    assert.equal(noAccessUpload.status, 400);
+
+    const externalUpload = await uploadDocumentTo(baseUrl, uploaderCookie, "PROJECT", project.id, "external-approver.pdf", {
+      approvalRequired: true,
+      approverUserId: externalApprover.id
+    });
+    assert.equal(externalUpload.status, 400);
+
+    const archivedUpload = await uploadDocumentTo(baseUrl, uploaderCookie, "PROJECT", project.id, "archived-approver.pdf", {
+      approvalRequired: true,
+      approverUserId: archivedApprover.id
+    });
+    assert.equal(archivedUpload.status, 400);
+
+    const allowedUpload = await uploadDocumentTo(baseUrl, uploaderCookie, "PROJECT", project.id, "allowed-approver.pdf", {
+      approvalRequired: true,
+      approverUserId: allowedApprover.id
+    });
+    assert.equal(allowedUpload.status, 201);
+    const allowedPayload = (await allowedUpload.json()) as { document: { id: string; approverUserId?: string } };
+    assert.equal(allowedPayload.document.approverUserId, allowedApprover.id);
+
+    const globalRequestUpdate = await request(`/documents/${allowedPayload.document.id}/approval`, {
+      method: "PATCH",
+      cookie: uploaderCookie,
+      body: {
+        action: "request",
+        approverUserId: globalApprover.id
+      }
+    });
+    assert.equal(globalRequestUpdate.status, 200);
+
+    const blockedMetadataUpdate = await request(`/documents/${allowedPayload.document.id}`, {
+      method: "PATCH",
+      cookie: uploaderCookie,
+      body: {
+        approvalRequired: true,
+        approverUserId: noProjectAccessApprover.id
+      }
+    });
+    assert.equal(blockedMetadataUpdate.status, 400);
+
+    const legalUploader = await createUser("docs-approval-rbac-legal-uploader@example.com", "ValidPassword1!", {
+      role: "DOC_APPROVAL_LEGAL_EDITOR"
+    });
+    const legalApprover = await createUser("docs-approval-rbac-legal-approver@example.com", "ValidPassword1!", {
+      role: "DOC_APPROVAL_LEGAL_READER"
+    });
+    const legalNoAccessApprover = await createUser("docs-approval-rbac-legal-no-access@example.com", "ValidPassword1!", {
+      role: "DOC_APPROVAL_LEGAL_READER"
+    });
+    const legalBundle = await seedOwnerBundle(legalUploader.id, "PROJECT_EDITOR");
+    await grantProjectAccess(legalBundle.project.id, legalApprover.id, "PROJECT_VIEWER");
+    const legalUploaderCookie = await login(legalUploader.email, "ValidPassword1!");
+
+    const legalBlockedUpload = await uploadDocumentTo(baseUrl, legalUploaderCookie, "LEGAL_DOC", legalBundle.legalDoc.id, "legal-blocked.pdf", {
+      approvalRequired: true,
+      approverUserId: legalNoAccessApprover.id
+    });
+    assert.equal(legalBlockedUpload.status, 400);
+
+    const legalAllowedUpload = await uploadDocumentTo(baseUrl, legalUploaderCookie, "LEGAL_DOC", legalBundle.legalDoc.id, "legal-allowed.pdf", {
+      approvalRequired: true,
+      approverUserId: legalApprover.id
+    });
+    assert.equal(legalAllowedUpload.status, 201);
+  });
+
+  it("resets approval to pending when an approved document file is replaced", async () => {
+    const uploader = await createUser("docs-approval-reset-uploader@example.com", "ValidPassword1!");
+    const approver = await createUser("docs-approval-reset-approver@example.com", "ValidPassword1!");
+    const project = await seedProject(uploader.id);
+    await grantProjectAccess(project.id, approver.id, "PROJECT_VIEWER");
+    const uploaderCookie = await login(uploader.email, "ValidPassword1!");
+    const approverCookie = await login(approver.email, "ValidPassword1!");
+
+    const uploadResponse = await uploadDocumentTo(baseUrl, uploaderCookie, "PROJECT", project.id, "approved.pdf", {
+      approvalRequired: true,
+      approverUserId: approver.id
+    });
+    assert.equal(uploadResponse.status, 201);
+    const uploadPayload = (await uploadResponse.json()) as { document: { id: string } };
+
+    const approveResponse = await request(`/documents/${uploadPayload.document.id}/approval`, {
+      method: "PATCH",
+      cookie: approverCookie,
+      body: {
+        action: "approve"
+      }
+    });
+    assert.equal(approveResponse.status, 200);
+
+    const replaceResponse = await replaceDocumentFile(uploaderCookie, uploadPayload.document.id, "approved-v2.pdf", "v2");
+    assert.equal(replaceResponse.status, 200);
+    const replacePayload = (await replaceResponse.json()) as {
+      document: {
+        fileVersion: number;
+        approvalStatus: string;
+        approvalDecidedByUserId?: string;
+      };
+    };
+    assert.equal(replacePayload.document.fileVersion, 2);
+    assert.equal(replacePayload.document.approvalStatus, "PENDING");
+    assert.equal(replacePayload.document.approvalDecidedByUserId, undefined);
+
+    const requestCount = await prisma.documentApprovalRequest.count({
+      where: {
+        documentId: uploadPayload.document.id
+      }
+    });
+    assert.equal(requestCount, 2);
+  });
+
+  it("allows office downloads but rejects macro-enabled and mismatched file types", async () => {
+    const user = await createUser("docs-filetypes@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const officeUpload = await uploadDocumentTo(baseUrl, cookie, "PROJECT", project.id, "sheet.xlsx", {
+      content: "office-content"
+    });
+    assert.equal(officeUpload.status, 201);
+    const officePayload = (await officeUpload.json()) as { document: { id: string; mimeType: string } };
+    assert.equal(officePayload.document.mimeType, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+
+    const downloadResponse = await request(`/documents/${officePayload.document.id}/file`, { cookie });
+    assert.equal(downloadResponse.status, 200);
+    assert.match(downloadResponse.headers.get("content-disposition") ?? "", /^attachment;/);
+
+    const macroUpload = await uploadDocumentTo(baseUrl, cookie, "PROJECT", project.id, "macro.xlsm", {
+      contentType: "application/vnd.ms-excel.sheet.macroEnabled.12"
+    });
+    assert.equal(macroUpload.status, 415);
+    const macroPayload = (await macroUpload.json()) as { errorCode?: string };
+    assert.equal(macroPayload.errorCode, "DOCUMENT_FILE_TYPE_NOT_ALLOWED");
+
+    const mismatchUpload = await uploadDocumentTo(baseUrl, cookie, "PROJECT", project.id, "wrong.docx", {
+      contentType: "application/pdf"
+    });
+    assert.equal(mismatchUpload.status, 415);
   });
 
   it("honors UPLOAD_DIR exactly when its basename is not uploads", async () => {
@@ -1131,20 +1992,16 @@ describe("Documents API", () => {
     const oldPath = resolveTestDocumentPath(oldRecord.storagePath);
     assert.equal(await fs.readFile(oldPath, "utf8"), "test-pdf-content");
 
-    const originalUpdate = prisma.document.update.bind(prisma.document) as (args: unknown) => Promise<unknown>;
-    (prisma.document as unknown as { update: (args: unknown) => Promise<unknown> }).update = async (args: unknown) => {
-      const updateArgs = args as { where?: { id?: string }; data?: { storagePath?: unknown } };
-      if (updateArgs.where?.id === uploadPayload.document.id && updateArgs.data?.storagePath) {
-        throw new Error("mock document update failure");
-      }
-      return originalUpdate(args);
+    const originalTransaction = prisma.$transaction.bind(prisma) as (args: unknown) => Promise<unknown>;
+    (prisma as unknown as { $transaction: (args: unknown) => Promise<unknown> }).$transaction = async () => {
+      throw new Error("mock document transaction failure");
     };
 
     let replaceResponse: Response;
     try {
       replaceResponse = await replaceDocumentFile(cookie, uploadPayload.document.id, "db-failure.pdf", "new-content");
     } finally {
-      (prisma.document as unknown as { update: (args: unknown) => Promise<unknown> }).update = originalUpdate;
+      (prisma as unknown as { $transaction: (args: unknown) => Promise<unknown> }).$transaction = originalTransaction;
     }
     assert.equal(replaceResponse.status, 500);
 
@@ -1927,6 +2784,80 @@ describe("Documents API", () => {
       "deadline-allowed.pdf"
     );
     assert.equal(completeOnlyDeadlineUpload.status, 201);
+  });
+
+  it("requires deadline manage permission before upload approval fields create approval requests", async () => {
+    await createRole("DEADLINE_UPLOAD_COMPLETE_ONLY", ["tasks.complete"]);
+    await createRole("DEADLINE_UPLOAD_MANAGER", ["deadlines.edit"]);
+    await createRole("DEADLINE_UPLOAD_APPROVER", ["deadlines.view"]);
+
+    const completeOnlyUser = await createUser("docs-deadline-approval-complete-only@example.com", "ValidPassword1!", {
+      role: "DEADLINE_UPLOAD_COMPLETE_ONLY"
+    });
+    const manager = await createUser("docs-deadline-approval-manager@example.com", "ValidPassword1!", {
+      role: "DEADLINE_UPLOAD_MANAGER"
+    });
+    const approver = await createUser("docs-deadline-approval-approver@example.com", "ValidPassword1!", {
+      role: "DEADLINE_UPLOAD_APPROVER"
+    });
+    const completeOnlyBundle = await seedOwnerBundle(completeOnlyUser.id, "PROJECT_EDITOR");
+    const managerBundle = await seedOwnerBundle(manager.id, "PROJECT_EDITOR");
+    await grantProjectAccess(managerBundle.project.id, approver.id, "PROJECT_VIEWER");
+    const completeOnlyCookie = await login(completeOnlyUser.email, "ValidPassword1!");
+    const managerCookie = await login(manager.email, "ValidPassword1!");
+
+    const plainUpload = await uploadDocument(
+      completeOnlyCookie,
+      "DEADLINE",
+      completeOnlyBundle.deadline.id,
+      "deadline-plain.pdf"
+    );
+    assert.equal(plainUpload.status, 201);
+
+    const approvalRequiredUpload = await uploadDocumentTo(
+      baseUrl,
+      completeOnlyCookie,
+      "DEADLINE",
+      completeOnlyBundle.deadline.id,
+      "deadline-approval-required.pdf",
+      {
+        approvalRequired: true
+      }
+    );
+    assert.equal(approvalRequiredUpload.status, 403);
+
+    const approverAssignmentUpload = await uploadDocumentTo(
+      baseUrl,
+      completeOnlyCookie,
+      "DEADLINE",
+      completeOnlyBundle.deadline.id,
+      "deadline-approver.pdf",
+      {
+        approverUserId: approver.id
+      }
+    );
+    assert.equal(approverAssignmentUpload.status, 403);
+
+    const allowedApprovalUpload = await uploadDocumentTo(
+      baseUrl,
+      managerCookie,
+      "DEADLINE",
+      managerBundle.deadline.id,
+      "deadline-approval-allowed.pdf",
+      {
+        approvalRequired: true,
+        approverUserId: approver.id
+      }
+    );
+    assert.equal(allowedApprovalUpload.status, 201);
+    const allowedPayload = (await allowedApprovalUpload.json()) as {
+      document: {
+        approvalStatus: string;
+        approverUserId?: string;
+      };
+    };
+    assert.equal(allowedPayload.document.approvalStatus, "PENDING");
+    assert.equal(allowedPayload.document.approverUserId, approver.id);
   });
 
   it("blocks direct task evidence delete and replace fail-closed", async () => {

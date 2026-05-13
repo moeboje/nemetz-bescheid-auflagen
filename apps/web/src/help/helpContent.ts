@@ -849,8 +849,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
     categorySlug: "tasks-evidence",
     visibility: "authenticated",
     audiences: ["operative_users", "mobile_users", "advanced_users"],
-    tags: ["Dokumente", "Upload", "Unterlagen", "Nachweise", "Download"],
-    searchTerms: ["dokumente", "upload", "unterlagen", "nachweis", "evidence", "download"],
+    tags: ["Dokumente", "Upload", "Unterlagen", "Nachweise", "Download", "Kategorien", "Freigabe"],
+    searchTerms: ["dokumente", "upload", "unterlagen", "nachweis", "evidence", "download", "kategorie", "freigabe"],
     relatedArticleSlugs: ["tasks-and-completion", "deadlines-and-evidence", "legacy-decisions"],
     contextKeys: ["documents"],
     sections: [
@@ -867,8 +867,18 @@ export const HELP_ARTICLES: HelpArticle[] = [
         lines: [
           "Hochladen, Vorschau und Download sind nur sichtbar, wenn du Zugriff auf das zugehoerige Projekt und die passende Berechtigung hast.",
           "Serverseitige Nachweisdateien werden ueber die geschuetzte Document API geladen; es gibt keine oeffentlichen Dateilinks.",
+          "PDF-Dateien und Bilder koennen in der Vorschau geoeffnet werden. Office-Dateien, CSV und TXT werden heruntergeladen.",
           "Wenn ein Datei-Inhalt nicht mehr verfuegbar ist, muss der Nachweis neu hochgeladen werden.",
           "Alte Browser-Anhaenge sind nur Altbestand. Lade sie erneut hoch, wenn sie serverseitig verfuegbar sein sollen."
+        ]
+      },
+      {
+        heading: "Kategorien und Freigaben",
+        lines: [
+          "Beim Hochladen kann eine Dokumentkategorie gesetzt werden, damit Unterlagen leichter gruppiert und gefiltert werden koennen.",
+          "Wenn eine Unterlage vor Weitergabe geprueft werden soll, kann eine Freigabe angefordert und eine interne freigebende Person ausgewaehlt werden.",
+          "Der Freigabestatus wird als Ampel angezeigt: keine Freigabe, offen, freigegeben oder abgelehnt bzw. Aenderungen erforderlich.",
+          "Wird eine bereits freigegebene Datei ersetzt, gilt die alte Freigabe nicht automatisch fuer die neue Dateiversion."
         ]
       }
     ]

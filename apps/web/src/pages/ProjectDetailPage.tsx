@@ -345,7 +345,7 @@ function LegacyDecisionModal({
             <span className="fieldLabel">{t("legacyDecisions.fields.file")}</span>
             <input
               type="file"
-              accept=".pdf,image/*,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+              accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt"
               onChange={(event) => setSelectedFile(event.target.files?.[0])}
             />
             <span className="placeholderText">

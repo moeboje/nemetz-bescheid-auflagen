@@ -869,7 +869,7 @@ export default function LegalDocModal({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".pdf,image/*,.doc,.docx"
+                accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt"
                 className="fileInputHidden"
                 onChange={(event) => {
                   const nextFile = event.target.files?.[0] ?? null;

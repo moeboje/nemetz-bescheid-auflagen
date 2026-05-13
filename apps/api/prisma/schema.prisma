@@ -96,6 +96,10 @@ model User {
   auditLogsAsActor              AuditLog[]                    @relation("AuditActor")
   auditLogsAsTarget             AuditLog[]                    @relation("AuditTarget")
   documentsCreated              Document[]
+  documentApprovalRequests      DocumentApprovalRequest[]      @relation("DocumentApprovalRequestedBy")
+  documentApprovalAssignments   DocumentApprovalRequest[]      @relation("DocumentApprovalApprover")
+  documentApprovalDecisions     DocumentApprovalRequest[]      @relation("DocumentApprovalDecidedBy")
+  documentApprovalEvents        DocumentApprovalEvent[]        @relation("DocumentApprovalEventActor")
   brandingAssetsUpdated         BrandingAsset[]              @relation("BrandingAssetUpdatedBy")
   externalOrg                   ExternalOrganization?         @relation(fields: [externalOrgId], references: [id], onDelete: SetNull)
   ownedProjects                 Project[]                     @relation("ProjectOwner")
@@ -138,6 +142,8 @@ model Document {
   id               String   @id @default(cuid())
   ownerType        String
   ownerId          String
+  category         String   @default("OTHER")
+  fileVersion      Int      @default(1)
   filename         String
   originalFilename String?
   mimeType         String
@@ -149,9 +155,60 @@ model Document {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
   createdByUser    User?    @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  approvalRequests DocumentApprovalRequest[]
+  approvalEvents   DocumentApprovalEvent[]
 
   @@index([ownerType, ownerId])
+  @@index([category])
   @@index([createdAt])
+}
+
+model DocumentApprovalRequest {
+  id                String                  @id @default(cuid())
+  documentId        String
+  fileVersion       Int                     @default(1)
+  status            String                  @default("PENDING")
+  requestedByUserId String?
+  requestedAt       DateTime                @default(now())
+  requestedComment  String?
+  approverUserId    String?
+  decidedByUserId   String?
+  decidedAt         DateTime?
+  decisionComment   String?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  document          Document                @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  requestedByUser   User?                   @relation("DocumentApprovalRequestedBy", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  approverUser      User?                   @relation("DocumentApprovalApprover", fields: [approverUserId], references: [id], onDelete: SetNull)
+  decidedByUser     User?                   @relation("DocumentApprovalDecidedBy", fields: [decidedByUserId], references: [id], onDelete: SetNull)
+  events            DocumentApprovalEvent[]
+
+  @@index([documentId])
+  @@index([documentId, fileVersion, createdAt])
+  @@index([status])
+  @@index([requestedByUserId])
+  @@index([approverUserId])
+  @@index([decidedByUserId])
+}
+
+model DocumentApprovalEvent {
+  id                String                   @id @default(cuid())
+  documentId        String
+  approvalRequestId String?
+  fileVersion       Int
+  eventType         String
+  status            String
+  actorUserId       String?
+  comment           String?
+  createdAt         DateTime                 @default(now())
+  document          Document                 @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  approvalRequest   DocumentApprovalRequest? @relation(fields: [approvalRequestId], references: [id], onDelete: SetNull)
+  actorUser         User?                    @relation("DocumentApprovalEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([documentId, createdAt])
+  @@index([approvalRequestId])
+  @@index([actorUserId])
+  @@index([eventType])
 }
 
 model Comment {

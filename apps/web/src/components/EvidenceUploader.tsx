@@ -275,7 +275,7 @@ export default function EvidenceUploader({
                   ref={documentInputRef}
                   type="file"
                   multiple
-                  accept=".pdf,image/*,.doc,.docx,.xls,.xlsx,.txt"
+                  accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.doc,.docx,.xls,.xlsx,.csv,.txt"
                   className="fileInputHidden"
                   onChange={(event) => {
                     const files = Array.from(event.target.files ?? []);

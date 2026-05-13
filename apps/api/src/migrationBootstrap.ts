@@ -16,6 +16,7 @@ export type BootstrapMode =
   | "baseline-20260502120000_project_access_legacy_decisions"
   | "baseline-20260503143000_branding_assets"
   | "baseline-20260507120000_project_legal_doc_descriptions_preview"
+  | "baseline-20260513120000_document_categories_approvals"
   | "partial";
 
 type TableRow = {
@@ -416,6 +417,87 @@ const documentsRequirements = {
   primaryKeys: [primaryKey("Document_pkey", "Document", ["id"])],
   foreignKeys: [
     foreignKey("Document_createdByUserId_fkey", "Document", ["createdByUserId"], "User", ["id"], {
+      onDelete: "SET NULL",
+      onUpdate: "CASCADE"
+    })
+  ]
+} satisfies SchemaRequirements;
+
+const documentCategoriesApprovalsRequirements = {
+  tables: ["DocumentApprovalRequest", "DocumentApprovalEvent"],
+  columns: [
+    "Document.category",
+    "Document.fileVersion",
+    "DocumentApprovalRequest.id",
+    "DocumentApprovalRequest.documentId",
+    "DocumentApprovalRequest.fileVersion",
+    "DocumentApprovalRequest.status",
+    "DocumentApprovalRequest.requestedByUserId",
+    "DocumentApprovalRequest.requestedAt",
+    "DocumentApprovalRequest.requestedComment",
+    "DocumentApprovalRequest.approverUserId",
+    "DocumentApprovalRequest.decidedByUserId",
+    "DocumentApprovalRequest.decidedAt",
+    "DocumentApprovalRequest.decisionComment",
+    "DocumentApprovalRequest.createdAt",
+    "DocumentApprovalRequest.updatedAt",
+    "DocumentApprovalEvent.id",
+    "DocumentApprovalEvent.documentId",
+    "DocumentApprovalEvent.approvalRequestId",
+    "DocumentApprovalEvent.fileVersion",
+    "DocumentApprovalEvent.eventType",
+    "DocumentApprovalEvent.status",
+    "DocumentApprovalEvent.actorUserId",
+    "DocumentApprovalEvent.comment",
+    "DocumentApprovalEvent.createdAt"
+  ],
+  indexes: [
+    index("Document_category_idx", "Document", ["category"]),
+    index("DocumentApprovalRequest_documentId_idx", "DocumentApprovalRequest", ["documentId"]),
+    index("DocumentApprovalRequest_documentId_fileVersion_createdAt_idx", "DocumentApprovalRequest", [
+      "documentId",
+      "fileVersion",
+      "createdAt"
+    ]),
+    index("DocumentApprovalRequest_status_idx", "DocumentApprovalRequest", ["status"]),
+    index("DocumentApprovalRequest_requestedByUserId_idx", "DocumentApprovalRequest", ["requestedByUserId"]),
+    index("DocumentApprovalRequest_approverUserId_idx", "DocumentApprovalRequest", ["approverUserId"]),
+    index("DocumentApprovalRequest_decidedByUserId_idx", "DocumentApprovalRequest", ["decidedByUserId"]),
+    index("DocumentApprovalEvent_documentId_createdAt_idx", "DocumentApprovalEvent", ["documentId", "createdAt"]),
+    index("DocumentApprovalEvent_approvalRequestId_idx", "DocumentApprovalEvent", ["approvalRequestId"]),
+    index("DocumentApprovalEvent_actorUserId_idx", "DocumentApprovalEvent", ["actorUserId"]),
+    index("DocumentApprovalEvent_eventType_idx", "DocumentApprovalEvent", ["eventType"])
+  ],
+  primaryKeys: [
+    primaryKey("DocumentApprovalRequest_pkey", "DocumentApprovalRequest", ["id"]),
+    primaryKey("DocumentApprovalEvent_pkey", "DocumentApprovalEvent", ["id"])
+  ],
+  foreignKeys: [
+    foreignKey("DocumentApprovalRequest_documentId_fkey", "DocumentApprovalRequest", ["documentId"], "Document", ["id"], {
+      onDelete: "CASCADE",
+      onUpdate: "CASCADE"
+    }),
+    foreignKey("DocumentApprovalRequest_requestedByUserId_fkey", "DocumentApprovalRequest", ["requestedByUserId"], "User", ["id"], {
+      onDelete: "SET NULL",
+      onUpdate: "CASCADE"
+    }),
+    foreignKey("DocumentApprovalRequest_approverUserId_fkey", "DocumentApprovalRequest", ["approverUserId"], "User", ["id"], {
+      onDelete: "SET NULL",
+      onUpdate: "CASCADE"
+    }),
+    foreignKey("DocumentApprovalRequest_decidedByUserId_fkey", "DocumentApprovalRequest", ["decidedByUserId"], "User", ["id"], {
+      onDelete: "SET NULL",
+      onUpdate: "CASCADE"
+    }),
+    foreignKey("DocumentApprovalEvent_documentId_fkey", "DocumentApprovalEvent", ["documentId"], "Document", ["id"], {
+      onDelete: "CASCADE",
+      onUpdate: "CASCADE"
+    }),
+    foreignKey("DocumentApprovalEvent_approvalRequestId_fkey", "DocumentApprovalEvent", ["approvalRequestId"], "DocumentApprovalRequest", ["id"], {
+      onDelete: "SET NULL",
+      onUpdate: "CASCADE"
+    }),
+    foreignKey("DocumentApprovalEvent_actorUserId_fkey", "DocumentApprovalEvent", ["actorUserId"], "User", ["id"], {
       onDelete: "SET NULL",
       onUpdate: "CASCADE"
     })
@@ -1343,6 +1425,18 @@ const projectStatusSubmissionTypeBaselineRequirements = mergeRequirements(
 );
 
 export const baselineStages = [
+  {
+    mode: "baseline-20260513120000_document_categories_approvals",
+    introduced: documentCategoriesApprovalsRequirements,
+    requirements: mergeRequirements(
+      projectStatusSubmissionTypeBaselineRequirements,
+      obligationExternalRecurrenceRequirements,
+      projectAccessLegacyDecisionsRequirements,
+      brandingAssetRequirements,
+      projectLegalDocDescriptionsPreviewRequirements,
+      documentCategoriesApprovalsRequirements
+    )
+  },
   {
     mode: "baseline-20260507120000_project_legal_doc_descriptions_preview",
     introduced: projectLegalDocDescriptionsPreviewRequirements,

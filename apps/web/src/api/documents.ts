@@ -8,10 +8,32 @@ export type DocumentOwnerType =
   | "TASK_EVIDENCE"
   | "LEGACY_DECISION";
 
+export type DocumentCategory =
+  | "SUBMISSION"
+  | "AUTHORITY_CORRESPONDENCE"
+  | "LAWYER_EXTERNAL_CORRESPONDENCE"
+  | "LEGAL_DECISIONS"
+  | "OBLIGATION_EVIDENCE"
+  | "REPORTS_INSPECTIONS"
+  | "PLANS_DRAWINGS"
+  | "INTERNAL_WORKING_DOCS"
+  | "CONTRACTS"
+  | "OTHER";
+
+export type DocumentApprovalStatus =
+  | "NOT_REQUIRED"
+  | "PENDING"
+  | "APPROVED"
+  | "REJECTED"
+  | "CHANGES_REQUESTED"
+  | "CANCELLED";
+
 export type DocumentDto = {
   id: string;
   ownerType: DocumentOwnerType;
   ownerId: string;
+  category: DocumentCategory;
+  fileVersion: number;
   filename: string;
   originalFilename?: string;
   mimeType: string;
@@ -19,13 +41,49 @@ export type DocumentDto = {
   createdAt: string;
   createdByUserId?: string;
   createdByLabel?: string;
+  approvalRequired: boolean;
+  approvalStatus: DocumentApprovalStatus;
+  approvalRequestId?: string;
+  approvalRequestedByUserId?: string;
+  approvalRequestedByLabel?: string;
+  approvalRequestedAt?: string;
+  approvalRequestedComment?: string;
+  approverUserId?: string;
+  approverLabel?: string;
+  approvalDecidedByUserId?: string;
+  approvalDecidedByLabel?: string;
+  approvalDecidedAt?: string;
+  approvalDecisionComment?: string;
+};
+
+export type DocumentUploadOptions = {
+  category?: DocumentCategory;
+  approvalRequired?: boolean;
+  approvalRequestedComment?: string;
+  approverUserId?: string | null;
+};
+
+export type DocumentMetadataUpdate = {
+  category?: DocumentCategory;
+  approvalRequired?: boolean;
+  approvalRequestedComment?: string;
+  approverUserId?: string | null;
+};
+
+export type DocumentApprovalAction = "request" | "approve" | "reject" | "changesRequested" | "cancel";
+
+export type DocumentApprovalInput = {
+  action: DocumentApprovalAction;
+  comment?: string;
+  approverUserId?: string | null;
 };
 
 export type DocumentApiErrorCode =
   | "DOCUMENT_NOT_FOUND"
   | "FILE_MISSING"
   | "INVALID_STORAGE_PATH"
-  | "TASK_EVIDENCE_DELETE_BLOCKED";
+  | "TASK_EVIDENCE_DELETE_BLOCKED"
+  | "DOCUMENT_FILE_TYPE_NOT_ALLOWED";
 
 function parseErrorMessage(payload: unknown, fallback: string) {
   if (payload && typeof payload === "object" && "message" in payload && typeof payload.message === "string") {
@@ -43,7 +101,8 @@ function parseErrorCode(payload: unknown): DocumentApiErrorCode | undefined {
     errorCode === "DOCUMENT_NOT_FOUND" ||
     errorCode === "FILE_MISSING" ||
     errorCode === "INVALID_STORAGE_PATH" ||
-    errorCode === "TASK_EVIDENCE_DELETE_BLOCKED"
+    errorCode === "TASK_EVIDENCE_DELETE_BLOCKED" ||
+    errorCode === "DOCUMENT_FILE_TYPE_NOT_ALLOWED"
   ) {
     return errorCode;
   }
@@ -83,11 +142,23 @@ export async function getDocument(documentId: string) {
   return payload.document;
 }
 
-export async function uploadDocument(ownerType: DocumentOwnerType, ownerId: string, file: File) {
+export async function uploadDocument(ownerType: DocumentOwnerType, ownerId: string, file: File, options: DocumentUploadOptions = {}) {
   const form = new FormData();
   form.set("ownerType", ownerType);
   form.set("ownerId", ownerId);
   form.set("file", file);
+  if (options.category) {
+    form.set("category", options.category);
+  }
+  if (options.approvalRequired) {
+    form.set("approvalRequired", "true");
+  }
+  if (options.approvalRequestedComment) {
+    form.set("approvalRequestedComment", options.approvalRequestedComment);
+  }
+  if (options.approverUserId) {
+    form.set("approverUserId", options.approverUserId);
+  }
 
   const response = await fetch(resolveApiUrl("/documents"), {
     method: "POST",
@@ -105,6 +176,22 @@ export async function uploadDocument(ownerType: DocumentOwnerType, ownerId: stri
   }
 
   return (payload as { document: DocumentDto }).document;
+}
+
+export async function updateDocumentMetadata(documentId: string, input: DocumentMetadataUpdate) {
+  const payload = await apiRequest<{ document: DocumentDto }>(`/documents/${encodeURIComponent(documentId)}`, {
+    method: "PATCH",
+    body: input
+  });
+  return payload.document;
+}
+
+export async function updateDocumentApproval(documentId: string, input: DocumentApprovalInput) {
+  const payload = await apiRequest<{ document: DocumentDto }>(`/documents/${encodeURIComponent(documentId)}/approval`, {
+    method: "PATCH",
+    body: input
+  });
+  return payload.document;
 }
 
 export async function replaceDocumentFile(documentId: string, file: File) {
