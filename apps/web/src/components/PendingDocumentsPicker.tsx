@@ -51,7 +51,7 @@ export default function PendingDocumentsPicker({
           type="file"
           multiple
           className="fileInputHidden"
-          accept=".pdf,image/*,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+          accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.doc,.docx,.xls,.xlsx,.csv,.ppt,.pptx,.txt"
           onChange={(event) => {
             addFiles(Array.from(event.target.files ?? []));
             if (inputRef.current) {

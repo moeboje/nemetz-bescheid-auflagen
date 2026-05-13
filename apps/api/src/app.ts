@@ -115,6 +115,28 @@ const SORT_DIRECTIONS = ["asc", "desc"] as const;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ROLE_KEY_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const DOCUMENT_OWNER_TYPES = ["PROJECT", "LEGAL_DOC", "OBLIGATION", "DEADLINE", "TASK_EVIDENCE", "LEGACY_DECISION"] as const;
+const DOCUMENT_CATEGORIES = [
+  "SUBMISSION",
+  "AUTHORITY_CORRESPONDENCE",
+  "LAWYER_EXTERNAL_CORRESPONDENCE",
+  "LEGAL_DECISIONS",
+  "OBLIGATION_EVIDENCE",
+  "REPORTS_INSPECTIONS",
+  "PLANS_DRAWINGS",
+  "INTERNAL_WORKING_DOCS",
+  "CONTRACTS",
+  "OTHER"
+] as const;
+const DEFAULT_DOCUMENT_CATEGORY: DocumentCategory = "OTHER";
+const DOCUMENT_APPROVAL_REQUEST_STATUSES = [
+  "PENDING",
+  "APPROVED",
+  "REJECTED",
+  "CHANGES_REQUESTED",
+  "CANCELLED"
+] as const;
+const DOCUMENT_APPROVAL_DTO_STATUSES = ["NOT_REQUIRED", ...DOCUMENT_APPROVAL_REQUEST_STATUSES] as const;
+const DOCUMENT_APPROVAL_DECISION_ACTIONS = ["approve", "reject", "changesRequested"] as const;
 const COMMENT_ENTITY_TYPES = ["PROJECT", "LEGAL_DOC", "DOCUMENT"] as const;
 const BRANDING_ASSET_TYPES = {
   logo: "SIDEBAR_LOGO",
@@ -137,6 +159,87 @@ const BRANDING_ASSET_CONFIG = {
     allowedMimeTypes: ["image/png", "image/x-icon", "image/vnd.microsoft.icon", "image/webp"]
   }
 } as const;
+const DOCUMENT_ALLOWED_FILE_TYPES = [
+  {
+    extensions: [".pdf"],
+    canonicalMimeType: "application/pdf",
+    allowedMimeTypes: ["application/pdf"],
+    previewable: true
+  },
+  {
+    extensions: [".png"],
+    canonicalMimeType: "image/png",
+    allowedMimeTypes: ["image/png"],
+    previewable: true
+  },
+  {
+    extensions: [".jpg", ".jpeg"],
+    canonicalMimeType: "image/jpeg",
+    allowedMimeTypes: ["image/jpeg", "image/pjpeg"],
+    previewable: true
+  },
+  {
+    extensions: [".webp"],
+    canonicalMimeType: "image/webp",
+    allowedMimeTypes: ["image/webp"],
+    previewable: true
+  },
+  {
+    extensions: [".gif"],
+    canonicalMimeType: "image/gif",
+    allowedMimeTypes: ["image/gif"],
+    previewable: true
+  },
+  {
+    extensions: [".doc"],
+    canonicalMimeType: "application/msword",
+    allowedMimeTypes: ["application/msword"],
+    previewable: false
+  },
+  {
+    extensions: [".docx"],
+    canonicalMimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    allowedMimeTypes: ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+    previewable: false
+  },
+  {
+    extensions: [".xls"],
+    canonicalMimeType: "application/vnd.ms-excel",
+    allowedMimeTypes: ["application/vnd.ms-excel"],
+    previewable: false
+  },
+  {
+    extensions: [".xlsx"],
+    canonicalMimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    allowedMimeTypes: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+    previewable: false
+  },
+  {
+    extensions: [".csv"],
+    canonicalMimeType: "text/csv",
+    allowedMimeTypes: ["text/csv", "application/csv", "text/plain", "application/vnd.ms-excel"],
+    previewable: false
+  },
+  {
+    extensions: [".ppt"],
+    canonicalMimeType: "application/vnd.ms-powerpoint",
+    allowedMimeTypes: ["application/vnd.ms-powerpoint"],
+    previewable: false
+  },
+  {
+    extensions: [".pptx"],
+    canonicalMimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    allowedMimeTypes: ["application/vnd.openxmlformats-officedocument.presentationml.presentation"],
+    previewable: false
+  },
+  {
+    extensions: [".txt"],
+    canonicalMimeType: "text/plain",
+    allowedMimeTypes: ["text/plain"],
+    previewable: false
+  }
+] as const;
+const DOCUMENT_MACRO_EXTENSIONS = new Set([".docm", ".dotm", ".xlsm", ".xltm", ".pptm", ".potm", ".ppsm"]);
 const DEFAULT_EXTERNAL_ORG_TYPE = "Firma";
 const MAX_COMMENT_ENTITY_ID_LENGTH = 200;
 const MAX_COMMENT_BODY_LENGTH = 10_000;
@@ -144,12 +247,17 @@ const DOCUMENT_NOT_FOUND_ERROR_CODE = "DOCUMENT_NOT_FOUND";
 const DOCUMENT_FILE_MISSING_ERROR_CODE = "FILE_MISSING";
 const INVALID_DOCUMENT_STORAGE_PATH_ERROR_CODE = "INVALID_STORAGE_PATH";
 const TASK_EVIDENCE_DELETE_BLOCKED_ERROR_CODE = "TASK_EVIDENCE_DELETE_BLOCKED";
+const DOCUMENT_FILE_TYPE_NOT_ALLOWED_ERROR_CODE = "DOCUMENT_FILE_TYPE_NOT_ALLOWED";
 
 type UserRole = string;
 type UserType = (typeof USER_TYPES)[number];
 type AdminSortField = (typeof ADMIN_SORT_FIELDS)[number];
 type SortDirection = (typeof SORT_DIRECTIONS)[number];
 type DocumentOwnerType = (typeof DOCUMENT_OWNER_TYPES)[number];
+type DocumentCategory = (typeof DOCUMENT_CATEGORIES)[number];
+type DocumentApprovalRequestStatus = (typeof DOCUMENT_APPROVAL_REQUEST_STATUSES)[number];
+type DocumentApprovalDtoStatus = (typeof DOCUMENT_APPROVAL_DTO_STATUSES)[number];
+type DocumentApprovalDecisionAction = (typeof DOCUMENT_APPROVAL_DECISION_ACTIONS)[number];
 type CommentEntityType = (typeof COMMENT_ENTITY_TYPES)[number];
 type BrandingAssetKind = keyof typeof BRANDING_ASSET_TYPES;
 type BrandingAssetTypeValue = (typeof BRANDING_ASSET_TYPES)[BrandingAssetKind];
@@ -331,6 +439,8 @@ type DocumentDto = {
   id: string;
   ownerType: string;
   ownerId: string;
+  category: DocumentCategory;
+  fileVersion: number;
   filename: string;
   originalFilename?: string;
   mimeType: string;
@@ -338,6 +448,19 @@ type DocumentDto = {
   createdAt: string;
   createdByUserId?: string;
   createdByLabel?: string;
+  approvalRequired: boolean;
+  approvalStatus: DocumentApprovalDtoStatus;
+  approvalRequestId?: string;
+  approvalRequestedByUserId?: string;
+  approvalRequestedByLabel?: string;
+  approvalRequestedAt?: string;
+  approvalRequestedComment?: string;
+  approverUserId?: string;
+  approverLabel?: string;
+  approvalDecidedByUserId?: string;
+  approvalDecidedByLabel?: string;
+  approvalDecidedAt?: string;
+  approvalDecisionComment?: string;
 };
 
 type BrandingAssetMetadataDto = {
@@ -923,10 +1046,108 @@ function parseCommentBody(value: unknown): string | null {
   return body;
 }
 
+function isDocumentCategory(value: string): value is DocumentCategory {
+  return DOCUMENT_CATEGORIES.includes(value as DocumentCategory);
+}
+
+function normalizeDocumentCategory(value: unknown): DocumentCategory {
+  if (typeof value !== "string") {
+    return DEFAULT_DOCUMENT_CATEGORY;
+  }
+  const normalized = value.trim().toUpperCase();
+  return isDocumentCategory(normalized) ? normalized : DEFAULT_DOCUMENT_CATEGORY;
+}
+
+function isDocumentApprovalRequestStatus(value: string): value is DocumentApprovalRequestStatus {
+  return DOCUMENT_APPROVAL_REQUEST_STATUSES.includes(value as DocumentApprovalRequestStatus);
+}
+
+function normalizeDocumentApprovalRequestStatus(value: string): DocumentApprovalRequestStatus {
+  return isDocumentApprovalRequestStatus(value) ? value : "PENDING";
+}
+
+function isActiveDocumentApprovalStatus(status: string | null | undefined) {
+  return Boolean(status && status !== "CANCELLED");
+}
+
+function toUserLabel(user?: { firstName: string; lastName: string } | null) {
+  return user ? `${user.firstName} ${user.lastName}`.trim() : "";
+}
+
+type DocumentApprovalUserForDto = {
+  firstName: string;
+  lastName: string;
+} | null;
+
+type DocumentApprovalRequestForDto = {
+  id: string;
+  documentId: string;
+  fileVersion: number;
+  status: string;
+  requestedByUserId?: string | null;
+  requestedAt: Date;
+  requestedComment?: string | null;
+  approverUserId?: string | null;
+  decidedByUserId?: string | null;
+  decidedAt?: Date | null;
+  decisionComment?: string | null;
+  updatedAt: Date;
+  requestedByUser?: DocumentApprovalUserForDto;
+  approverUser?: DocumentApprovalUserForDto;
+  decidedByUser?: DocumentApprovalUserForDto;
+};
+
+const documentDtoInclude = {
+  createdByUser: {
+    select: {
+      firstName: true,
+      lastName: true
+    }
+  },
+  approvalRequests: {
+    orderBy: {
+      createdAt: "desc" as const
+    },
+    take: 10,
+    include: {
+      requestedByUser: {
+        select: {
+          firstName: true,
+          lastName: true
+        }
+      },
+      approverUser: {
+        select: {
+          firstName: true,
+          lastName: true
+        }
+      },
+      decidedByUser: {
+        select: {
+          firstName: true,
+          lastName: true
+        }
+      }
+    }
+  }
+};
+
+type DocumentWithDtoRelations = Prisma.DocumentGetPayload<{ include: typeof documentDtoInclude }>;
+
+function getCurrentDocumentApprovalRequest(document: {
+  fileVersion?: number;
+  approvalRequests?: DocumentApprovalRequestForDto[];
+}) {
+  const fileVersion = document.fileVersion ?? 1;
+  return document.approvalRequests?.find((request) => request.fileVersion === fileVersion) ?? null;
+}
+
 function toDocumentDto(document: {
   id: string;
   ownerType: string;
   ownerId: string;
+  category?: string | null;
+  fileVersion?: number | null;
   filename: string;
   originalFilename: string | null;
   mimeType: string;
@@ -937,21 +1158,60 @@ function toDocumentDto(document: {
     firstName: string;
     lastName: string;
   } | null;
+  approvalRequests?: DocumentApprovalRequestForDto[];
 }): DocumentDto {
-  const createdByLabel = document.createdByUser
-    ? `${document.createdByUser.firstName} ${document.createdByUser.lastName}`.trim()
-    : "";
+  const createdByLabel = toUserLabel(document.createdByUser);
+  const currentApprovalRequest = getCurrentDocumentApprovalRequest({
+    fileVersion: document.fileVersion ?? 1,
+    approvalRequests: document.approvalRequests
+  });
+  const requestStatus = currentApprovalRequest
+    ? normalizeDocumentApprovalRequestStatus(currentApprovalRequest.status)
+    : null;
+  const approvalStatus: DocumentApprovalDtoStatus = requestStatus && requestStatus !== "CANCELLED"
+    ? requestStatus
+    : "NOT_REQUIRED";
+  const requestedByLabel = toUserLabel(currentApprovalRequest?.requestedByUser);
+  const approverLabel = toUserLabel(currentApprovalRequest?.approverUser);
+  const decidedByLabel = toUserLabel(currentApprovalRequest?.decidedByUser);
   return {
     id: document.id,
     ownerType: document.ownerType,
     ownerId: document.ownerId,
+    category: normalizeDocumentCategory(document.category),
+    fileVersion: document.fileVersion ?? 1,
     filename: document.filename,
     originalFilename: document.originalFilename ?? undefined,
     mimeType: document.mimeType,
     sizeBytes: document.sizeBytes,
     createdAt: document.createdAt.toISOString(),
     createdByUserId: document.createdByUserId ?? undefined,
-    createdByLabel: createdByLabel || undefined
+    createdByLabel: createdByLabel || undefined,
+    approvalRequired: approvalStatus !== "NOT_REQUIRED",
+    approvalStatus,
+    approvalRequestId: approvalStatus !== "NOT_REQUIRED" ? currentApprovalRequest?.id : undefined,
+    approvalRequestedByUserId: approvalStatus !== "NOT_REQUIRED"
+      ? currentApprovalRequest?.requestedByUserId ?? undefined
+      : undefined,
+    approvalRequestedByLabel: approvalStatus !== "NOT_REQUIRED" && requestedByLabel ? requestedByLabel : undefined,
+    approvalRequestedAt: approvalStatus !== "NOT_REQUIRED"
+      ? currentApprovalRequest?.requestedAt.toISOString()
+      : undefined,
+    approvalRequestedComment: approvalStatus !== "NOT_REQUIRED"
+      ? currentApprovalRequest?.requestedComment ?? undefined
+      : undefined,
+    approverUserId: approvalStatus !== "NOT_REQUIRED" ? currentApprovalRequest?.approverUserId ?? undefined : undefined,
+    approverLabel: approvalStatus !== "NOT_REQUIRED" && approverLabel ? approverLabel : undefined,
+    approvalDecidedByUserId: approvalStatus !== "NOT_REQUIRED"
+      ? currentApprovalRequest?.decidedByUserId ?? undefined
+      : undefined,
+    approvalDecidedByLabel: approvalStatus !== "NOT_REQUIRED" && decidedByLabel ? decidedByLabel : undefined,
+    approvalDecidedAt: approvalStatus !== "NOT_REQUIRED"
+      ? toIsoString(currentApprovalRequest?.decidedAt)
+      : undefined,
+    approvalDecisionComment: approvalStatus !== "NOT_REQUIRED"
+      ? currentApprovalRequest?.decisionComment ?? undefined
+      : undefined
   };
 }
 
@@ -1054,48 +1314,54 @@ function sanitizeFilename(filename: string | undefined) {
   return safe || "document";
 }
 
-function inferMimeType(filename: string, candidateMimeType?: string) {
-  const normalizedCandidate = candidateMimeType?.trim().toLowerCase();
-  if (normalizedCandidate && normalizedCandidate !== "application/octet-stream") {
-    return normalizedCandidate;
+function findAllowedDocumentFileType(filename: string) {
+  const extension = path.extname(filename).toLowerCase();
+  return DOCUMENT_ALLOWED_FILE_TYPES.find((entry) => (entry.extensions as readonly string[]).includes(extension)) ?? null;
+}
+
+function validateDocumentFileType(filename: string, candidateMimeType?: string) {
+  const extension = path.extname(filename).toLowerCase();
+  if (DOCUMENT_MACRO_EXTENSIONS.has(extension)) {
+    return {
+      ok: false as const,
+      message: "Macro-enabled document files are not allowed."
+    };
   }
 
-  const extension = path.extname(filename).toLowerCase();
-  switch (extension) {
-    case ".pdf":
-      return "application/pdf";
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".gif":
-      return "image/gif";
-    case ".webp":
-      return "image/webp";
-    case ".bmp":
-      return "image/bmp";
-    case ".svg":
-      return "image/svg+xml";
-    case ".doc":
-      return "application/msword";
-    case ".docx":
-      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-    case ".xls":
-      return "application/vnd.ms-excel";
-    case ".xlsx":
-      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    case ".ppt":
-      return "application/vnd.ms-powerpoint";
-    case ".pptx":
-      return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-    default:
-      return "application/octet-stream";
+  const configEntry = findAllowedDocumentFileType(filename);
+  if (!configEntry) {
+    return {
+      ok: false as const,
+      message: "File type is not allowed."
+    };
   }
+
+  const normalizedCandidate = candidateMimeType?.split(";")[0]?.trim().toLowerCase();
+  if (!normalizedCandidate || normalizedCandidate === "application/octet-stream") {
+    return {
+      ok: true as const,
+      mimeType: configEntry.canonicalMimeType
+    };
+  }
+
+  if (!(configEntry.allowedMimeTypes as readonly string[]).includes(normalizedCandidate)) {
+    return {
+      ok: false as const,
+      message: "File extension and MIME type do not match an allowed document type."
+    };
+  }
+
+  return {
+    ok: true as const,
+    mimeType: normalizedCandidate
+  };
 }
 
 function isPreviewableMimeType(mimeType: string) {
-  return mimeType === "application/pdf" || mimeType.startsWith("image/");
+  const normalized = mimeType.trim().toLowerCase();
+  return DOCUMENT_ALLOWED_FILE_TYPES.some(
+    (entry) => entry.previewable && (entry.allowedMimeTypes as readonly string[]).includes(normalized)
+  );
 }
 
 function toContentDispositionFilename(filename: string) {
@@ -1882,6 +2148,21 @@ function sendTaskEvidenceDeleteBlocked(res: Response) {
   });
 }
 
+function sendNoPendingDocumentApprovalRequest(res: Response) {
+  res.status(409).json({
+    ok: false,
+    message: "No pending approval request exists."
+  });
+}
+
+function sendDocumentFileTypeNotAllowed(res: Response, message = "File type is not allowed.") {
+  res.status(415).json({
+    ok: false,
+    errorCode: DOCUMENT_FILE_TYPE_NOT_ALLOWED_ERROR_CODE,
+    message
+  });
+}
+
 async function assertCanModifyDocument(
   req: AuthenticatedRequest,
   res: Response,
@@ -1904,6 +2185,319 @@ async function assertCanModifyDocument(
   }
 
   return true;
+}
+
+async function assertCanUseDocumentApproval(
+  req: AuthenticatedRequest,
+  res: Response,
+  document: {
+    ownerType: string;
+    ownerId: string;
+  }
+) {
+  if (document.ownerType.trim().toUpperCase() === "TASK_EVIDENCE") {
+    sendTaskEvidenceDeleteBlocked(res);
+    return false;
+  }
+
+  if (!(await assertCanReadDocumentOwner(req, res, document.ownerType, document.ownerId))) {
+    return false;
+  }
+
+  return true;
+}
+
+async function assertCanRequestDocumentApproval(
+  req: AuthenticatedRequest,
+  res: Response,
+  document: {
+    ownerType: string;
+    ownerId: string;
+  }
+) {
+  if (!(await assertCanUseDocumentApproval(req, res, document))) {
+    return false;
+  }
+
+  if (!(await assertCanWriteDocumentOwner(req, res, document.ownerType, document.ownerId))) {
+    return false;
+  }
+
+  return true;
+}
+
+async function assertCanDecideDocumentApproval(
+  req: AuthenticatedRequest,
+  res: Response,
+  document: {
+    ownerType: string;
+    ownerId: string;
+  },
+  request: {
+    approverUserId?: string | null;
+  }
+) {
+  if (!(await assertCanUseDocumentApproval(req, res, document))) {
+    return false;
+  }
+
+  if (request.approverUserId && request.approverUserId === req.authUser?.id) {
+    return true;
+  }
+
+  if (!(await assertCanWriteDocumentOwner(req, res, document.ownerType, document.ownerId))) {
+    return false;
+  }
+
+  return true;
+}
+
+function parseDocumentApprovalComment(value: unknown) {
+  const comment = ensureStringBody(value).trim();
+  if (!comment) {
+    return null;
+  }
+  return comment.slice(0, 2000);
+}
+
+async function canUserReadDocumentOwner(input: {
+  user: Pick<PrismaUser, "id" | "role" | "type" | "isArchived">;
+  ownerType: string;
+  ownerId: string;
+}) {
+  if (input.user.isArchived || normalizeTypeValue(input.user.type) === "EXTERNAL") {
+    return false;
+  }
+
+  const domain = documentOwnerDomain(input.ownerType);
+  const readPermission = getDocumentOwnerReadPermission(input.ownerType);
+  const permissionKeys = await getUserPermissionKeys(input.user);
+  const user = {
+    id: input.user.id,
+    role: input.user.role,
+    type: input.user.type,
+    isArchived: input.user.isArchived,
+    permissionKeys
+  };
+
+  if (!readPermission || !hasDomainReadPermission(user, domain)) {
+    return false;
+  }
+
+  const context = await resolveDocumentOwnerProjectContext(prisma, input.ownerType, input.ownerId);
+  if (!context.exists) {
+    return false;
+  }
+
+  if (!context.projectId) {
+    return hasGlobalProjectReadAccess(user);
+  }
+
+  return canReadProjectDomain(prisma, user, context.projectId, domain);
+}
+
+async function resolveDocumentApproverUserId(
+  approverUserId: string | undefined,
+  document: {
+    ownerType: string;
+    ownerId: string;
+  }
+): Promise<
+  | { ok: true; approverUserId: string | null }
+  | { ok: false; status: number; message: string }
+> {
+  if (!approverUserId) {
+    return { ok: true, approverUserId: null };
+  }
+
+  const approver = await prisma.user.findFirst({
+    where: {
+      id: approverUserId,
+      isArchived: false,
+      type: {
+        not: "EXTERNAL"
+      }
+    },
+    select: {
+      id: true,
+      role: true,
+      type: true,
+      isArchived: true
+    }
+  });
+
+  if (!approver) {
+    return { ok: false, status: 400, message: "Approver not found." };
+  }
+
+  if (!(await canUserReadDocumentOwner({ user: approver, ownerType: document.ownerType, ownerId: document.ownerId }))) {
+    return { ok: false, status: 400, message: "Approver cannot access document owner." };
+  }
+
+  return { ok: true, approverUserId: approver.id };
+}
+
+async function createDocumentApprovalEvent(input: {
+  tx: Prisma.TransactionClient;
+  documentId: string;
+  approvalRequestId: string | null;
+  fileVersion: number;
+  eventType: string;
+  status: string;
+  actorUserId?: string | null;
+  comment?: string | null;
+}) {
+  await input.tx.documentApprovalEvent.create({
+    data: {
+      documentId: input.documentId,
+      approvalRequestId: input.approvalRequestId,
+      fileVersion: input.fileVersion,
+      eventType: input.eventType,
+      status: input.status,
+      actorUserId: input.actorUserId ?? null,
+      comment: input.comment ?? null
+    }
+  });
+}
+
+function getLatestApprovalRequestForDocument<T extends {
+  fileVersion?: number | null;
+  approvalRequests?: DocumentApprovalRequestForDto[];
+}>(document: T) {
+  return getCurrentDocumentApprovalRequest({
+    fileVersion: document.fileVersion ?? 1,
+    approvalRequests: document.approvalRequests
+  });
+}
+
+class DocumentApprovalConflictError extends Error {
+  constructor() {
+    super("Document approval request changed.");
+    this.name = "DocumentApprovalConflictError";
+  }
+}
+
+function currentPendingApprovalRequestWhere(input: {
+  document: {
+    id: string;
+    fileVersion?: number | null;
+  };
+  request: {
+    id: string;
+    documentId?: string | null;
+    fileVersion?: number | null;
+  };
+}) {
+  const fileVersion = input.request.fileVersion ?? input.document.fileVersion ?? 1;
+  return {
+    id: input.request.id,
+    documentId: input.request.documentId ?? input.document.id,
+    fileVersion,
+    status: "PENDING",
+    document: {
+      is: {
+        id: input.document.id,
+        fileVersion,
+        isArchived: false
+      }
+    }
+  } satisfies Prisma.DocumentApprovalRequestWhereInput;
+}
+
+function currentPendingApprovalDecisionWhere(input: {
+  document: {
+    id: string;
+    fileVersion?: number | null;
+  };
+  request: {
+    id: string;
+    documentId?: string | null;
+    fileVersion?: number | null;
+    approverUserId?: string | null;
+    updatedAt: Date;
+  };
+}) {
+  return {
+    ...currentPendingApprovalRequestWhere(input),
+    approverUserId: input.request.approverUserId ?? null,
+    updatedAt: input.request.updatedAt
+  } satisfies Prisma.DocumentApprovalRequestWhereInput;
+}
+
+async function assertDocumentApprovalRequestStillCurrent(input: {
+  tx: Prisma.TransactionClient;
+  document: {
+    id: string;
+    fileVersion?: number | null;
+  };
+  request: {
+    fileVersion?: number | null;
+  };
+}) {
+  const fileVersion = input.request.fileVersion ?? input.document.fileVersion ?? 1;
+  await assertDocumentFileVersionStillCurrent({
+    tx: input.tx,
+    document: input.document,
+    fileVersion
+  });
+}
+
+async function assertDocumentFileVersionStillCurrent(input: {
+  tx: Prisma.TransactionClient;
+  document: {
+    id: string;
+    fileVersion?: number | null;
+  };
+  fileVersion?: number | null;
+}) {
+  const fileVersion = input.fileVersion ?? input.document.fileVersion ?? 1;
+  // Keep the same first lock as file replacement, which updates Document before creating a reset request.
+  const currentDocuments = await input.tx.$queryRaw<Array<{ id: string; fileVersion: number }>>(Prisma.sql`
+    SELECT "id", "fileVersion"
+    FROM "Document"
+    WHERE "id" = ${input.document.id}
+      AND "isArchived" = false
+    FOR UPDATE
+  `);
+  const currentDocument = currentDocuments[0];
+
+  if (!currentDocument || currentDocument.fileVersion !== fileVersion) {
+    throw new DocumentApprovalConflictError();
+  }
+}
+
+async function findLatestDocumentApprovalRequestForFileVersion(input: {
+  tx: Prisma.TransactionClient;
+  documentId: string;
+  fileVersion: number;
+}) {
+  return input.tx.documentApprovalRequest.findFirst({
+    where: {
+      documentId: input.documentId,
+      fileVersion: input.fileVersion
+    },
+    orderBy: [
+      {
+        createdAt: "desc"
+      },
+      {
+        id: "desc"
+      }
+    ]
+  });
+}
+
+async function runDocumentApprovalTransaction<T>(
+  callback: (tx: Prisma.TransactionClient) => Promise<T | null>
+) {
+  try {
+    return await prisma.$transaction(callback);
+  } catch (error) {
+    if (error instanceof DocumentApprovalConflictError) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function unlinkIfExists(absoluteFilePath: string) {
@@ -2938,6 +3532,31 @@ export function createApp(config: AppConfig = loadConfig()) {
           return;
         }
 
+        const category = normalizeDocumentCategory(parsed.fields.category);
+        const approvalRequired = isTrue(parsed.fields.approvalRequired);
+        const approvalRequestedComment = parseDocumentApprovalComment(parsed.fields.approvalRequestedComment);
+        const approverUserIdInput = toOptionalTrimmedString(parsed.fields.approverUserId);
+        const usesApprovalRequestFields = approvalRequired || Boolean(approvalRequestedComment) || Boolean(approverUserIdInput);
+        if (usesApprovalRequestFields && !(await assertCanRequestDocumentApproval(req, res, {
+          ownerType: ownerTypeRaw,
+          ownerId
+        }))) {
+          return;
+        }
+        const approverUserIdResult = await resolveDocumentApproverUserId(approverUserIdInput, {
+          ownerType: ownerTypeRaw,
+          ownerId
+        });
+        if (!approverUserIdResult.ok) {
+          res.status(approverUserIdResult.status).json({ ok: false, message: approverUserIdResult.message });
+          return;
+        }
+        const approverUserId = approverUserIdResult.approverUserId;
+        if (approvalRequired && ownerTypeRaw === "TASK_EVIDENCE") {
+          sendTaskEvidenceDeleteBlocked(res);
+          return;
+        }
+
         const fileData = parsed.file.data;
         if (!fileData.length) {
           res.status(400).json({ ok: false, message: "file is required." });
@@ -2951,13 +3570,19 @@ export function createApp(config: AppConfig = loadConfig()) {
 
         const originalFilename = parsed.file.filename?.trim() || undefined;
         const safeFilename = sanitizeFilename(originalFilename);
-        const mimeType = inferMimeType(safeFilename, parsed.file.contentType);
+        const fileTypeValidation = validateDocumentFileType(safeFilename, parsed.file.contentType);
+        if (!fileTypeValidation.ok) {
+          sendDocumentFileTypeNotAllowed(res, fileTypeValidation.message);
+          return;
+        }
+        const mimeType = fileTypeValidation.mimeType;
         const sha256 = createHash("sha256").update(fileData).digest("hex");
 
         const created = await prisma.document.create({
           data: {
             ownerType: ownerTypeRaw,
             ownerId,
+            category,
             filename: safeFilename,
             originalFilename: originalFilename ?? null,
             mimeType,
@@ -2996,22 +3621,57 @@ export function createApp(config: AppConfig = loadConfig()) {
           throw error;
         }
 
-        const updated = await prisma.document.update({
-          where: {
-            id: created.id
-          },
-          data: {
-            storagePath
-          },
-          include: {
-            createdByUser: {
-              select: {
-                firstName: true,
-                lastName: true
+        let updated: DocumentWithDtoRelations;
+        try {
+          updated = await prisma.$transaction(async (tx) => {
+            const stored = await tx.document.update({
+              where: {
+                id: created.id
+              },
+              data: {
+                storagePath
               }
+            });
+
+            if (approvalRequired) {
+              const approvalRequest = await tx.documentApprovalRequest.create({
+                data: {
+                  documentId: stored.id,
+                  fileVersion: stored.fileVersion,
+                  status: "PENDING",
+                  requestedByUserId: req.authUser.id,
+                  requestedComment: approvalRequestedComment,
+                  approverUserId: approverUserId ?? null
+                }
+              });
+              await createDocumentApprovalEvent({
+                tx,
+                documentId: stored.id,
+                approvalRequestId: approvalRequest.id,
+                fileVersion: stored.fileVersion,
+                eventType: "REQUESTED",
+                status: "PENDING",
+                actorUserId: req.authUser.id,
+                comment: approvalRequestedComment
+              });
             }
-          }
-        });
+
+            return tx.document.findUniqueOrThrow({
+              where: {
+                id: stored.id
+              },
+              include: documentDtoInclude
+            });
+          });
+        } catch (error) {
+          await unlinkIfExists(absoluteFilePath);
+          await prisma.document.delete({
+            where: {
+              id: created.id
+            }
+          }).catch(() => undefined);
+          throw error;
+        }
 
         await audit({
           actorUserId: req.authUser.id,
@@ -3021,8 +3681,10 @@ export function createApp(config: AppConfig = loadConfig()) {
             documentId: updated.id,
             ownerType: updated.ownerType,
             ownerId: updated.ownerId,
+            category: updated.category,
             mimeType: updated.mimeType,
-            sizeBytes: updated.sizeBytes
+            sizeBytes: updated.sizeBytes,
+            approvalRequired
           }
         });
 
@@ -3064,14 +3726,7 @@ export function createApp(config: AppConfig = loadConfig()) {
           orderBy: {
             createdAt: "desc"
           },
-          include: {
-            createdByUser: {
-              select: {
-                firstName: true,
-                lastName: true
-              }
-            }
-          }
+          include: documentDtoInclude
         })
       );
 
@@ -3096,14 +3751,7 @@ export function createApp(config: AppConfig = loadConfig()) {
           id: documentId,
           isArchived: false
         },
-        include: {
-          createdByUser: {
-            select: {
-              firstName: true,
-              lastName: true
-            }
-          }
-        }
+        include: documentDtoInclude
       });
 
       if (!document) {
@@ -3117,6 +3765,495 @@ export function createApp(config: AppConfig = loadConfig()) {
 
       res.json({
         document: toDocumentDto(document)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch("/documents/:id", authMiddleware, express.json(), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      if (!assertCanUseDocumentEndpoints(req, res)) {
+        return;
+      }
+
+      const document = await prisma.document.findFirst({
+        where: {
+          id: req.params.id,
+          isArchived: false
+        },
+        include: documentDtoInclude
+      });
+
+      if (!document) {
+        sendDocumentNotFound(res);
+        return;
+      }
+
+      if (!(await assertCanModifyDocument(req, res, document))) {
+        return;
+      }
+
+      const category = hasOwn(req.body, "category")
+        ? normalizeDocumentCategory(req.body.category)
+        : document.category;
+      const hasApprovalRequired = hasOwn(req.body, "approvalRequired");
+      const approvalRequired = hasApprovalRequired ? parseBoolean(req.body.approvalRequired) : null;
+      if (hasApprovalRequired && approvalRequired === null) {
+        res.status(400).json({ ok: false, message: "approvalRequired must be a boolean." });
+        return;
+      }
+
+      const comment = hasOwn(req.body, "approvalRequestedComment")
+        ? parseDocumentApprovalComment(req.body.approvalRequestedComment)
+        : undefined;
+      const approverUserIdInput = hasOwn(req.body, "approverUserId")
+        ? toOptionalTrimmedString(req.body.approverUserId)
+        : undefined;
+      let approverUserId: string | null | undefined;
+      if (hasOwn(req.body, "approverUserId")) {
+        const approverUserIdResult = await resolveDocumentApproverUserId(approverUserIdInput, document);
+        if (!approverUserIdResult.ok) {
+          res.status(approverUserIdResult.status).json({ ok: false, message: approverUserIdResult.message });
+          return;
+        }
+        approverUserId = approverUserIdResult.approverUserId;
+      }
+
+      if (approvalRequired === true && !(await assertCanUseDocumentApproval(req, res, document))) {
+        return;
+      }
+
+      const latestRequest = getLatestApprovalRequestForDocument(document);
+      const updated = await runDocumentApprovalTransaction(async (tx) => {
+        if (approvalRequired === true) {
+          const fileVersion = document.fileVersion ?? 1;
+          await assertDocumentFileVersionStillCurrent({
+            tx,
+            document,
+            fileVersion
+          });
+          const currentLatestRequest = await findLatestDocumentApprovalRequestForFileVersion({
+            tx,
+            documentId: document.id,
+            fileVersion
+          });
+          const pendingRequest = latestRequest?.status === "PENDING"
+            ? latestRequest
+            : currentLatestRequest?.status === "PENDING"
+            ? currentLatestRequest
+            : null;
+          if (pendingRequest) {
+            const requestUpdateResult = await tx.documentApprovalRequest.updateMany({
+              where: currentPendingApprovalRequestWhere({
+                document,
+                request: pendingRequest
+              }),
+              data: {
+                requestedComment: comment === undefined ? pendingRequest.requestedComment ?? null : comment,
+                approverUserId: hasOwn(req.body, "approverUserId") ? approverUserId ?? null : pendingRequest.approverUserId ?? null
+              }
+            });
+            if (requestUpdateResult.count === 0) {
+              return null;
+            }
+            await createDocumentApprovalEvent({
+              tx,
+              documentId: document.id,
+              approvalRequestId: pendingRequest.id,
+              fileVersion: pendingRequest.fileVersion,
+              eventType: "REQUEST_UPDATED",
+              status: "PENDING",
+              actorUserId: req.authUser.id,
+              comment: comment === undefined ? null : comment
+            });
+          } else {
+            const createdRequest = await tx.documentApprovalRequest.create({
+              data: {
+                documentId: document.id,
+                fileVersion,
+                status: "PENDING",
+                requestedByUserId: req.authUser.id,
+                requestedComment: comment ?? null,
+                approverUserId: approverUserId ?? null
+              }
+            });
+            await createDocumentApprovalEvent({
+              tx,
+              documentId: document.id,
+              approvalRequestId: createdRequest.id,
+              fileVersion,
+              eventType: "REQUESTED",
+              status: "PENDING",
+              actorUserId: req.authUser.id,
+              comment: comment ?? null
+            });
+          }
+        } else if (approvalRequired === false && latestRequest?.status === "PENDING") {
+          await assertDocumentApprovalRequestStillCurrent({
+            tx,
+            document,
+            request: latestRequest
+          });
+          const cancelResult = await tx.documentApprovalRequest.updateMany({
+            where: currentPendingApprovalRequestWhere({
+              document,
+              request: latestRequest
+            }),
+            data: {
+              status: "CANCELLED",
+              decidedByUserId: req.authUser.id,
+              decidedAt: new Date(),
+              decisionComment: comment ?? null
+            }
+          });
+          if (cancelResult.count === 0) {
+            return null;
+          }
+          await createDocumentApprovalEvent({
+            tx,
+            documentId: document.id,
+            approvalRequestId: latestRequest.id,
+            fileVersion: latestRequest.fileVersion,
+            eventType: "CANCELLED",
+            status: "CANCELLED",
+            actorUserId: req.authUser.id,
+            comment: comment ?? null
+          });
+        }
+
+        return tx.document.update({
+          where: {
+            id: document.id
+          },
+          data: {
+            category
+          },
+          include: documentDtoInclude
+        });
+      });
+
+      if (!updated) {
+        sendNoPendingDocumentApprovalRequest(res);
+        return;
+      }
+
+      await audit({
+        actorUserId: req.authUser.id,
+        action: "DOCUMENT_METADATA_UPDATED",
+        req,
+        metadata: {
+          documentId: updated.id,
+          ownerType: updated.ownerType,
+          ownerId: updated.ownerId,
+          category: updated.category,
+          approvalRequired
+        }
+      });
+
+      res.json({
+        ok: true,
+        document: toDocumentDto(updated)
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch("/documents/:id/approval", authMiddleware, express.json(), async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    try {
+      if (!assertCanUseDocumentEndpoints(req, res)) {
+        return;
+      }
+
+      const action = ensureStringBody(req.body?.action).trim();
+      const document = await prisma.document.findFirst({
+        where: {
+          id: req.params.id,
+          isArchived: false
+        },
+        include: documentDtoInclude
+      });
+
+      if (!document) {
+        sendDocumentNotFound(res);
+        return;
+      }
+
+      const comment = parseDocumentApprovalComment(req.body?.comment ?? req.body?.approvalComment);
+
+      if (action === "request") {
+        if (!(await assertCanRequestDocumentApproval(req, res, document))) {
+          return;
+        }
+
+        const approverUserIdInput = toOptionalTrimmedString(req.body?.approverUserId);
+        const approverUserIdResult = await resolveDocumentApproverUserId(approverUserIdInput, document);
+        if (!approverUserIdResult.ok) {
+          res.status(approverUserIdResult.status).json({ ok: false, message: approverUserIdResult.message });
+          return;
+        }
+        const approverUserId = approverUserIdResult.approverUserId;
+
+        const latestRequest = getLatestApprovalRequestForDocument(document);
+        const updated = await runDocumentApprovalTransaction(async (tx) => {
+          const fileVersion = document.fileVersion ?? 1;
+          await assertDocumentFileVersionStillCurrent({
+            tx,
+            document,
+            fileVersion
+          });
+          const currentLatestRequest = await findLatestDocumentApprovalRequestForFileVersion({
+            tx,
+            documentId: document.id,
+            fileVersion
+          });
+          const pendingRequest = latestRequest?.status === "PENDING"
+            ? latestRequest
+            : currentLatestRequest?.status === "PENDING"
+            ? currentLatestRequest
+            : null;
+          if (pendingRequest) {
+            const requestUpdateResult = await tx.documentApprovalRequest.updateMany({
+              where: currentPendingApprovalRequestWhere({
+                document,
+                request: pendingRequest
+              }),
+              data: {
+                requestedComment: comment,
+                approverUserId: approverUserId ?? null
+              }
+            });
+            if (requestUpdateResult.count === 0) {
+              return null;
+            }
+            await createDocumentApprovalEvent({
+              tx,
+              documentId: document.id,
+              approvalRequestId: pendingRequest.id,
+              fileVersion: pendingRequest.fileVersion,
+              eventType: "REQUEST_UPDATED",
+              status: "PENDING",
+              actorUserId: req.authUser.id,
+              comment
+            });
+          } else {
+            const createdRequest = await tx.documentApprovalRequest.create({
+              data: {
+                documentId: document.id,
+                fileVersion,
+                status: "PENDING",
+                requestedByUserId: req.authUser.id,
+                requestedComment: comment,
+                approverUserId: approverUserId ?? null
+              }
+            });
+            await createDocumentApprovalEvent({
+              tx,
+              documentId: document.id,
+              approvalRequestId: createdRequest.id,
+              fileVersion,
+              eventType: "REQUESTED",
+              status: "PENDING",
+              actorUserId: req.authUser.id,
+              comment
+            });
+          }
+
+          return tx.document.findUniqueOrThrow({
+            where: {
+              id: document.id
+            },
+            include: documentDtoInclude
+          });
+        });
+
+        if (!updated) {
+          sendNoPendingDocumentApprovalRequest(res);
+          return;
+        }
+
+        await audit({
+          actorUserId: req.authUser.id,
+          action: "DOCUMENT_APPROVAL_REQUESTED",
+          req,
+          metadata: {
+            documentId: document.id,
+            ownerType: document.ownerType,
+            ownerId: document.ownerId,
+            approverUserId: approverUserId ?? null,
+            commentPresent: Boolean(comment)
+          }
+        });
+
+        res.json({
+          ok: true,
+          document: toDocumentDto(updated)
+        });
+        return;
+      }
+
+      if (action === "cancel") {
+        if (!(await assertCanRequestDocumentApproval(req, res, document))) {
+          return;
+        }
+
+        const latestRequest = getLatestApprovalRequestForDocument(document);
+        if (!latestRequest || latestRequest.status !== "PENDING") {
+          sendNoPendingDocumentApprovalRequest(res);
+          return;
+        }
+
+        const updated = await runDocumentApprovalTransaction(async (tx) => {
+          await assertDocumentApprovalRequestStillCurrent({
+            tx,
+            document,
+            request: latestRequest
+          });
+          const cancelResult = await tx.documentApprovalRequest.updateMany({
+            where: currentPendingApprovalRequestWhere({
+              document,
+              request: latestRequest
+            }),
+            data: {
+              status: "CANCELLED",
+              decidedByUserId: req.authUser.id,
+              decidedAt: new Date(),
+              decisionComment: comment
+            }
+          });
+          if (cancelResult.count === 0) {
+            return null;
+          }
+          await createDocumentApprovalEvent({
+            tx,
+            documentId: document.id,
+            approvalRequestId: latestRequest.id,
+            fileVersion: latestRequest.fileVersion,
+            eventType: "CANCELLED",
+            status: "CANCELLED",
+            actorUserId: req.authUser.id,
+            comment
+          });
+          return tx.document.findUniqueOrThrow({
+            where: {
+              id: document.id
+            },
+            include: documentDtoInclude
+          });
+        });
+
+        if (!updated) {
+          sendNoPendingDocumentApprovalRequest(res);
+          return;
+        }
+
+        await audit({
+          actorUserId: req.authUser.id,
+          action: "DOCUMENT_APPROVAL_CANCELLED",
+          req,
+          metadata: {
+            documentId: document.id,
+            ownerType: document.ownerType,
+            ownerId: document.ownerId,
+            commentPresent: Boolean(comment)
+          }
+        });
+
+        res.json({
+          ok: true,
+          document: toDocumentDto(updated)
+        });
+        return;
+      }
+
+      if (!(DOCUMENT_APPROVAL_DECISION_ACTIONS as readonly string[]).includes(action)) {
+        res.status(400).json({ ok: false, message: "Unsupported approval action." });
+        return;
+      }
+
+      const latestRequest = getLatestApprovalRequestForDocument(document);
+      if (!latestRequest || latestRequest.status !== "PENDING") {
+        sendNoPendingDocumentApprovalRequest(res);
+        return;
+      }
+
+      if (!(await assertCanDecideDocumentApproval(req, res, document, latestRequest))) {
+        return;
+      }
+
+      const statusByAction: Record<DocumentApprovalDecisionAction, Exclude<DocumentApprovalRequestStatus, "PENDING" | "CANCELLED">> = {
+        approve: "APPROVED",
+        reject: "REJECTED",
+        changesRequested: "CHANGES_REQUESTED"
+      };
+      const decisionStatus = statusByAction[action as DocumentApprovalDecisionAction];
+      const eventTypeByStatus: Record<Exclude<DocumentApprovalRequestStatus, "PENDING" | "CANCELLED">, string> = {
+        APPROVED: "APPROVED",
+        REJECTED: "REJECTED",
+        CHANGES_REQUESTED: "CHANGES_REQUESTED"
+      };
+
+      const updated = await runDocumentApprovalTransaction(async (tx) => {
+        await assertDocumentApprovalRequestStillCurrent({
+          tx,
+          document,
+          request: latestRequest
+        });
+        const decisionResult = await tx.documentApprovalRequest.updateMany({
+          where: currentPendingApprovalDecisionWhere({
+            document,
+            request: latestRequest
+          }),
+          data: {
+            status: decisionStatus,
+            decidedByUserId: req.authUser.id,
+            decidedAt: new Date(),
+            decisionComment: comment
+          }
+        });
+        if (decisionResult.count === 0) {
+          return null;
+        }
+        await createDocumentApprovalEvent({
+          tx,
+          documentId: document.id,
+          approvalRequestId: latestRequest.id,
+          fileVersion: latestRequest.fileVersion,
+          eventType: eventTypeByStatus[decisionStatus],
+          status: decisionStatus,
+          actorUserId: req.authUser.id,
+          comment
+        });
+        return tx.document.findUniqueOrThrow({
+          where: {
+            id: document.id
+          },
+          include: documentDtoInclude
+        });
+      });
+
+      if (!updated) {
+        sendNoPendingDocumentApprovalRequest(res);
+        return;
+      }
+
+      await audit({
+        actorUserId: req.authUser.id,
+        action: `DOCUMENT_APPROVAL_${decisionStatus}`,
+        req,
+        metadata: {
+          documentId: document.id,
+          ownerType: document.ownerType,
+          ownerId: document.ownerId,
+          approvalStatus: decisionStatus,
+          commentPresent: Boolean(comment)
+        }
+      });
+
+      res.json({
+        ok: true,
+        document: toDocumentDto(updated)
       });
     } catch (error) {
       next(error);
@@ -3209,7 +4346,8 @@ export function createApp(config: AppConfig = loadConfig()) {
           where: {
             id: req.params.id,
             isArchived: false
-          }
+          },
+          include: documentDtoInclude
         });
 
         if (!document) {
@@ -3240,7 +4378,12 @@ export function createApp(config: AppConfig = loadConfig()) {
 
         const originalFilename = parsed.file.filename?.trim() || undefined;
         const safeFilename = sanitizeFilename(originalFilename);
-        const mimeType = inferMimeType(safeFilename, parsed.file.contentType);
+        const fileTypeValidation = validateDocumentFileType(safeFilename, parsed.file.contentType);
+        if (!fileTypeValidation.ok) {
+          sendDocumentFileTypeNotAllowed(res, fileTypeValidation.message);
+          return;
+        }
+        const mimeType = fileTypeValidation.mimeType;
         const sha256 = createHash("sha256").update(fileData).digest("hex");
         const storagePath = createDocumentStoragePath(document.id);
         const absoluteFilePath = resolveStoredDocumentPath(config, storagePath);
@@ -3267,28 +4410,57 @@ export function createApp(config: AppConfig = loadConfig()) {
           throw error;
         }
 
-        let updated: typeof document;
+        let updated: DocumentWithDtoRelations;
         try {
-          updated = await prisma.document.update({
-            where: {
-              id: document.id
-            },
-            data: {
-              filename: safeFilename,
-              originalFilename: originalFilename ?? null,
-              mimeType,
-              sizeBytes: fileData.length,
-              storagePath,
-              sha256
-            },
-            include: {
-              createdByUser: {
-                select: {
-                  firstName: true,
-                  lastName: true
+          const latestRequest = getLatestApprovalRequestForDocument(document);
+          const shouldRequestApproval = Boolean(latestRequest && isActiveDocumentApprovalStatus(latestRequest.status));
+          updated = await prisma.$transaction(async (tx) => {
+            const stored = await tx.document.update({
+              where: {
+                id: document.id
+              },
+              data: {
+                filename: safeFilename,
+                originalFilename: originalFilename ?? null,
+                mimeType,
+                sizeBytes: fileData.length,
+                storagePath,
+                sha256,
+                fileVersion: {
+                  increment: 1
                 }
               }
+            });
+
+            if (shouldRequestApproval) {
+              const approvalRequest = await tx.documentApprovalRequest.create({
+                data: {
+                  documentId: stored.id,
+                  fileVersion: stored.fileVersion,
+                  status: "PENDING",
+                  requestedByUserId: req.authUser.id,
+                  requestedComment: latestRequest?.requestedComment ?? null,
+                  approverUserId: latestRequest?.approverUserId ?? null
+                }
+              });
+              await createDocumentApprovalEvent({
+                tx,
+                documentId: stored.id,
+                approvalRequestId: approvalRequest.id,
+                fileVersion: stored.fileVersion,
+                eventType: "RESET_ON_REPLACE",
+                status: "PENDING",
+                actorUserId: req.authUser.id,
+                comment: null
+              });
             }
+
+            return tx.document.findUniqueOrThrow({
+              where: {
+                id: stored.id
+              },
+              include: documentDtoInclude
+            });
           });
         } catch (error) {
           await unlinkIfExists(temporaryFilePath);
@@ -3320,6 +4492,7 @@ export function createApp(config: AppConfig = loadConfig()) {
               ownerId: updated.ownerId,
               mimeType: updated.mimeType,
               sizeBytes: updated.sizeBytes,
+              fileVersion: updated.fileVersion,
               previousFileCleanupAttempted: Boolean(previousFileCleanupPath),
               previousFileCleanupFailed
             }

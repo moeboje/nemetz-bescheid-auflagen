@@ -648,6 +648,41 @@
 - Bei UI-/API-Problem vorherige App-Version deployen; die nullable Spalten koennen liegen bleiben.
 - Bei Datenproblem Langtexte vor DB-Rollback exportieren, weil ein Drop der Spalten die neuen Inhalte entfernen wuerde.
 
+## 2zf. Feature-Plan 2026-05-13 fuer Dokument-Kategorien und Dokument-Freigaben
+- Ziel:
+- Dokumente koennen kategorisiert werden, Uploader-Metadaten bleiben sichtbar, sichere Office-Dateien wie Word/Excel werden zusaetzlich unterstuetzt, Dokumente koennen eine Freigabe benoetigen, der Freigabestatus wird per Ampel angezeigt und berechtigte Benutzer koennen freigeben oder ablehnen.
+- Grundlage bleibt die bestehende serverseitige Document API fuer Projekt-Unterlagen und weitere vorhandene `ownerType`-basierte Unterlagen; es wird keine neue Browser-only Attachment-Quelle eingefuehrt.
+- Scope:
+- In Scope sind Kategorie-Metadaten, ApprovalRequired/ApprovalStatus, Approval Request, Approve, Reject bzw. Aenderungen erforderlich, Uploader-Anzeige, Dateityp-Validierung, UI-Erweiterungen im `DocumentsPanel`, i18n/help sowie die ehrliche Recovery-/Export-/Import-Kommunikation.
+- Out of Scope sind Checklisten, §82b-Logik, Rechtsmaterien-/Einreichtyp-Stammdaten, Azure-Arbeit, verpflichtende Benachrichtigungen, Mehrfach-Approver-Workflows und Office-Inline-Vorschau ohne sichere Vorschau-Infrastruktur.
+- Datenmodell:
+- `Document` erhaelt additive Felder `category` mit sicherem Default `OTHER` und `fileVersion` mit Default `1`; bestehende Dokumente bleiben dadurch lesbar und nicht freigabepflichtig.
+- Freigaben werden ueber `DocumentApprovalRequest` pro Dokument/Dateiversion und `DocumentApprovalEvent` fuer die Historie modelliert; Statuswerte bleiben API-validierte Strings wie `PENDING`, `APPROVED`, `REJECTED`, `CHANGES_REQUESTED` und `CANCELLED`.
+- `createdByUserId` bleibt die Uploader-Referenz; DTOs liefern daraus `createdByLabel`, ohne zusaetzliche Browserdaten als Quelle zu nutzen.
+- Prisma-Migration und `migrationBootstrap` muessen die neuen Felder, Tabellen, Indizes und Foreign Keys pruefen; No-history- und Partial-Schema-Zustaende muessen fail-closed statt mit konkurrierenden Quellen starten.
+- Storage / Document API:
+- PostgreSQL plus geschuetzte Document API bleiben Source of Truth fuer Metadaten; Dateibytes werden weiter ausschliesslich ueber den konfigurierten Upload-Root und sichere relative Storage-Keys abgelegt.
+- Es entstehen keine Dateimetadaten ohne Bytes im regulaeren Upload-Flow, keine oeffentlichen Links, keine geteilten Storage-Pfade und keine Rueckkehr zu Browser-only Attachments.
+- Preview/Download laufen weiter ueber die geschuetzte API; PDF und sichere Rasterbilder duerfen inline angezeigt werden, Office/CSV/TXT werden heruntergeladen.
+- `FILE_MISSING` bleibt maschinenlesbar und blockiert Preview/Download, aber nicht die sichere Metadatenbereinigung durch berechtigte Nutzer.
+- Replace nach Freigabe erhoeht die Dateiversion; eine alte Entscheidung gilt nicht automatisch fuer die neue Datei, stattdessen wird bei vorheriger Freigabepflicht eine neue Pending-Freigabe angelegt.
+- RBAC / externe Nutzer:
+- Kategorien setzen, Freigabe anfordern, Upload und Metadatenpflege nutzen die bestehenden ownerType-/ownerId-Schreibrechte und den darunterliegenden ProjectAccess-/Domain-Write-Scope.
+- Freigabeentscheidungen duerfen nur definierte interne Approver oder Benutzer mit bestehendem owner write permission treffen; Backend-Pruefungen bleiben finale Autoritaet und UI-Aktionen duerfen nur als Komfort-Gating dienen.
+- Preview/Download brauchen die bestehenden owner read permissions und den passenden Projekt-/LegalDoc-/Deadline-/Task-Kontext; Replace/Delete bleiben an bestehende Manage-Regeln gebunden, `TASK_EVIDENCE` bleibt fuer direkte Replace/Delete fail-closed.
+- Externe Benutzer bleiben in diesem Lauf fuer Document-Endpunkte fail-closed; ein spaeteres scoped External-User-Dokumentmodell waere ein eigener Plan und keine implizite RBAC-Lockerung.
+- Recovery / Export / Import:
+- Der generische Export bleibt ein Teil-Export und enthaelt keine Datei-Inhalte; wenn Dokumente spaeter als Metadaten exportiert werden, muessen Kategorie und Freigabefelder bzw. Approval-Tabellen mit sicheren Defaults beruecksichtigt werden.
+- Alte Exporte ohne Kategorie/Freigabe duerfen nicht scheitern; bestehende DB-Dokumente bekommen Defaults ueber die Migration.
+- Gesperrte Recovery-, Import-, Reset- oder Snapshot-Pfade werden nicht reaktiviert; es duerfen keine Datenverlustpfade entstehen und kein vollstaendiger Disaster-Recovery-Restore suggeriert werden.
+- Tests:
+- Pflichtchecks sind `cd apps/api && npx prisma validate`, `npx prisma generate`, `node scripts/assert-prisma-client.mjs`, `npx prisma db push --skip-generate`, `npm run build`, `npm test`, `cd apps/web && npm run build`, `git diff --check`, `docker compose config` und `sh -n apps/api/start-container.sh`.
+- API-Tests muessen Upload mit Kategorie, Upload mit `approvalRequired=false/true`, Approval Request, Approve, Reject/Aenderungen erforderlich, parallele Freigabeentscheidungen, Replace nach Freigabe, fehlende Rechte mit 403, externe User fail-closed/scoped, Dateityp-Allowlist und `FILE_MISSING` abdecken.
+- MigrationBootstrap-Tests muessen neue Tabellen/Felder als Bestandteil des aktuellen Baselines erkennen; Export-/Import-Checks muessen Defaults und ausgelassene Dokumentdateien dokumentieren.
+- Risiken:
+- Approval-Decision-Races duerfen keine zweite Entscheidung und kein zweites Decision-Event schreiben; Statuswechsel muessen atomar gegen `status=PENDING` geschuetzt werden.
+- Weitere Risiken sind ungewollte RBAC-Lockerung, externe User als zukuenftige Approver, Office-MIME-Abweichungen, Replace nach Freigabe, Recovery-/Import-Erwartungen, mobile UI-Dichte und Mehrfach-Approver als spaetere Folgephase.
+
 ## 3. Ist-Zustand
 - Browser-persistiert fachlich aktiv ist aktuell nur noch `taskState`; zusätzliche UI-/Recovery-Daten liegen weiterhin via `apps/web/src/state/persistence.ts` lokal.
 - `ScopesStore`, `AuthoritiesStore`, `ProjectsStore`, `LegalDocsStore`, `ObligationsStore` und `DeadlinesStore` sind bereits API-backed und löschen ihre alten Domänen-Storage-Keys aktiv.

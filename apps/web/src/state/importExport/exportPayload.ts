@@ -37,7 +37,7 @@ const EXPORT_DETAIL_REQUEST_CONCURRENCY = 5;
 export const GENERIC_EXPORT_LIMITATION_META: NonNullable<ExportPayload["meta"]> = {
   warnings: [
     "This JSON export is only a partial recovery artifact. It does not provide a full disaster-recovery backup of all server-managed administration and security data.",
-    "Users, roles, external organizations, security settings, notification settings and notification outbox history are server-managed and are intentionally omitted from generic exports because generic imports do not restore them."
+    "Users, roles, external organizations, security settings, notification settings, notification outbox history, document files and document approval history are server-managed and are intentionally omitted from generic exports because generic imports do not restore them."
   ],
   omittedDomains: [
     "users",
@@ -45,7 +45,10 @@ export const GENERIC_EXPORT_LIMITATION_META: NonNullable<ExportPayload["meta"]> 
     "externalOrgs",
     "securitySettings",
     "notificationSettings",
-    "notificationOutbox"
+    "notificationOutbox",
+    "documents",
+    "documentApprovalRequests",
+    "documentApprovalEvents"
   ]
 };
 
