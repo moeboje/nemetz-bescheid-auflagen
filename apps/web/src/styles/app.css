@@ -228,7 +228,9 @@
   gap: var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-3);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .documentsPanel {
@@ -241,21 +243,41 @@
   gap: var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  padding: var(--space-3);
+  padding: var(--space-4);
+  background: var(--color-surface-muted);
 }
 
 .documentsControlsGrid,
 .documentsFilters {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: var(--space-3);
   align-items: end;
+}
+
+.documentsFilters {
+  align-items: center;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
 }
 
 .documentsGroupedList,
 .documentsGroup {
   display: grid;
   gap: var(--space-2);
+}
+
+.documentsGroupHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 var(--space-1);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
 }
 
 .documentsItemTitle {
@@ -267,10 +289,15 @@
   font-weight: var(--font-weight-medium);
 }
 
+.documentsItemTitle > span:first-child {
+  overflow-wrap: anywhere;
+}
+
 .documentsItemMeta {
   display: grid;
-  gap: var(--space-1);
+  gap: var(--space-2);
   min-width: 0;
+  flex: 1;
 }
 
 .documentsItemActions {
@@ -278,6 +305,21 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
+  justify-content: flex-end;
+  max-width: 24rem;
+}
+
+.documentsInlineSelect {
+  min-width: min(18rem, 100%);
+}
+
+.documentsApprovalContext {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
 }
 
 .documentsLegacy {
@@ -373,6 +415,46 @@
   top: 0;
   z-index: 1;
   background: var(--color-surface);
+}
+
+.projectScopeCell {
+  display: inline-block;
+  max-width: 28rem;
+  line-height: 1.35;
+}
+
+.projectMetricValue {
+  display: inline-block;
+  min-width: 2ch;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (min-width: 761px) {
+  .projectOverviewTable th:nth-child(n+7):nth-child(-n+11),
+  .projectOverviewTable td:nth-child(n+7):nth-child(-n+11) {
+    width: 5.75rem;
+    min-width: 4.75rem;
+    max-width: 6.5rem;
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+  }
+
+  .projectOverviewTable th:nth-child(n+7):nth-child(-n+11) {
+    white-space: normal;
+    line-height: 1.15;
+    font-size: var(--font-size-xs);
+  }
+
+  .projectOverviewTable td:nth-child(n+7):nth-child(-n+11) {
+    white-space: nowrap;
+  }
+
+  .projectOverviewTable th:nth-child(2),
+  .projectOverviewTable td:nth-child(2) {
+    min-width: 16rem;
+    max-width: 24rem;
+  }
 }
 
 .inlineMeta {
@@ -1402,6 +1484,7 @@
   .tableActions,
   .topbarActionGroup {
     width: 100%;
+    max-width: none;
     justify-content: flex-start;
   }
 
