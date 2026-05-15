@@ -3,6 +3,7 @@ import { Button, Modal } from "@nemetz/ui";
 import { fetchDocumentBlob, getDocumentApiErrorCode } from "../api/documents";
 import { t } from "../i18n";
 import type { DocumentDto } from "../api/documents";
+import { getStoredMimePreviewKind, isStoredMimePreviewable } from "../utils/documentPresentation";
 import PdfViewer from "./PdfViewer";
 
 type DocumentPreviewModalProps = {
@@ -13,18 +14,6 @@ type DocumentPreviewModalProps = {
   onFileMissing?: (document: DocumentDto) => void;
   onDocumentNotFound?: (document: DocumentDto) => void;
 };
-
-function isPdf(mimeType: string) {
-  return mimeType.toLowerCase() === "application/pdf";
-}
-
-function isImage(mimeType: string) {
-  return mimeType.toLowerCase().startsWith("image/");
-}
-
-function hasPreview(document: DocumentDto) {
-  return isPdf(document.mimeType) || isImage(document.mimeType);
-}
 
 export default function DocumentPreviewModal({
   open,
@@ -40,7 +29,7 @@ export default function DocumentPreviewModal({
   const [objectUrl, setObjectUrl] = useState("");
 
   React.useEffect(() => {
-    if (!open || !document || !hasPreview(document)) {
+    if (!open || !document || !isStoredMimePreviewable(document)) {
       setObjectUrl((previous) => {
         if (previous) {
           URL.revokeObjectURL(previous);
@@ -114,7 +103,9 @@ export default function DocumentPreviewModal({
       return null;
     }
 
-    if (!hasPreview(document)) {
+    const previewKind = getStoredMimePreviewKind(document);
+
+    if (!previewKind) {
       return <p className="placeholderText">{t("documents.noPreview")}</p>;
     }
 
@@ -130,11 +121,11 @@ export default function DocumentPreviewModal({
       return <p className="placeholderText">{t("documents.error")}</p>;
     }
 
-    if (isPdf(document.mimeType)) {
+    if (previewKind === "pdf") {
       return <PdfViewer url={objectUrl} filename={document.originalFilename || document.filename} />;
     }
 
-    if (isImage(document.mimeType)) {
+    if (previewKind === "image") {
       return (
         <img
           src={objectUrl}

@@ -137,6 +137,35 @@ export default function ProjectsPage() {
     []
   );
 
+  const getProjectListScopeLabel = React.useCallback(
+    (project: (typeof projects)[number]) => {
+      const company = companies.find((item) => item.id === project.companyId);
+      const companyName = company?.shortName?.trim() || company?.name || project.companyId;
+
+      if (!project.siteId) {
+        return companyName;
+      }
+
+      const site = sites.find((item) => item.id === project.siteId);
+      const siteName = site?.name || project.siteId;
+
+      if (!project.facilityId) {
+        return `${companyName} / ${siteName}`;
+      }
+
+      const facility = facilities.find((item) => item.id === project.facilityId);
+      const facilityName = facility?.name || project.facilityId;
+
+      return `${companyName} / ${siteName} / ${facilityName}`;
+    },
+    [companies, facilities, sites]
+  );
+
+  const renderProjectMetric = React.useCallback(
+    (value: number) => <span className="projectMetricValue">{value}</span>,
+    []
+  );
+
   const filteredProjects = useMemo(() => {
     return projects.filter((project) => {
       if ((project.archivedAt || project.isArchived) && !filters.showArchived) {
@@ -189,8 +218,14 @@ export default function ProjectsPage() {
     {
       key: "scope",
       header: t("projects.table.scope"),
-      render: (project: (typeof projects)[number]) =>
-        getScopeLabel(project.companyId, project.siteId, project.facilityId)
+      render: (project: (typeof projects)[number]) => (
+        <span
+          className="projectScopeCell"
+          title={getScopeLabel(project.companyId, project.siteId, project.facilityId)}
+        >
+          {getProjectListScopeLabel(project)}
+        </span>
+      )
     },
     {
       key: "status",
@@ -225,34 +260,41 @@ export default function ProjectsPage() {
     {
       key: "documentsCount",
       header: t("projects.table.documents"),
+      align: "center" as const,
       render: (project: (typeof projects)[number]) =>
-        legalDocs.filter((doc) => doc.projectId === project.id).length
+        renderProjectMetric(legalDocs.filter((doc) => doc.projectId === project.id).length)
     },
     {
       key: "dependsOnCount",
       header: t("projects.table.dependsOnCount"),
+      align: "center" as const,
       render: (project: (typeof projects)[number]) =>
-        (project.dependsOnProjectIds ?? []).length
+        renderProjectMetric((project.dependsOnProjectIds ?? []).length)
     },
     {
       key: "legalRefsCount",
       header: t("projects.table.legalRefsCount"),
+      align: "center" as const,
       render: (project: (typeof projects)[number]) =>
-        (project.referenceLegalDocIds ?? []).length
+        renderProjectMetric((project.referenceLegalDocIds ?? []).length)
     },
     {
       key: "openTasksCount",
       header: t("projects.table.openTasks"),
+      align: "center" as const,
       render: (project: (typeof projects)[number]) =>
-        tasks.filter((task) => task.projectId === project.id && task.status !== "DONE")
-          .length
+        renderProjectMetric(
+          tasks.filter((task) => task.projectId === project.id && task.status !== "DONE").length
+        )
     },
     {
       key: "overdueCount",
       header: t("projects.table.overdue"),
+      align: "center" as const,
       render: (project: (typeof projects)[number]) =>
-        tasks.filter((task) => task.projectId === project.id && task.status === "OVERDUE")
-          .length
+        renderProjectMetric(
+          tasks.filter((task) => task.projectId === project.id && task.status === "OVERDUE").length
+        )
     },
     {
       key: "updated",
@@ -378,7 +420,7 @@ export default function ProjectsPage() {
           columns={columns}
           data={filteredProjects}
           getRowKey={(project) => project.id}
-          className="tableSticky"
+          className="tableSticky projectOverviewTable"
           rowActions={(project) => (
             <div className="tableActions">
               <IconButton

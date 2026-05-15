@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from "react";
-import { Badge, Button, Modal } from "@nemetz/ui";
+import { Badge, Button, DateInput, Modal, Select } from "@nemetz/ui";
 import {
   deleteDocument,
   fetchDocumentBlob,
@@ -20,6 +20,11 @@ import { t, type I18nKey } from "../i18n";
 import { getPendingDocumentUploads, uploadDocumentsSequentially } from "../services/documentUploadBatch";
 import { useUsers } from "../state/UsersStore";
 import type { Attachment } from "../types/models";
+import {
+  getDocumentFileTypeFilter,
+  getDocumentTypeLabel,
+  isStoredMimePreviewable
+} from "../utils/documentPresentation";
 import DocumentPreviewModal from "./DocumentPreviewModal";
 import UserSelect from "./UserSelect";
 
@@ -102,57 +107,6 @@ function formatDateTime(value: string | undefined) {
     hour: "2-digit",
     minute: "2-digit"
   });
-}
-
-function getExtension(filename: string) {
-  const index = filename.lastIndexOf(".");
-  if (index < 0) {
-    return "";
-  }
-  return filename.slice(index).toLowerCase();
-}
-
-function isPreviewable(document: DocumentDto) {
-  const mimeType = document.mimeType.toLowerCase();
-  if (
-    mimeType === "application/pdf" ||
-    mimeType === "image/png" ||
-    mimeType === "image/jpeg" ||
-    mimeType === "image/gif" ||
-    mimeType === "image/webp"
-  ) {
-    return true;
-  }
-  const extension = getExtension(document.originalFilename || document.filename);
-  return [".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(extension);
-}
-
-function getFileTypeLabel(document: DocumentDto) {
-  const extension = getExtension(document.originalFilename || document.filename).replace(".", "").toUpperCase();
-  return extension || document.mimeType || t("common.notAvailable");
-}
-
-function getFileTypeFilter(document: DocumentDto) {
-  const extension = getExtension(document.originalFilename || document.filename);
-  if (extension === ".pdf") {
-    return "PDF";
-  }
-  if ([".png", ".jpg", ".jpeg", ".gif", ".webp"].includes(extension)) {
-    return t("documents.fileType.image");
-  }
-  if ([".doc", ".docx"].includes(extension)) {
-    return "Word";
-  }
-  if ([".xls", ".xlsx", ".csv"].includes(extension)) {
-    return "Excel/CSV";
-  }
-  if ([".ppt", ".pptx"].includes(extension)) {
-    return "PowerPoint";
-  }
-  if (extension === ".txt") {
-    return "TXT";
-  }
-  return t("common.notAvailable");
 }
 
 function getApprovalVariant(status: DocumentApprovalStatus): "neutral" | "warning" | "success" | "danger" {
@@ -249,6 +203,10 @@ export default function DocumentsPanel({
   const canManageDocuments = Boolean((allowManage ?? allowUpload) && ownerType !== "TASK_EVIDENCE");
   const supportsApproval = ownerType !== "TASK_EVIDENCE";
   const canRequestDocumentApproval = supportsApproval && canManageDocuments;
+  const categoryOptions = DOCUMENT_CATEGORIES.map((category) => ({
+    value: category,
+    label: t(CATEGORY_LABEL_KEYS[category])
+  }));
 
   const loadDocuments = React.useCallback(async () => {
     if (!ownerId) {
@@ -289,7 +247,7 @@ export default function DocumentsPanel({
   }, [canRequestDocumentApproval]);
 
   const previewableById = useMemo(
-    () => new Map(items.map((item) => [item.id, isPreviewable(item)] as const)),
+    () => new Map(items.map((item) => [item.id, isStoredMimePreviewable(item)] as const)),
     [items]
   );
 
@@ -299,7 +257,7 @@ export default function DocumentsPanel({
   }, [items]);
 
   const fileTypeOptions = useMemo(() => {
-    const labels = new Set(items.map((item) => getFileTypeFilter(item)));
+    const labels = new Set(items.map((item) => getDocumentFileTypeFilter(item)));
     return [...labels].sort((a, b) => a.localeCompare(b, "de-AT"));
   }, [items]);
 
@@ -316,7 +274,7 @@ export default function DocumentsPanel({
     if (uploaderFilter !== "ALL" && item.createdByLabel !== uploaderFilter) {
       return false;
     }
-    if (fileTypeFilter !== "ALL" && getFileTypeFilter(item) !== fileTypeFilter) {
+    if (fileTypeFilter !== "ALL" && getDocumentFileTypeFilter(item) !== fileTypeFilter) {
       return false;
     }
     if (dateFilter && !item.createdAt.startsWith(dateFilter)) {
@@ -533,13 +491,11 @@ export default function DocumentsPanel({
           <div className="documentsControlsGrid">
             <label className="formField">
               <span className="fieldLabel">{t("documents.category")}</span>
-              <select value={uploadCategory} onChange={(event) => setUploadCategory(event.target.value as DocumentCategory)}>
-                {DOCUMENT_CATEGORIES.map((category) => (
-                  <option key={category} value={category}>
-                    {t(CATEGORY_LABEL_KEYS[category])}
-                  </option>
-                ))}
-              </select>
+              <Select
+                options={categoryOptions}
+                value={uploadCategory}
+                onChange={(event) => setUploadCategory(event.target.value as DocumentCategory)}
+              />
             </label>
             {canRequestDocumentApproval ? (
               <label className="checkboxRow">
@@ -568,6 +524,7 @@ export default function DocumentsPanel({
             <label className="formField">
               <span className="fieldLabel">{t("documents.approvalComment")}</span>
               <textarea
+                className="textarea"
                 value={uploadApprovalComment}
                 onChange={(event) => setUploadApprovalComment(event.target.value)}
                 rows={2}
@@ -618,41 +575,55 @@ export default function DocumentsPanel({
 
       {items.length ? (
         <div className="documentsFilters">
-          <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value as DocumentCategory | "ALL")}>
-            <option value="ALL">{t("documents.filter.allCategories")}</option>
-            {DOCUMENT_CATEGORIES.map((category) => (
-              <option key={category} value={category}>{t(CATEGORY_LABEL_KEYS[category])}</option>
-            ))}
-          </select>
-          <select value={approvalFilter} onChange={(event) => setApprovalFilter(event.target.value as DocumentApprovalStatus | "ALL")}>
-            <option value="ALL">{t("documents.filter.allApprovalStatuses")}</option>
-            {(["NOT_REQUIRED", "PENDING", "APPROVED", "REJECTED", "CHANGES_REQUESTED"] as DocumentApprovalStatus[]).map((status) => (
-              <option key={status} value={status}>{t(APPROVAL_LABEL_KEYS[status])}</option>
-            ))}
-          </select>
-          <select value={uploaderFilter} onChange={(event) => setUploaderFilter(event.target.value)}>
-            <option value="ALL">{t("documents.filter.allUploaders")}</option>
-            {uploaderOptions.map((uploader) => (
-              <option key={uploader} value={uploader}>{uploader}</option>
-            ))}
-          </select>
-          <select value={fileTypeFilter} onChange={(event) => setFileTypeFilter(event.target.value)}>
-            <option value="ALL">{t("documents.filter.allFileTypes")}</option>
-            {fileTypeOptions.map((fileType) => (
-              <option key={fileType} value={fileType}>{fileType}</option>
-            ))}
-          </select>
-          <input
-            type="date"
+          <Select
+            options={[
+              { value: "ALL", label: t("documents.filter.allCategories") },
+              ...categoryOptions
+            ]}
+            value={categoryFilter}
+            onChange={(event) => setCategoryFilter(event.target.value as DocumentCategory | "ALL")}
+          />
+          <Select
+            options={[
+              { value: "ALL", label: t("documents.filter.allApprovalStatuses") },
+              ...(["NOT_REQUIRED", "PENDING", "APPROVED", "REJECTED", "CHANGES_REQUESTED"] as DocumentApprovalStatus[]).map((status) => ({
+                value: status,
+                label: t(APPROVAL_LABEL_KEYS[status])
+              }))
+            ]}
+            value={approvalFilter}
+            onChange={(event) => setApprovalFilter(event.target.value as DocumentApprovalStatus | "ALL")}
+          />
+          <Select
+            options={[
+              { value: "ALL", label: t("documents.filter.allUploaders") },
+              ...uploaderOptions.map((uploader) => ({ value: uploader, label: uploader }))
+            ]}
+            value={uploaderFilter}
+            onChange={(event) => setUploaderFilter(event.target.value)}
+          />
+          <Select
+            options={[
+              { value: "ALL", label: t("documents.filter.allFileTypes") },
+              ...fileTypeOptions.map((fileType) => ({ value: fileType, label: fileType }))
+            ]}
+            value={fileTypeFilter}
+            onChange={(event) => setFileTypeFilter(event.target.value)}
+          />
+          <DateInput
             value={dateFilter}
             aria-label={t("documents.uploadedAt")}
             onChange={(event) => setDateFilter(event.target.value)}
           />
-          <select value={groupMode} onChange={(event) => setGroupMode(event.target.value as GroupMode)}>
-            <option value="none">{t("documents.group.none")}</option>
-            <option value="category">{t("documents.group.category")}</option>
-            <option value="approval">{t("documents.group.approval")}</option>
-          </select>
+          <Select
+            options={[
+              { value: "none", label: t("documents.group.none") },
+              { value: "category", label: t("documents.group.category") },
+              { value: "approval", label: t("documents.group.approval") }
+            ]}
+            value={groupMode}
+            onChange={(event) => setGroupMode(event.target.value as GroupMode)}
+          />
           <label className="checkboxRow">
             <input
               type="checkbox"
@@ -674,10 +645,17 @@ export default function DocumentsPanel({
           <div className="documentsGroupedList">
             {groupedItems.map((group) => (
               <div key={group.label || "all"} className="documentsGroup">
-                {group.label ? <span className="fieldLabel">{group.label}</span> : null}
+                {group.label ? (
+                  <div className="documentsGroupHeader">
+                    <span>{group.label}</span>
+                    <Badge variant="neutral" size="sm">{group.items.length}</Badge>
+                  </div>
+                ) : null}
                 <div className="fileList">
                   {group.items.map((item) => {
                     const isBroken = brokenIds.has(item.id);
+                    const canPreviewDocument = !isBroken && Boolean(previewableById.get(item.id));
+                    const canDownloadDocument = !isBroken;
                     const canShowManageActions = canManageDocuments && (
                       showManageActions ||
                       isBroken ||
@@ -700,22 +678,18 @@ export default function DocumentsPanel({
                         <div className="documentsItemMeta">
                           <div className="documentsItemTitle">
                             <span>{item.originalFilename || item.filename}</span>
-                            <Badge variant="neutral">{getFileTypeLabel(item)}</Badge>
+                            <Badge variant="neutral">{getDocumentTypeLabel(item)}</Badge>
                           </div>
                           <div className="inlineMeta">
                             {canManageDocuments ? (
-                              <select
+                              <Select
+                                className="documentsInlineSelect"
+                                options={categoryOptions}
                                 value={item.category}
                                 disabled={savingMetadata}
                                 aria-label={t("documents.category")}
                                 onChange={(event) => void handleCategoryChange(item, event.target.value as DocumentCategory)}
-                              >
-                                {DOCUMENT_CATEGORIES.map((category) => (
-                                  <option key={category} value={category}>
-                                    {t(CATEGORY_LABEL_KEYS[category])}
-                                  </option>
-                                ))}
-                              </select>
+                              />
                             ) : (
                               <Badge variant="neutral">{t(CATEGORY_LABEL_KEYS[item.category] ?? CATEGORY_LABEL_KEYS.OTHER)}</Badge>
                             )}
@@ -751,14 +725,16 @@ export default function DocumentsPanel({
                           {isBroken ? <p className="placeholderText">{t("documents.fileMissingDetails")}</p> : null}
                         </div>
                         <div className="documentsItemActions">
-                          {previewableById.get(item.id) ? (
+                          {canPreviewDocument ? (
                             <Button size="sm" variant="secondary" onClick={() => setPreviewDocument(item)}>
                               {t("documents.preview")}
                             </Button>
                           ) : null}
-                          <Button size="sm" variant="secondary" onClick={() => void handleDownload(item)}>
-                            {t("documents.download")}
-                          </Button>
+                          {canDownloadDocument ? (
+                            <Button size="sm" variant="secondary" onClick={() => void handleDownload(item)}>
+                              {t("documents.download")}
+                            </Button>
+                          ) : null}
                           {canRequestApproval ? (
                             <Button size="sm" variant="secondary" onClick={() => openApprovalModal(item, "request")}>
                               {t("documents.approval.request")}
@@ -864,6 +840,22 @@ export default function DocumentsPanel({
         }
       >
         <div className="modalForm">
+          {approvalModal ? (
+            <div className="documentsApprovalContext">
+              <div className="documentsItemTitle">
+                <span>{approvalModal.document.originalFilename || approvalModal.document.filename}</span>
+                <Badge variant="neutral">{getDocumentTypeLabel(approvalModal.document)}</Badge>
+              </div>
+              <div className="inlineMeta">
+                <Badge variant="neutral">
+                  {t(CATEGORY_LABEL_KEYS[approvalModal.document.category] ?? CATEGORY_LABEL_KEYS.OTHER)}
+                </Badge>
+                <Badge variant={getApprovalVariant(approvalModal.document.approvalStatus)}>
+                  {t(APPROVAL_LABEL_KEYS[approvalModal.document.approvalStatus] ?? APPROVAL_LABEL_KEYS.NOT_REQUIRED)}
+                </Badge>
+              </div>
+            </div>
+          ) : null}
           {approvalModal?.action === "request" ? (
             <label className="formField">
               <span className="fieldLabel">{t("documents.approver")}</span>
@@ -879,6 +871,7 @@ export default function DocumentsPanel({
           <label className="formField">
             <span className="fieldLabel">{t("documents.approvalComment")}</span>
             <textarea
+              className="textarea"
               value={approvalComment}
               onChange={(event) => setApprovalComment(event.target.value)}
               rows={3}

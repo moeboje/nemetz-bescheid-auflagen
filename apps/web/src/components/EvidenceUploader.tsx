@@ -1,5 +1,10 @@
 import React, { useMemo, useRef, useState } from "react";
-import { Badge, Button, Modal, Select } from "@nemetz/ui";
+import { Badge, Button, Select } from "@nemetz/ui";
+import {
+  fetchDocumentBlob,
+  getDocumentApiErrorCode,
+  type DocumentDto
+} from "../api/documents";
 import { t } from "../i18n";
 import {
   ATTACHMENT_KIND_ORDER,
@@ -12,6 +17,8 @@ import {
   type AttachmentRequirements
 } from "../types/attachments";
 import { deleteFile, getFile, initFileDb, putFile } from "../services/fileStorage";
+import { isStoredMimePreviewable } from "../utils/documentPresentation";
+import DocumentPreviewModal from "./DocumentPreviewModal";
 
 type EvidenceUploaderProps = {
   value: AttachmentMeta[];
@@ -46,6 +53,35 @@ function kindLabel(kind: AttachmentKind) {
   return t("attachments.kind.document");
 }
 
+function getServerAttachmentDocumentId(attachment: AttachmentMeta) {
+  if (attachment.storage !== "none" || !attachment.id.startsWith("doc-")) {
+    return "";
+  }
+  return attachment.id.slice("doc-".length);
+}
+
+function toServerAttachmentDocument(attachment: AttachmentMeta): DocumentDto | null {
+  const documentId = getServerAttachmentDocumentId(attachment);
+  if (!documentId) {
+    return null;
+  }
+
+  return {
+    id: documentId,
+    ownerType: "TASK_EVIDENCE",
+    ownerId: "",
+    category: "OTHER",
+    fileVersion: 1,
+    filename: attachment.filename,
+    originalFilename: attachment.filename,
+    mimeType: attachment.mime || "application/octet-stream",
+    sizeBytes: Math.max(0, Math.round((attachment.sizeKb ?? 0) * 1024)),
+    createdAt: attachment.addedAt,
+    approvalRequired: false,
+    approvalStatus: "NOT_REQUIRED"
+  };
+}
+
 export default function EvidenceUploader({
   value,
   onChange,
@@ -59,23 +95,13 @@ export default function EvidenceUploader({
   const photoCaptureInputRef = useRef<HTMLInputElement | null>(null);
   const photoSelectInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
-  const [previewAttachment, setPreviewAttachment] = useState<AttachmentMeta | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string>("");
-  const [previewError, setPreviewError] = useState("");
+  const [serverPreviewDocument, setServerPreviewDocument] = useState<DocumentDto | undefined>(undefined);
+  const [missingServerDocumentIds, setMissingServerDocumentIds] = useState<Set<string>>(() => new Set());
   const [storageHint, setStorageHint] = useState("");
 
   React.useEffect(() => {
     void initFileDb();
   }, []);
-
-  React.useEffect(
-    () => () => {
-      if (previewUrl) {
-        URL.revokeObjectURL(previewUrl);
-      }
-    },
-    [previewUrl]
-  );
 
   const allowedKindsNormalized = useMemo(() => {
     const source = allowedKinds?.length
@@ -159,40 +185,6 @@ export default function EvidenceUploader({
     }
   };
 
-  const closePreview = () => {
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
-    }
-    setPreviewUrl("");
-    setPreviewError("");
-    setPreviewAttachment(null);
-  };
-
-  const handlePreview = async (attachment: AttachmentMeta) => {
-    if (attachment.storage === "none") {
-      setPreviewAttachment(attachment);
-      setPreviewUrl("");
-      setPreviewError(t("attachments.contentMissing"));
-      return;
-    }
-
-    const file = await getFile(attachment.id);
-    if (!file) {
-      setPreviewAttachment(attachment);
-      setPreviewUrl("");
-      setPreviewError(t("attachments.contentMissing"));
-      return;
-    }
-
-    const objectUrl = URL.createObjectURL(file.blob);
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
-    }
-    setPreviewAttachment(attachment);
-    setPreviewError("");
-    setPreviewUrl(objectUrl);
-  };
-
   const handleDownload = async (attachment: AttachmentMeta) => {
     if (attachment.storage === "none") {
       setStorageHint(t("attachments.contentMissing"));
@@ -210,6 +202,40 @@ export default function EvidenceUploader({
     link.click();
     URL.revokeObjectURL(url);
   };
+
+  const markServerDocumentMissing = React.useCallback((document: DocumentDto) => {
+    setMissingServerDocumentIds((previous) => new Set(previous).add(document.id));
+    setStorageHint(t("documents.fileMissingDetails"));
+  }, []);
+
+  const markServerDocumentNotFound = React.useCallback((document: DocumentDto) => {
+    setMissingServerDocumentIds((previous) => new Set(previous).add(document.id));
+    setStorageHint(t("documents.notFoundRefresh"));
+  }, []);
+
+  const handleServerDocumentDownload = React.useCallback(async (document: DocumentDto) => {
+    try {
+      const blob = await fetchDocumentBlob(document.id);
+      const objectUrl = URL.createObjectURL(blob);
+      const link = window.document.createElement("a");
+      link.href = objectUrl;
+      link.download = document.originalFilename || document.filename;
+      link.click();
+      URL.revokeObjectURL(objectUrl);
+    } catch (downloadError) {
+      const errorCode = getDocumentApiErrorCode(downloadError);
+      if (errorCode === "FILE_MISSING") {
+        markServerDocumentMissing(document);
+        return;
+      }
+      if (errorCode === "DOCUMENT_NOT_FOUND") {
+        setMissingServerDocumentIds((previous) => new Set(previous).add(document.id));
+        setStorageHint(t("documents.notFoundRefresh"));
+        return;
+      }
+      setStorageHint(t("documents.error"));
+    }
+  }, [markServerDocumentMissing]);
 
   const handleRemove = async (attachment: AttachmentMeta) => {
     onChange(value.filter((item) => item.id !== attachment.id));
@@ -309,62 +335,75 @@ export default function EvidenceUploader({
 
       {value.length ? (
         <div className="fileList">
-          {value.map((attachment) => (
-            <div key={attachment.id} className="evidenceAttachmentItem">
-              <div className="evidenceAttachmentMeta">
-                <div>
-                  {attachment.filename}
-                  {formatSize(attachment.sizeKb)}
+          {value.map((attachment) => {
+            const serverDocument = toServerAttachmentDocument(attachment);
+            const isServerDocumentMissing = Boolean(serverDocument && missingServerDocumentIds.has(serverDocument.id));
+            return (
+              <div key={attachment.id} className="evidenceAttachmentItem">
+                <div className="evidenceAttachmentMeta">
+                  <div>
+                    {attachment.filename}
+                    {formatSize(attachment.sizeKb)}
+                  </div>
+                  <div className="inlineMeta">
+                    <Badge variant="neutral">{kindLabel(attachment.kind)}</Badge>
+                    {isServerDocumentMissing ? (
+                      <Badge variant="warning">{t("documents.fileMissing")}</Badge>
+                    ) : attachment.storage === "none" && !serverDocument ? (
+                      <Badge variant="warning">{t("attachments.storageNoneBadge")}</Badge>
+                    ) : null}
+                  </div>
                 </div>
-                <div className="inlineMeta">
-                  <Badge variant="neutral">{kindLabel(attachment.kind)}</Badge>
-                  {attachment.storage === "none" ? (
-                    <Badge variant="warning">{t("attachments.storageNoneBadge")}</Badge>
+                <div className="evidenceAttachmentActions">
+                  {mode === "edit" ? (
+                    <Select
+                      options={allowedKindsNormalized.map((kind) => ({
+                        value: kind,
+                        label: kindLabel(kind)
+                      }))}
+                      value={attachment.kind}
+                      onChange={(event) => {
+                        const nextKind = event.target.value as AttachmentKind;
+                        if (!allowedKindsNormalized.includes(nextKind)) {
+                          return;
+                        }
+                        onChange(
+                          value.map((item) =>
+                            item.id === attachment.id
+                              ? { ...item, kind: nextKind }
+                              : item
+                          )
+                        );
+                      }}
+                    />
+                  ) : null}
+
+                  {serverDocument && !isServerDocumentMissing ? (
+                    <>
+                      {isStoredMimePreviewable(serverDocument) ? (
+                        <Button size="sm" variant="secondary" onClick={() => setServerPreviewDocument(serverDocument)}>
+                          {t("common.preview")}
+                        </Button>
+                      ) : null}
+                      <Button size="sm" variant="secondary" onClick={() => void handleServerDocumentDownload(serverDocument)}>
+                        {t("common.download")}
+                      </Button>
+                    </>
+                  ) : attachment.storage === "indexeddb" ? (
+                    <Button size="sm" variant="secondary" onClick={() => void handleDownload(attachment)}>
+                      {t("common.download")}
+                    </Button>
+                  ) : null}
+
+                  {mode === "edit" ? (
+                    <Button size="sm" variant="ghost" onClick={() => void handleRemove(attachment)}>
+                      {t("common.remove")}
+                    </Button>
                   ) : null}
                 </div>
               </div>
-              <div className="evidenceAttachmentActions">
-                {mode === "edit" ? (
-                  <Select
-                    options={allowedKindsNormalized.map((kind) => ({
-                      value: kind,
-                      label: kindLabel(kind)
-                    }))}
-                    value={attachment.kind}
-                    onChange={(event) => {
-                      const nextKind = event.target.value as AttachmentKind;
-                      if (!allowedKindsNormalized.includes(nextKind)) {
-                        return;
-                      }
-                      onChange(
-                        value.map((item) =>
-                          item.id === attachment.id
-                            ? { ...item, kind: nextKind }
-                            : item
-                        )
-                      );
-                    }}
-                  />
-                ) : null}
-
-                {attachment.kind === "PHOTO" ? (
-                  <Button size="sm" variant="secondary" onClick={() => void handlePreview(attachment)}>
-                    {t("common.preview")}
-                  </Button>
-                ) : (
-                  <Button size="sm" variant="secondary" onClick={() => void handleDownload(attachment)}>
-                    {t("common.download")}
-                  </Button>
-                )}
-
-                {mode === "edit" ? (
-                  <Button size="sm" variant="ghost" onClick={() => void handleRemove(attachment)}>
-                    {t("common.remove")}
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <p className="placeholderText">{t("evidence.modal.noAttachments")}</p>
@@ -381,26 +420,14 @@ export default function EvidenceUploader({
         </ul>
       ) : null}
 
-      <Modal
-        open={Boolean(previewAttachment)}
-        onClose={closePreview}
-        closeAriaLabel={t("modal.close")}
-        mobileFullscreen
-        header={previewAttachment?.filename ?? t("common.preview")}
-        footer={
-          <div className="modalFooter">
-            <Button variant="secondary" onClick={closePreview}>
-              {t("common.close")}
-            </Button>
-          </div>
-        }
-      >
-        {previewUrl ? (
-          <img src={previewUrl} alt={previewAttachment?.filename ?? ""} className="evidencePreviewImage" />
-        ) : (
-          <p className="placeholderText">{previewError || t("attachments.contentMissing")}</p>
-        )}
-      </Modal>
+      <DocumentPreviewModal
+        open={Boolean(serverPreviewDocument)}
+        document={serverPreviewDocument}
+        onClose={() => setServerPreviewDocument(undefined)}
+        onDownload={(document) => void handleServerDocumentDownload(document)}
+        onFileMissing={markServerDocumentMissing}
+        onDocumentNotFound={markServerDocumentNotFound}
+      />
     </div>
   );
 }
