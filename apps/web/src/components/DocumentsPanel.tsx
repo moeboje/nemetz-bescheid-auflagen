@@ -647,7 +647,7 @@ export default function DocumentsPanel({
               <div key={group.label || "all"} className="documentsGroup">
                 {group.label ? (
                   <div className="documentsGroupHeader">
-                    <span>{group.label}</span>
+                    <span className="documentsGroupHeaderLabel">{group.label}</span>
                     <Badge variant="neutral" size="sm">{group.items.length}</Badge>
                   </div>
                 ) : null}
