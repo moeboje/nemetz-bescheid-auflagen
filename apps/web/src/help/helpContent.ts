@@ -148,7 +148,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
   {
     slug: "admin-area",
     title: "Admin-Bereich",
-    summary: "Benutzer, Rollen, externe Firmen, Behoerden, Sicherheit und Admin-Aktionen."
+    summary: "Benutzer, Rollen, Stammdaten, Behoerden, Sicherheit und Admin-Aktionen."
   },
   {
     slug: "notifications-email",
@@ -430,8 +430,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         heading: "Einreichtyp",
         lines: [
-          "Der Einreichtyp beschreibt den fachlichen Kontext: Gewerbe, AWG oder UVP/UVE.",
-          "Der Einreichtyp hilft, Projekte, Checklisten und Einreichlogik richtig einzuordnen."
+          "Der Einreichtyp beschreibt den fachlichen Kontext und wird im Admin-Bereich als Stammdatum gepflegt.",
+          "Ein Einreichtyp kann Rechtsmaterie und Verfahrensart buendeln. Checklisten und §82b werden in spaeteren Phasen umgesetzt."
         ]
       },
       {
@@ -999,6 +999,13 @@ export const HELP_ARTICLES: HelpArticle[] = [
           "In Admin > Behoerden pflegst du Behoerden und ihre Kontakte.",
           "Kontakte koennen Name, Funktion, Abteilung, E-Mail, Telefon, Mobilnummer, Notiz und Primaerkontakt enthalten.",
           "Archivieren oder Wiederherstellen ist nur sichtbar, wenn du die passende Berechtigung hast."
+        ]
+      },
+      {
+        heading: "Verfahrens-Stammdaten",
+        lines: [
+          "In Admin > Verfahrens-Stammdaten pflegst du Rechtsmaterien, Verfahrensarten und Einreichtypen.",
+          "Inaktive Einreichtypen bleiben bei bestehenden Projekten nachvollziehbar, werden aber nicht mehr fuer neue Projekte verwendet."
         ]
       },
       {

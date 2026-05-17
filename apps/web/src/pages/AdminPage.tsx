@@ -38,6 +38,7 @@ import { useDeadlines } from "../state/DeadlinesStore";
 import { useTaskState, type TaskStateMap } from "../state/TaskStateStore";
 import { useAuditLog } from "../state/AuditLogStore";
 import { useNotifications } from "../state/NotificationsStore";
+import { useProcedureMasterData } from "../state/ProcedureMasterDataStore";
 import { sanitizeProjectRelations } from "../state/projectRelations";
 import { runIntegrityScan, type IntegrityFinding } from "../state/diagnostics/integrityScan";
 import {
@@ -51,6 +52,8 @@ import {
 } from "../state/importExport/validateImport";
 import { createDemoScenarioSeed, mergeDemoScenario } from "../state/demoScenario";
 import type { ExportPayload } from "../state/importExport/types";
+import type { ProcedureMasterDataSnapshot } from "../data/procedureMasterData";
+import type { ProcedureMasterDataImportMapping } from "../api/procedureMasterData";
 import type { ProjectChecklist } from "../data/projectChecklists";
 import type { Project } from "../data/projects";
 import type { LegalDoc } from "../data/legalDocs";
@@ -175,6 +178,47 @@ async function normalizeImportedEvidenceStorage(
     attachmentCount: counters.attachmentCount,
     missingContentCount: counters.missingContentCount
   };
+}
+
+function remapProjectSubmissionTypesForImport(input: {
+  projects: Project[];
+  procedureMasterData?: ProcedureMasterDataSnapshot;
+  idMapping?: ProcedureMasterDataImportMapping;
+}) {
+  if (!input.procedureMasterData || !input.idMapping) {
+    return input.projects;
+  }
+
+  const submissionTypeById = new Map(
+    input.procedureMasterData.submissionTypes.map((submissionType) => [submissionType.id, submissionType])
+  );
+  const submissionTypeByCode = new Map(
+    input.procedureMasterData.submissionTypes.map((submissionType) => [submissionType.code, submissionType])
+  );
+
+  return input.projects.map((project) => {
+    const source =
+      (project.submissionTypeCode ? submissionTypeByCode.get(project.submissionTypeCode) : undefined) ??
+      (project.submissionTypeId ? submissionTypeById.get(project.submissionTypeId) : undefined);
+
+    if (!source) {
+      return project;
+    }
+
+    const mappedSubmissionTypeId =
+      input.idMapping?.submissionTypeCodes[source.code] ??
+      input.idMapping?.submissionTypeIds[source.id];
+
+    if (!mappedSubmissionTypeId) {
+      return project;
+    }
+
+    return {
+      ...project,
+      submissionTypeId: mappedSubmissionTypeId,
+      submissionTypeCode: source.code
+    };
+  });
 }
 
 function collectIndexedDbAttachmentReferences(
@@ -319,6 +363,7 @@ export default function AdminPage() {
     runDailyTick,
     lastTickAt
   } = useNotifications();
+  const { replaceProcedureMasterData } = useProcedureMasterData();
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -798,6 +843,7 @@ export default function AdminPage() {
     async (input: {
       scopes: ExportPayload["data"]["scopes"];
       authorities: ExportPayload["data"]["authorities"];
+      procedureMasterData?: ProcedureMasterDataSnapshot;
       projects: Project[];
       projectChecklists?: ProjectChecklist[];
       legalDocs: LegalDoc[];
@@ -807,7 +853,16 @@ export default function AdminPage() {
     }) => {
       await replaceScopes(input.scopes);
       await replaceAuthorities(input.authorities);
-      await replaceProjects(input.projects);
+      const procedureMasterDataImport = input.procedureMasterData
+        ? await replaceProcedureMasterData(input.procedureMasterData)
+        : undefined;
+      await replaceProjects(
+        remapProjectSubmissionTypesForImport({
+          projects: input.projects,
+          procedureMasterData: input.procedureMasterData,
+          idMapping: procedureMasterDataImport?.idMapping
+        })
+      );
       await applyImportedProjectChecklists(input.projectChecklists);
       await replaceLegalDocs(input.legalDocs);
       await replaceObligations(input.obligations);
@@ -819,6 +874,7 @@ export default function AdminPage() {
       replaceDeadlines,
       replaceLegalDocs,
       replaceObligations,
+      replaceProcedureMasterData,
       replaceProjects,
       replaceScopes,
       replaceTaskState,
@@ -986,6 +1042,7 @@ export default function AdminPage() {
         await applyFullDomainReplaceInDependencyOrder({
           scopes: imported.scopes,
           authorities: imported.authorities,
+          procedureMasterData: imported.procedureMasterData,
           projects: sanitizedProjectImport.projects,
           projectChecklists: imported.projectChecklists ?? [],
           legalDocs: imported.legalDocs ?? [],
@@ -1002,6 +1059,9 @@ export default function AdminPage() {
         }
         await replaceScopes(imported.scopes);
         await replaceAuthorities(imported.authorities);
+        if (imported.procedureMasterData) {
+          await replaceProcedureMasterData(imported.procedureMasterData);
+        }
         if (imported.legalDocs) {
           await replaceLegalDocs(imported.legalDocs);
         }

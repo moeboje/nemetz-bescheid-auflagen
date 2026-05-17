@@ -17,6 +17,7 @@ export type BootstrapMode =
   | "baseline-20260503143000_branding_assets"
   | "baseline-20260507120000_project_legal_doc_descriptions_preview"
   | "baseline-20260513120000_document_categories_approvals"
+  | "baseline-20260515120000_admin_procedure_master_data"
   | "partial";
 
 type TableRow = {
@@ -1241,6 +1242,82 @@ const projectStatusSubmissionTypeRequirements = {
   indexes: [index("Project_submissionType_idx", "Project", ["submissionType"])]
 } satisfies SchemaRequirements;
 
+const procedureMasterDataRequirements = {
+  tables: ["LegalMatter", "ProcedureType", "SubmissionType"],
+  columns: [
+    "Project.submissionTypeId",
+    "LegalMatter.id",
+    "LegalMatter.code",
+    "LegalMatter.name",
+    "LegalMatter.shortName",
+    "LegalMatter.description",
+    "LegalMatter.isActive",
+    "LegalMatter.sortOrder",
+    "LegalMatter.badgeVariant",
+    "LegalMatter.createdAt",
+    "LegalMatter.updatedAt",
+    "ProcedureType.id",
+    "ProcedureType.code",
+    "ProcedureType.name",
+    "ProcedureType.shortName",
+    "ProcedureType.description",
+    "ProcedureType.isActive",
+    "ProcedureType.sortOrder",
+    "ProcedureType.createdAt",
+    "ProcedureType.updatedAt",
+    "SubmissionType.id",
+    "SubmissionType.code",
+    "SubmissionType.name",
+    "SubmissionType.shortName",
+    "SubmissionType.description",
+    "SubmissionType.legalMatterId",
+    "SubmissionType.procedureTypeId",
+    "SubmissionType.isActive",
+    "SubmissionType.isLegacy",
+    "SubmissionType.sortOrder",
+    "SubmissionType.badgeVariant",
+    "SubmissionType.legacyAliases",
+    "SubmissionType.createdAt",
+    "SubmissionType.updatedAt"
+  ],
+  indexes: [
+    index("Project_submissionTypeId_idx", "Project", ["submissionTypeId"]),
+    index("LegalMatter_code_key", "LegalMatter", ["code"], { unique: true }),
+    index("LegalMatter_name_key", "LegalMatter", ["name"], { unique: true }),
+    index("LegalMatter_isActive_sortOrder_idx", "LegalMatter", ["isActive", "sortOrder"]),
+    index("LegalMatter_sortOrder_idx", "LegalMatter", ["sortOrder"]),
+    index("ProcedureType_code_key", "ProcedureType", ["code"], { unique: true }),
+    index("ProcedureType_name_key", "ProcedureType", ["name"], { unique: true }),
+    index("ProcedureType_isActive_sortOrder_idx", "ProcedureType", ["isActive", "sortOrder"]),
+    index("ProcedureType_sortOrder_idx", "ProcedureType", ["sortOrder"]),
+    index("SubmissionType_code_key", "SubmissionType", ["code"], { unique: true }),
+    index("SubmissionType_name_key", "SubmissionType", ["name"], { unique: true }),
+    index("SubmissionType_legalMatterId_idx", "SubmissionType", ["legalMatterId"]),
+    index("SubmissionType_procedureTypeId_idx", "SubmissionType", ["procedureTypeId"]),
+    index("SubmissionType_isActive_sortOrder_idx", "SubmissionType", ["isActive", "sortOrder"]),
+    index("SubmissionType_sortOrder_idx", "SubmissionType", ["sortOrder"])
+  ],
+  primaryKeys: [
+    primaryKey("LegalMatter_pkey", "LegalMatter", ["id"]),
+    primaryKey("ProcedureType_pkey", "ProcedureType", ["id"]),
+    primaryKey("SubmissionType_pkey", "SubmissionType", ["id"])
+  ],
+  foreignKeys: [
+    foreignKey("Project_submissionTypeId_fkey", "Project", ["submissionTypeId"], "SubmissionType", ["id"], {
+      onDelete: "SET NULL",
+      onUpdate: "CASCADE"
+    }),
+    foreignKey("SubmissionType_legalMatterId_fkey", "SubmissionType", ["legalMatterId"], "LegalMatter", ["id"], {
+      onDelete: "RESTRICT",
+      onUpdate: "CASCADE"
+    }),
+    foreignKey("SubmissionType_procedureTypeId_fkey", "SubmissionType", ["procedureTypeId"], "ProcedureType", ["id"], {
+      onDelete: "RESTRICT",
+      onUpdate: "CASCADE"
+    })
+  ]
+} satisfies SchemaRequirements;
+
 const obligationExternalRecurrenceRequirements = {
   tables: [],
   columns: [
@@ -1425,6 +1502,19 @@ const projectStatusSubmissionTypeBaselineRequirements = mergeRequirements(
 );
 
 export const baselineStages = [
+  {
+    mode: "baseline-20260515120000_admin_procedure_master_data",
+    introduced: procedureMasterDataRequirements,
+    requirements: mergeRequirements(
+      projectStatusSubmissionTypeBaselineRequirements,
+      obligationExternalRecurrenceRequirements,
+      projectAccessLegacyDecisionsRequirements,
+      brandingAssetRequirements,
+      projectLegalDocDescriptionsPreviewRequirements,
+      documentCategoriesApprovalsRequirements,
+      procedureMasterDataRequirements
+    )
+  },
   {
     mode: "baseline-20260513120000_document_categories_approvals",
     introduced: documentCategoriesApprovalsRequirements,

@@ -4,6 +4,7 @@ import type { Deadline } from "../../data/deadlines";
 import type { LegalDoc } from "../../data/legalDocs";
 import type { LegacyDecision } from "../../data/legacyDecisions";
 import type { Obligation } from "../../data/obligations";
+import type { ProcedureMasterDataSnapshot } from "../../data/procedureMasterData";
 import type { ProjectChecklist } from "../../data/projectChecklists";
 import type { Project } from "../../data/projects";
 import type { User } from "../../data/users";
@@ -20,6 +21,7 @@ export type ExportDataBundle = {
   };
   users?: User[];
   projects?: Project[];
+  procedureMasterData?: ProcedureMasterDataSnapshot;
   projectChecklists?: ProjectChecklist[];
   legalDocs?: LegalDoc[];
   legacyDecisions?: LegacyDecision[];

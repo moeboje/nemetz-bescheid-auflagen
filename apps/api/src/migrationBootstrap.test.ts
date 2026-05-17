@@ -236,7 +236,9 @@ describe("migration bootstrap classification", () => {
       "baseline-20260429103000_obligation_recurrence_external_execution",
       "baseline-20260502120000_project_access_legacy_decisions",
       "baseline-20260503143000_branding_assets",
-      "baseline-20260507120000_project_legal_doc_descriptions_preview"
+      "baseline-20260507120000_project_legal_doc_descriptions_preview",
+      "baseline-20260513120000_document_categories_approvals",
+      "baseline-20260515120000_admin_procedure_master_data"
     ] as const;
 
     for (const mode of expectedModes) {
@@ -272,10 +274,35 @@ describe("migration bootstrap classification", () => {
     );
   });
 
-  it("uses the latest baseline when project and legal document description fields are complete", () => {
+  it("uses the project/legal document description baseline when document approval objects are absent", () => {
     assert.equal(
       classify(fixtureFor("baseline-20260507120000_project_legal_doc_descriptions_preview")),
       "baseline-20260507120000_project_legal_doc_descriptions_preview"
+    );
+  });
+
+  it("uses the document approval baseline when procedure master data is absent", () => {
+    assert.equal(
+      classify(fixtureFor("baseline-20260513120000_document_categories_approvals")),
+      "baseline-20260513120000_document_categories_approvals"
+    );
+  });
+
+  it("uses the latest baseline when procedure master data is complete", () => {
+    assert.equal(
+      classify(fixtureFor("baseline-20260515120000_admin_procedure_master_data")),
+      "baseline-20260515120000_admin_procedure_master_data"
+    );
+  });
+
+  it("blocks a partial procedure master data baseline when the project relation column is missing", () => {
+    assert.equal(
+      classify(
+        without(fixtureFor("baseline-20260515120000_admin_procedure_master_data"), {
+          presentColumns: ["Project.submissionTypeId"]
+        })
+      ),
+      "partial"
     );
   });
 

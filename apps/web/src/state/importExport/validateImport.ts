@@ -1,6 +1,6 @@
 import { getRuntimeConfigSnapshot } from "../../config/runtimeConfig";
 import { CHECKLIST_ITEM_STATUS_VALUES } from "../../data/projectChecklists";
-import { PROJECT_STATUS_VALUES, PROJECT_SUBMISSION_TYPE_VALUES } from "../../data/projects";
+import { PROJECT_STATUS_VALUES } from "../../data/projects";
 import { STORAGE_VERSION } from "../persistence";
 import type { ExportDataBundle, ExportPayload } from "./types";
 
@@ -145,6 +145,7 @@ function normalizePayloadShape(value: unknown): ExportPayload | null {
         authorities: source.authorities as ExportDataBundle["authorities"],
         users: source.users as ExportDataBundle["users"],
         projects: source.projects as ExportDataBundle["projects"],
+        procedureMasterData: source.procedureMasterData as ExportDataBundle["procedureMasterData"],
         projectChecklists: source.projectChecklists as ExportDataBundle["projectChecklists"],
         legalDocs: source.legalDocs as ExportDataBundle["legalDocs"],
         legacyDecisions: source.legacyDecisions as ExportDataBundle["legacyDecisions"],
@@ -268,16 +269,52 @@ function validateProjects(
       pushMessage(errors, "import.validation.invalidObject", `${path}.status`);
     }
 
-    if (
-      hasValue(object.submissionType) &&
-      (!isNonEmptyString(object.submissionType) ||
-        !PROJECT_SUBMISSION_TYPE_VALUES.includes(
-          object.submissionType as (typeof PROJECT_SUBMISSION_TYPE_VALUES)[number]
-        ))
-    ) {
+    if (hasValue(object.submissionType) && !isNonEmptyString(object.submissionType)) {
       pushMessage(errors, "import.validation.invalidObject", `${path}.submissionType`);
     }
+    if (hasValue(object.submissionTypeId) && !isNonEmptyString(object.submissionTypeId)) {
+      pushMessage(errors, "import.validation.invalidObject", `${path}.submissionTypeId`);
+    }
+    if (hasValue(object.submissionTypeCode) && !isNonEmptyString(object.submissionTypeCode)) {
+      pushMessage(errors, "import.validation.invalidObject", `${path}.submissionTypeCode`);
+    }
   });
+}
+
+function validateProcedureMasterData(
+  value: unknown,
+  errors: ImportValidationMessage[],
+  warnings: ImportValidationMessage[]
+) {
+  if (!hasValue(value)) {
+    pushMessage(warnings, "import.validation.missingOptionalKey", "data.procedureMasterData");
+    return;
+  }
+
+  const snapshot = ensureRecord(value, "data.procedureMasterData", errors);
+  if (!snapshot) {
+    return;
+  }
+
+  const legalMatters = ensureArray(
+    snapshot.legalMatters,
+    "data.procedureMasterData.legalMatters",
+    errors
+  );
+  const procedureTypes = ensureArray(
+    snapshot.procedureTypes,
+    "data.procedureMasterData.procedureTypes",
+    errors
+  );
+  const submissionTypes = ensureArray(
+    snapshot.submissionTypes,
+    "data.procedureMasterData.submissionTypes",
+    errors
+  );
+
+  validateArrayIds(legalMatters, "data.procedureMasterData.legalMatters", errors);
+  validateArrayIds(procedureTypes, "data.procedureMasterData.procedureTypes", errors);
+  validateArrayIds(submissionTypes, "data.procedureMasterData.submissionTypes", errors);
 }
 
 function validateProjectChecklists(
@@ -481,6 +518,7 @@ export function validateImport(value: unknown): ImportValidationResult {
   validateAuthoritiesSnapshot(data.authorities, errors);
 
   validateUsers(data.users, errors);
+  validateProcedureMasterData(data.procedureMasterData, errors, warnings);
   validateProjects(data.projects, errors);
   validateProjectChecklists(data.projectChecklists, errors);
   validateOptionalArray(data.legalDocs, "data.legalDocs", errors);

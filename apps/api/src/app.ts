@@ -14,6 +14,7 @@ import { createLegacyDecisionsRouter } from "./routes/legacyDecisions.js";
 import { createObligationsRouter } from "./routes/obligations.js";
 import { createProjectChecklistsRouter } from "./routes/projectChecklists.js";
 import { createProjectsRouter } from "./routes/projects.js";
+import { createProcedureMasterDataRouter } from "./routes/procedureMasterData.js";
 import { createScopesRouter } from "./routes/scopes.js";
 import { createTaskStateRouter } from "./routes/taskState.js";
 import { createLegacyRecoveryGuard } from "./legacyRecovery.js";
@@ -2803,6 +2804,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   router.use(createLegacyDecisionsRouter(prisma));
   router.use(createObligationsRouter(prisma, config));
   router.use(createProjectChecklistsRouter(prisma, config));
+  router.use(createProcedureMasterDataRouter(prisma));
   router.use(createProjectsRouter(prisma, config));
   router.use(createScopesRouter(prisma));
   router.use(createTaskStateRouter(prisma, config));

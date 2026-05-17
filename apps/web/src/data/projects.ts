@@ -14,7 +14,8 @@ export const PROJECT_STATUS_VALUES = [
 export type ProjectStatus = (typeof PROJECT_STATUS_VALUES)[number];
 
 export const PROJECT_SUBMISSION_TYPE_VALUES = ["GEWERBE", "AWG", "UVP_UVE"] as const;
-export type ProjectSubmissionType = (typeof PROJECT_SUBMISSION_TYPE_VALUES)[number];
+export type LegacyProjectSubmissionType = (typeof PROJECT_SUBMISSION_TYPE_VALUES)[number];
+export type ProjectSubmissionType = string;
 
 export type ProjectAttachment = Attachment;
 
@@ -45,6 +46,18 @@ export type Project = {
   title: string;
   status?: ProjectStatus;
   submissionType?: ProjectSubmissionType;
+  submissionTypeId?: string;
+  submissionTypeCode?: string;
+  submissionTypeLabel?: string;
+  submissionTypeShortName?: string;
+  submissionTypeIsActive?: boolean;
+  submissionTypeBadgeVariant?: "neutral" | "success" | "warning" | "danger";
+  legalMatterCode?: string;
+  legalMatterLabel?: string;
+  legalMatterShortName?: string;
+  procedureTypeCode?: string;
+  procedureTypeLabel?: string;
+  procedureTypeShortName?: string;
   shortDescription?: string;
   detailedDescription?: string;
   authorityRef?: string;

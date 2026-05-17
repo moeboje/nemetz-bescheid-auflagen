@@ -56,6 +56,11 @@ export const LEGACY_RECOVERY_ROUTE_DEFINITIONS: ReadonlyArray<LegacyRecoveryRout
   },
   {
     method: "PUT",
+    path: "/admin/internal/procedure-master-data/bulk-replace",
+    permissionKeys: ["masterData.manage"]
+  },
+  {
+    method: "PUT",
     path: "/admin/internal/projects/bulk-replace",
     permissionKeys: ["projects.edit", "projects.archive"]
   },
