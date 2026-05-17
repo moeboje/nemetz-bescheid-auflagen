@@ -22,6 +22,7 @@ import { useUsers } from "../state/UsersStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useTasks } from "../state/TasksStore";
 import { useAuthorization } from "../state/AuthorizationStore";
+import { useProcedureMasterData } from "../state/ProcedureMasterDataStore";
 import { ProjectPolicy } from "../policies/ProjectPolicy";
 import ProjectModal from "../components/ProjectModal";
 import {
@@ -33,6 +34,7 @@ import {
 import {
   PROJECT_SUBMISSION_TYPE_FILTER_UNSET,
   getProjectSubmissionTypeBadgeVariant,
+  getProjectSubmissionTypeFilterValue,
   getProjectSubmissionTypeLabel,
   getProjectSubmissionTypeOptions
 } from "../projectSubmissionType";
@@ -47,6 +49,7 @@ export default function ProjectsPage() {
   const { getUserLabel } = useUsers();
   const { legalDocs } = useLegalDocs();
   const { tasks } = useTasks();
+  const { submissionTypes } = useProcedureMasterData();
   const [modalOpen, setModalOpen] = useState(false);
   const [filters, setFilters] = useState({
     search: "",
@@ -132,9 +135,9 @@ export default function ProjectsPage() {
         value: PROJECT_SUBMISSION_TYPE_FILTER_UNSET,
         label: getProjectSubmissionTypeLabel()
       },
-      ...getProjectSubmissionTypeOptions()
+      ...getProjectSubmissionTypeOptions({ submissionTypes, projects, mode: "filter" })
     ],
-    []
+    [projects, submissionTypes]
   );
 
   const getProjectListScopeLabel = React.useCallback(
@@ -195,8 +198,8 @@ export default function ProjectsPage() {
         filters.submissionType === ""
           ? true
           : filters.submissionType === PROJECT_SUBMISSION_TYPE_FILTER_UNSET
-          ? !project.submissionType
-          : project.submissionType === filters.submissionType;
+          ? !getProjectSubmissionTypeFilterValue(project)
+          : getProjectSubmissionTypeFilterValue(project) === filters.submissionType;
       return (
         matchesSearch &&
         matchesCompany &&
@@ -240,8 +243,8 @@ export default function ProjectsPage() {
       key: "submissionType",
       header: t("projects.table.submissionType"),
       render: (project: (typeof projects)[number]) => (
-        <Badge variant={getProjectSubmissionTypeBadgeVariant(project.submissionType)}>
-          {getProjectSubmissionTypeLabel(project.submissionType)}
+        <Badge variant={getProjectSubmissionTypeBadgeVariant(project)}>
+          {getProjectSubmissionTypeLabel(project)}
         </Badge>
       )
     },

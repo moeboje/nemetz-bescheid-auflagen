@@ -380,6 +380,7 @@ model Project {
   title                String
   status               ProjectStatus?
   submissionType       ProjectSubmissionType?
+  submissionTypeId     String?
   shortDescription     String?
   detailedDescription  String?                @db.Text
   authorityRef         String?
@@ -410,6 +411,7 @@ model Project {
   authorityContact     AuthorityContact?      @relation(fields: [authorityContactId], references: [id])
   ownerUser            User?                  @relation("ProjectOwner", fields: [ownerUserId], references: [id])
   deputyUser           User?                  @relation("ProjectDeputy", fields: [deputyUserId], references: [id])
+  submissionTypeRef    SubmissionType?        @relation("ProjectSubmissionTypeRef", fields: [submissionTypeId], references: [id], onDelete: SetNull)
   accessEntries        ProjectAccess[]
   legacyDecisions      LegacyDecision[]
 
@@ -421,7 +423,66 @@ model Project {
   @@index([ownerUserId])
   @@index([deputyUserId])
   @@index([submissionType])
+  @@index([submissionTypeId])
   @@index([isArchived])
+}
+
+model LegalMatter {
+  id              String           @id @default(cuid())
+  code            String           @unique
+  name            String           @unique
+  shortName       String?
+  description     String?          @db.Text
+  isActive        Boolean          @default(true)
+  sortOrder       Int              @default(0)
+  badgeVariant    String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  submissionTypes SubmissionType[]
+
+  @@index([isActive, sortOrder])
+  @@index([sortOrder])
+}
+
+model ProcedureType {
+  id              String           @id @default(cuid())
+  code            String           @unique
+  name            String           @unique
+  shortName       String?
+  description     String?          @db.Text
+  isActive        Boolean          @default(true)
+  sortOrder       Int              @default(0)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  submissionTypes SubmissionType[]
+
+  @@index([isActive, sortOrder])
+  @@index([sortOrder])
+}
+
+model SubmissionType {
+  id                  String          @id @default(cuid())
+  code                String          @unique
+  name                String          @unique
+  shortName           String?
+  description         String?         @db.Text
+  legalMatterId       String
+  procedureTypeId     String
+  isActive            Boolean         @default(true)
+  isLegacy            Boolean         @default(false)
+  sortOrder           Int             @default(0)
+  badgeVariant        String?
+  legacyAliases       Json?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  legalMatter         LegalMatter     @relation(fields: [legalMatterId], references: [id], onDelete: Restrict)
+  procedureType       ProcedureType   @relation(fields: [procedureTypeId], references: [id], onDelete: Restrict)
+  projects            Project[]       @relation("ProjectSubmissionTypeRef")
+
+  @@index([legalMatterId])
+  @@index([procedureTypeId])
+  @@index([isActive, sortOrder])
+  @@index([sortOrder])
 }
 
 model ProjectAccess {

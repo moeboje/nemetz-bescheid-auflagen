@@ -57,6 +57,17 @@ async function createUser(args: { email: string; password: string; role?: string
   });
 }
 
+async function createRole(key: string, permissionKeys: string[]) {
+  return prisma.role.create({
+    data: {
+      key,
+      labelDe: key,
+      isSystem: false,
+      permissionsJson: permissionKeys
+    }
+  });
+}
+
 async function login(email: string, password: string) {
   const response = await request("/auth/login", {
     method: "POST",
@@ -217,6 +228,9 @@ describe("Legacy recovery endpoint guard", () => {
     await prisma.obligation.deleteMany();
     await prisma.legalDocument.deleteMany();
     await prisma.project.deleteMany();
+    await prisma.submissionType.deleteMany();
+    await prisma.legalMatter.deleteMany();
+    await prisma.procedureType.deleteMany();
     await prisma.authorityContact.deleteMany();
     await prisma.authority.deleteMany();
     await prisma.facility.deleteMany();
@@ -224,6 +238,7 @@ describe("Legacy recovery endpoint guard", () => {
     await prisma.company.deleteMany();
     await prisma.portalSnapshot.deleteMany();
     await prisma.user.deleteMany();
+    await prisma.role.deleteMany();
   });
 
   it("blocks all migrated-domain legacy recovery endpoints by default", async () => {
@@ -297,6 +312,40 @@ describe("Legacy recovery endpoint guard", () => {
       });
 
       assert.equal(response.status, 403, `Expected ${entry.method} ${entry.path} to be blocked`);
+      const payload = (await response.json()) as { ok: boolean; message: string };
+      assert.equal(payload.ok, false);
+      assert.match(payload.message, /disabled by default/i);
+    }
+  });
+
+  it("blocks procedure master data bulk-replace path variants by default", async () => {
+    const admin = await createUser({
+      email: "legacy-guard-procedure-master-data@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const cookie = await login(admin.email, "ValidPassword1!");
+    const body = {
+      legalMatters: [],
+      procedureTypes: [],
+      submissionTypes: []
+    };
+
+    const cases = [
+      "/admin/internal/procedure-master-data/bulk-replace",
+      "/admin/internal/procedure-master-data/bulk-replace/",
+      "/admin//internal//procedure-master-data//bulk-replace//",
+      "/ADMIN/INTERNAL/PROCEDURE-MASTER-DATA/BULK-REPLACE"
+    ];
+
+    for (const path of cases) {
+      const response = await request(path, {
+        method: "PUT",
+        cookie,
+        body
+      });
+
+      assert.equal(response.status, 403, `Expected PUT ${path} to be blocked`);
       const payload = (await response.json()) as { ok: boolean; message: string };
       assert.equal(payload.ok, false);
       assert.match(payload.message, /disabled by default/i);
@@ -387,6 +436,45 @@ describe("Legacy recovery endpoint guard", () => {
     });
 
     assert.equal(response.status, 200);
+  });
+
+  it("allows enabled procedure master data bulk-replace only with master data permission", async () => {
+    await restartServer({
+      legacyRecoveryEndpointsEnabled: true
+    });
+
+    await createRole("LEGACY_GUARD_ADMIN_ONLY", ["admin.access"]);
+    const admin = await createUser({
+      email: "legacy-guard-procedure-master-enabled@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const limitedAdmin = await createUser({
+      email: "legacy-guard-procedure-master-limited@example.com",
+      password: "ValidPassword1!",
+      role: "LEGACY_GUARD_ADMIN_ONLY"
+    });
+    const adminCookie = await login(admin.email, "ValidPassword1!");
+    const limitedCookie = await login(limitedAdmin.email, "ValidPassword1!");
+    const body = {
+      legalMatters: [],
+      procedureTypes: [],
+      submissionTypes: []
+    };
+
+    const allowedResponse = await request("/admin/internal/procedure-master-data/bulk-replace", {
+      method: "PUT",
+      cookie: adminCookie,
+      body
+    });
+    assert.equal(allowedResponse.status, 200);
+
+    const forbiddenResponse = await request("/admin/internal/procedure-master-data/bulk-replace", {
+      method: "PUT",
+      cookie: limitedCookie,
+      body
+    });
+    assert.equal(forbiddenResponse.status, 403);
   });
 
   it("allows enabled obligation bulk-delete only when no blocking dependencies exist", async () => {

@@ -1131,8 +1131,8 @@ export default function ProjectDetailPage() {
             <Badge variant={getProjectStatusBadgeVariant(project.status)}>
               {getProjectStatusLabel(project.status)}
             </Badge>
-            <Badge variant={getProjectSubmissionTypeBadgeVariant(project.submissionType)}>
-              {getProjectSubmissionTypeLabel(project.submissionType)}
+            <Badge variant={getProjectSubmissionTypeBadgeVariant(project)}>
+              {getProjectSubmissionTypeLabel(project)}
             </Badge>
             <span>{scopeLabel}</span>
             <span>{authorityName || t("common.notAvailable")}</span>
@@ -1283,10 +1283,18 @@ export default function ProjectDetailPage() {
               <div>
                 <div className="metaLabel">{t("projects.detail.submissionType")}</div>
                 <div className="metaValue">
-                  <Badge variant={getProjectSubmissionTypeBadgeVariant(project.submissionType)}>
-                    {getProjectSubmissionTypeLabel(project.submissionType)}
+                  <Badge variant={getProjectSubmissionTypeBadgeVariant(project)}>
+                    {getProjectSubmissionTypeLabel(project)}
                   </Badge>
                 </div>
+              </div>
+              <div>
+                <div className="metaLabel">{t("projects.detail.legalMatter")}</div>
+                <div className="metaValue">{project.legalMatterLabel || t("common.notAvailable")}</div>
+              </div>
+              <div>
+                <div className="metaLabel">{t("projects.detail.procedureType")}</div>
+                <div className="metaValue">{project.procedureTypeLabel || t("common.notAvailable")}</div>
               </div>
               <div>
                 <div className="metaLabel">{t("projects.detail.shortDescription")}</div>

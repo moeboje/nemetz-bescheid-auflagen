@@ -5,6 +5,7 @@ import { listDeadlines } from "../../api/deadlines";
 import { listLegacyDecisions } from "../../api/legacyDecisions";
 import { getLegalDoc, listLegalDocs } from "../../api/legalDocs";
 import { listObligations } from "../../api/obligations";
+import { listAdminProcedureMasterData } from "../../api/procedureMasterData";
 import { listProjectChecklists } from "../../api/projectChecklists";
 import { getProject, listProjects } from "../../api/projects";
 import { listScopes } from "../../api/scopes";
@@ -24,6 +25,7 @@ type ServerDomainReaderResult = {
   legacyDecisions: Awaited<ReturnType<typeof readLegacyDecisionsForExport>>;
   legalDocs: Awaited<ReturnType<typeof readLegalDocsForExport>>;
   obligations: Awaited<ReturnType<typeof readObligationsForExport>>;
+  procedureMasterData: Awaited<ReturnType<typeof readProcedureMasterDataForExport>>;
   projectChecklists: Awaited<ReturnType<typeof readProjectChecklistsForExport>>;
   projects: Awaited<ReturnType<typeof readProjectsForExport>>;
   scopes: Awaited<ReturnType<typeof readScopesForExport>>;
@@ -165,6 +167,10 @@ async function readProjectsForExport() {
   );
 }
 
+async function readProcedureMasterDataForExport() {
+  return listAdminProcedureMasterData();
+}
+
 async function readProjectChecklistsForExport() {
   return listProjectChecklists();
 }
@@ -198,6 +204,7 @@ async function readServerDomainsForExport(): Promise<ServerDomainReaderResult> {
   const readers = [
     ["scopes", readScopesForExport],
     ["authorities", readAuthoritiesForExport],
+    ["procedureMasterData", readProcedureMasterDataForExport],
     ["projects", readProjectsForExport],
     ["projectChecklists", readProjectChecklistsForExport],
     ["legalDocs", readLegalDocsForExport],
@@ -228,6 +235,7 @@ export async function buildStorageExportPayload(
   const payload = buildExportPayload({
     scopes: serverDomains.scopes,
     authorities: serverDomains.authorities,
+    procedureMasterData: serverDomains.procedureMasterData,
     projects: serverDomains.projects,
     projectChecklists: serverDomains.projectChecklists,
     legalDocs: serverDomains.legalDocs,

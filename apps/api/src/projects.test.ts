@@ -153,6 +153,9 @@ describe("Projects submission type", () => {
     await prisma.legalDocument.deleteMany();
     await prisma.taskStateEntry.deleteMany();
     await prisma.project.deleteMany();
+    await prisma.submissionType.deleteMany();
+    await prisma.legalMatter.deleteMany();
+    await prisma.procedureType.deleteMany();
     await prisma.authorityContact.deleteMany();
     await prisma.authority.deleteMany();
     await prisma.facility.deleteMany();
@@ -627,8 +630,953 @@ describe("Projects submission type", () => {
     const payload = (await response.json()) as { message: string };
     assert.equal(
       payload.message,
-      "Invalid project submission type. Allowed values: GEWERBE, AWG, UVP_UVE."
+      "Invalid project submission type."
     );
+  });
+
+  it("does not seed section 82b as a default submission type", async () => {
+    const user = await createUser({
+      email: "project-no-82b-default@example.com",
+      password: "ValidPassword1!"
+    });
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const response = await request("/procedure-master-data", { cookie });
+    assert.equal(response.status, 200);
+
+    const seededTypes = await prisma.submissionType.findMany({
+      select: {
+        code: true,
+        name: true,
+        shortName: true,
+        legacyAliases: true
+      }
+    });
+    const hasSection82bDefault = seededTypes.some((entry) => {
+      const aliases = Array.isArray(entry.legacyAliases)
+        ? entry.legacyAliases.filter((alias): alias is string => typeof alias === "string")
+        : [];
+      return [entry.code, entry.name, entry.shortName ?? "", ...aliases].some((value) =>
+        value.toUpperCase().includes("82B") || value.includes("§82b")
+      );
+    });
+
+    assert.equal(hasSection82bDefault, false);
+  });
+
+  it("allows admin master data CRUD for legal matters, procedure types and submission types", async () => {
+    const admin = await createUser({
+      email: "procedure-master-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const regularUser = await createUser({
+      email: "procedure-master-regular@example.com",
+      password: "ValidPassword1!"
+    });
+    const adminCookie = await login(admin.email, "ValidPassword1!");
+    const regularCookie = await login(regularUser.email, "ValidPassword1!");
+
+    const forbiddenResponse = await request("/admin/procedure-master-data/legal-matters", {
+      cookie: regularCookie
+    });
+    assert.equal(forbiddenResponse.status, 403);
+
+    const legalMatterResponse = await request("/admin/procedure-master-data/legal-matters", {
+      method: "POST",
+      cookie: adminCookie,
+      body: {
+        code: "ENERGIERECHT",
+        name: "Energierecht",
+        shortName: "EnR",
+        sortOrder: 15
+      }
+    });
+    assert.equal(legalMatterResponse.status, 201);
+    const legalMatterPayload = (await legalMatterResponse.json()) as {
+      legalMatter: { id: string; code: string; name: string };
+    };
+    assert.equal(legalMatterPayload.legalMatter.code, "ENERGIERECHT");
+
+    const procedureTypeResponse = await request("/admin/procedure-master-data/procedure-types", {
+      method: "POST",
+      cookie: adminCookie,
+      body: {
+        code: "BEWILLIGUNG",
+        name: "Bewilligung",
+        sortOrder: 15
+      }
+    });
+    assert.equal(procedureTypeResponse.status, 201);
+    const procedureTypePayload = (await procedureTypeResponse.json()) as {
+      procedureType: { id: string; code: string; name: string };
+    };
+    assert.equal(procedureTypePayload.procedureType.code, "BEWILLIGUNG");
+
+    const submissionTypeResponse = await request("/admin/procedure-master-data/submission-types", {
+      method: "POST",
+      cookie: adminCookie,
+      body: {
+        code: "ENERGIE_BEWILLIGUNG",
+        name: "Energie-Bewilligung",
+        legalMatterId: legalMatterPayload.legalMatter.id,
+        procedureTypeId: procedureTypePayload.procedureType.id,
+        badgeVariant: "success",
+        legacyAliases: ["Energie"],
+        sortOrder: 15
+      }
+    });
+    assert.equal(submissionTypeResponse.status, 201);
+    const submissionTypePayload = (await submissionTypeResponse.json()) as {
+      submissionType: {
+        id: string;
+        code: string;
+        legalMatterLabel: string;
+        procedureTypeLabel: string;
+        usageCount: number;
+      };
+    };
+    assert.equal(submissionTypePayload.submissionType.code, "ENERGIE_BEWILLIGUNG");
+    assert.equal(submissionTypePayload.submissionType.legalMatterLabel, "Energierecht");
+    assert.equal(submissionTypePayload.submissionType.procedureTypeLabel, "Bewilligung");
+    assert.equal(submissionTypePayload.submissionType.usageCount, 0);
+    const submissionTypeDtoKeys = new Set([
+      "id",
+      "code",
+      "name",
+      "shortName",
+      "description",
+      "legalMatterId",
+      "procedureTypeId",
+      "legalMatterCode",
+      "legalMatterLabel",
+      "legalMatterShortName",
+      "legalMatterIsActive",
+      "procedureTypeCode",
+      "procedureTypeLabel",
+      "procedureTypeShortName",
+      "procedureTypeIsActive",
+      "isActive",
+      "isLegacy",
+      "sortOrder",
+      "badgeVariant",
+      "legacyAliases",
+      "usageCount",
+      "createdAt",
+      "updatedAt"
+    ]);
+    assert.equal(
+      Object.keys(submissionTypePayload.submissionType).every((key) => submissionTypeDtoKeys.has(key)),
+      true
+    );
+
+    const duplicateResponse = await request("/admin/procedure-master-data/submission-types", {
+      method: "POST",
+      cookie: adminCookie,
+      body: {
+        code: "ENERGIE_BEWILLIGUNG",
+        name: "Energie-Bewilligung Kopie",
+        legalMatterId: legalMatterPayload.legalMatter.id,
+        procedureTypeId: procedureTypePayload.procedureType.id
+      }
+    });
+    assert.equal(duplicateResponse.status, 409);
+
+    const deactivateResponse = await request(
+      `/admin/procedure-master-data/submission-types/${submissionTypePayload.submissionType.id}/deactivate`,
+      {
+        method: "POST",
+        cookie: adminCookie
+      }
+    );
+    assert.equal(deactivateResponse.status, 200);
+    const deactivatedPayload = (await deactivateResponse.json()) as {
+      submissionType: { isActive: boolean };
+    };
+    assert.equal(deactivatedPayload.submissionType.isActive, false);
+
+    const reactivateResponse = await request(
+      `/admin/procedure-master-data/submission-types/${submissionTypePayload.submissionType.id}/reactivate`,
+      {
+        method: "POST",
+        cookie: adminCookie
+      }
+    );
+    assert.equal(reactivateResponse.status, 200);
+    const reactivatedPayload = (await reactivateResponse.json()) as {
+      submissionType: { isActive: boolean };
+    };
+    assert.equal(reactivatedPayload.submissionType.isActive, true);
+  });
+
+  it("allows submission type edits with unchanged inactive parents but validates changed parents", async () => {
+    const admin = await createUser({
+      email: "procedure-master-inactive-parent-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const cookie = await login(admin.email, "ValidPassword1!");
+    const inactiveLegalMatter = await prisma.legalMatter.create({
+      data: {
+        id: "lm-current-inactive-parent",
+        code: "CURRENT_INACTIVE_LAW",
+        name: "Current Inactive Law",
+        isActive: false
+      }
+    });
+    const activeLegalMatter = await prisma.legalMatter.create({
+      data: {
+        id: "lm-active-parent-target",
+        code: "ACTIVE_PARENT_TARGET",
+        name: "Active Parent Target"
+      }
+    });
+    const otherInactiveLegalMatter = await prisma.legalMatter.create({
+      data: {
+        id: "lm-other-inactive-parent",
+        code: "OTHER_INACTIVE_LAW",
+        name: "Other Inactive Law",
+        isActive: false
+      }
+    });
+    const inactiveProcedureType = await prisma.procedureType.create({
+      data: {
+        id: "pt-current-inactive-parent",
+        code: "CURRENT_INACTIVE_PROC",
+        name: "Current Inactive Procedure",
+        isActive: false
+      }
+    });
+    const activeProcedureType = await prisma.procedureType.create({
+      data: {
+        id: "pt-active-parent-target",
+        code: "ACTIVE_PARENT_PROC_TARGET",
+        name: "Active Parent Procedure Target"
+      }
+    });
+    const otherInactiveProcedureType = await prisma.procedureType.create({
+      data: {
+        id: "pt-other-inactive-parent",
+        code: "OTHER_INACTIVE_PROC",
+        name: "Other Inactive Procedure",
+        isActive: false
+      }
+    });
+    const submissionType = await prisma.submissionType.create({
+      data: {
+        id: "st-inactive-parent-edit",
+        code: "INACTIVE_PARENT_EDIT",
+        name: "Inactive Parent Edit",
+        legalMatterId: inactiveLegalMatter.id,
+        procedureTypeId: inactiveProcedureType.id,
+        legacyAliases: []
+      }
+    });
+
+    const renameResponse = await request(
+      `/admin/procedure-master-data/submission-types/${submissionType.id}`,
+      {
+        method: "PATCH",
+        cookie,
+        body: {
+          name: "Inactive Parent Renamed"
+        }
+      }
+    );
+    assert.equal(renameResponse.status, 200);
+    const renamePayload = (await renameResponse.json()) as {
+      submissionType: { name: string; legalMatterId: string; procedureTypeId: string };
+    };
+    assert.equal(renamePayload.submissionType.name, "Inactive Parent Renamed");
+    assert.equal(renamePayload.submissionType.legalMatterId, inactiveLegalMatter.id);
+    assert.equal(renamePayload.submissionType.procedureTypeId, inactiveProcedureType.id);
+
+    const sameInactiveLegalMatterResponse = await request(
+      `/admin/procedure-master-data/submission-types/${submissionType.id}`,
+      {
+        method: "PATCH",
+        cookie,
+        body: {
+          legalMatterId: inactiveLegalMatter.id,
+          shortName: "No-op LM"
+        }
+      }
+    );
+    assert.equal(sameInactiveLegalMatterResponse.status, 200);
+
+    const sameInactiveProcedureTypeResponse = await request(
+      `/admin/procedure-master-data/submission-types/${submissionType.id}`,
+      {
+        method: "PATCH",
+        cookie,
+        body: {
+          procedureTypeId: inactiveProcedureType.id,
+          legacyAliases: ["no-op-procedure"]
+        }
+      }
+    );
+    assert.equal(sameInactiveProcedureTypeResponse.status, 200);
+
+    const otherInactiveLegalMatterResponse = await request(
+      `/admin/procedure-master-data/submission-types/${submissionType.id}`,
+      {
+        method: "PATCH",
+        cookie,
+        body: {
+          legalMatterId: otherInactiveLegalMatter.id
+        }
+      }
+    );
+    assert.equal(otherInactiveLegalMatterResponse.status, 400);
+
+    const activeLegalMatterResponse = await request(
+      `/admin/procedure-master-data/submission-types/${submissionType.id}`,
+      {
+        method: "PATCH",
+        cookie,
+        body: {
+          legalMatterId: activeLegalMatter.id
+        }
+      }
+    );
+    assert.equal(activeLegalMatterResponse.status, 200);
+
+    const otherInactiveProcedureTypeResponse = await request(
+      `/admin/procedure-master-data/submission-types/${submissionType.id}`,
+      {
+        method: "PATCH",
+        cookie,
+        body: {
+          procedureTypeId: otherInactiveProcedureType.id
+        }
+      }
+    );
+    assert.equal(otherInactiveProcedureTypeResponse.status, 400);
+
+    const activeProcedureTypeResponse = await request(
+      `/admin/procedure-master-data/submission-types/${submissionType.id}`,
+      {
+        method: "PATCH",
+        cookie,
+        body: {
+          procedureTypeId: activeProcedureType.id
+        }
+      }
+    );
+    assert.equal(activeProcedureTypeResponse.status, 200);
+  });
+
+  it("uses managed submission types for project create and keeps inactive existing values visible", async () => {
+    const admin = await createUser({
+      email: "managed-submission-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const company = await createCompany("Managed Submission Type Company");
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const lookupResponse = await request("/procedure-master-data", { cookie });
+    assert.equal(lookupResponse.status, 200);
+    const lookupPayload = (await lookupResponse.json()) as {
+      submissionTypes: Array<{
+        id: string;
+        code: string;
+        name: string;
+        legalMatterId: string;
+        procedureTypeId: string;
+      }>;
+    };
+    const submissionType = lookupPayload.submissionTypes.find(
+      (entry) => entry.code === "AWG_BEHANDLUNGSANLAGE"
+    );
+    assert.ok(submissionType);
+
+    const createResponse = await request("/projects", {
+      method: "POST",
+      cookie,
+      body: {
+        title: "Projekt mit verwaltetem Einreichtyp",
+        companyId: company.id,
+        submissionTypeId: submissionType.id
+      }
+    });
+    assert.equal(createResponse.status, 201);
+    const createdPayload = (await createResponse.json()) as {
+      project: {
+        id: string;
+        submissionType?: string;
+        submissionTypeId?: string;
+        submissionTypeCode?: string;
+        submissionTypeLabel?: string;
+        submissionTypeIsActive?: boolean;
+      };
+    };
+    assert.equal(createdPayload.project.submissionType, "AWG");
+    assert.equal(createdPayload.project.submissionTypeId, submissionType.id);
+    assert.equal(createdPayload.project.submissionTypeCode, "AWG_BEHANDLUNGSANLAGE");
+    assert.equal(createdPayload.project.submissionTypeLabel, "AWG-Behandlungsanlage");
+    assert.equal(createdPayload.project.submissionTypeIsActive, true);
+
+    await prisma.legalMatter.update({
+      where: { id: submissionType.legalMatterId },
+      data: { isActive: false }
+    });
+
+    const legalMatterInactiveListResponse = await request("/projects", { cookie });
+    assert.equal(legalMatterInactiveListResponse.status, 200);
+    const legalMatterInactiveList = (await legalMatterInactiveListResponse.json()) as Array<{
+      id: string;
+      submissionTypeIsActive?: boolean;
+    }>;
+    assert.equal(
+      legalMatterInactiveList.find((project) => project.id === createdPayload.project.id)
+        ?.submissionTypeIsActive,
+      false
+    );
+
+    const legalMatterInactiveDetailResponse = await request(`/projects/${createdPayload.project.id}`, { cookie });
+    assert.equal(legalMatterInactiveDetailResponse.status, 200);
+    const legalMatterInactiveDetail = (await legalMatterInactiveDetailResponse.json()) as {
+      project: {
+        submissionTypeId?: string;
+        submissionTypeIsActive?: boolean;
+      };
+    };
+    assert.equal(legalMatterInactiveDetail.project.submissionTypeId, submissionType.id);
+    assert.equal(legalMatterInactiveDetail.project.submissionTypeIsActive, false);
+
+    const createInactiveLegalMatterResponse = await request("/projects", {
+      method: "POST",
+      cookie,
+      body: {
+        title: "Projekt mit inaktiver Rechtsmaterie",
+        companyId: company.id,
+        submissionTypeId: submissionType.id
+      }
+    });
+    assert.equal(createInactiveLegalMatterResponse.status, 400);
+
+    await prisma.legalMatter.update({
+      where: { id: submissionType.legalMatterId },
+      data: { isActive: true }
+    });
+    await prisma.procedureType.update({
+      where: { id: submissionType.procedureTypeId },
+      data: { isActive: false }
+    });
+
+    const procedureTypeInactiveListResponse = await request("/projects", { cookie });
+    assert.equal(procedureTypeInactiveListResponse.status, 200);
+    const procedureTypeInactiveList = (await procedureTypeInactiveListResponse.json()) as Array<{
+      id: string;
+      submissionTypeIsActive?: boolean;
+    }>;
+    assert.equal(
+      procedureTypeInactiveList.find((project) => project.id === createdPayload.project.id)
+        ?.submissionTypeIsActive,
+      false
+    );
+
+    const procedureTypeInactiveDetailResponse = await request(`/projects/${createdPayload.project.id}`, { cookie });
+    assert.equal(procedureTypeInactiveDetailResponse.status, 200);
+    const procedureTypeInactiveDetail = (await procedureTypeInactiveDetailResponse.json()) as {
+      project: {
+        submissionTypeId?: string;
+        submissionTypeIsActive?: boolean;
+      };
+    };
+    assert.equal(procedureTypeInactiveDetail.project.submissionTypeId, submissionType.id);
+    assert.equal(procedureTypeInactiveDetail.project.submissionTypeIsActive, false);
+
+    const createInactiveProcedureTypeResponse = await request("/projects", {
+      method: "POST",
+      cookie,
+      body: {
+        title: "Projekt mit inaktiver Verfahrensart",
+        companyId: company.id,
+        submissionTypeId: submissionType.id
+      }
+    });
+    assert.equal(createInactiveProcedureTypeResponse.status, 400);
+
+    await prisma.procedureType.update({
+      where: { id: submissionType.procedureTypeId },
+      data: { isActive: true }
+    });
+
+    await request(`/admin/procedure-master-data/submission-types/${submissionType.id}/deactivate`, {
+      method: "POST",
+      cookie
+    });
+
+    const detailResponse = await request(`/projects/${createdPayload.project.id}`, { cookie });
+    assert.equal(detailResponse.status, 200);
+    const detailPayload = (await detailResponse.json()) as {
+      project: {
+        submissionTypeId?: string;
+        submissionTypeLabel?: string;
+        submissionTypeIsActive?: boolean;
+      };
+    };
+    assert.equal(detailPayload.project.submissionTypeId, submissionType.id);
+    assert.equal(detailPayload.project.submissionTypeLabel, "AWG-Behandlungsanlage");
+    assert.equal(detailPayload.project.submissionTypeIsActive, false);
+
+    const createInactiveResponse = await request("/projects", {
+      method: "POST",
+      cookie,
+      body: {
+        title: "Projekt mit inaktivem Einreichtyp",
+        companyId: company.id,
+        submissionTypeId: submissionType.id
+      }
+    });
+    assert.equal(createInactiveResponse.status, 400);
+
+    const patchResponse = await request(`/projects/${createdPayload.project.id}`, {
+      method: "PATCH",
+      cookie,
+      body: {
+        shortDescription: "Bearbeitung ohne Typverlust"
+      }
+    });
+    assert.equal(patchResponse.status, 200);
+    const patchPayload = (await patchResponse.json()) as {
+      project: { submissionTypeId?: string; submissionTypeIsActive?: boolean };
+    };
+    assert.equal(patchPayload.project.submissionTypeId, submissionType.id);
+    assert.equal(patchPayload.project.submissionTypeIsActive, false);
+  });
+
+  it("bulk-replaces procedure master data by deactivating omitted rows without deleting referenced values", async () => {
+    const admin = await createUser({
+      email: "procedure-master-replace-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const company = await createCompany("Procedure Master Replace Company");
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const staleLegalMatter = await prisma.legalMatter.create({
+      data: {
+        id: "lm-stale-bulk-replace",
+        code: "STALE_LAW",
+        name: "Stale Law",
+        sortOrder: 10
+      }
+    });
+    const staleProcedureType = await prisma.procedureType.create({
+      data: {
+        id: "pt-stale-bulk-replace",
+        code: "STALE_PROC",
+        name: "Stale Procedure",
+        sortOrder: 10
+      }
+    });
+    const staleSubmissionType = await prisma.submissionType.create({
+      data: {
+        id: "st-stale-bulk-replace",
+        code: "STALE_SUBMISSION",
+        name: "Stale Submission",
+        shortName: "Stale",
+        legalMatterId: staleLegalMatter.id,
+        procedureTypeId: staleProcedureType.id,
+        sortOrder: 10,
+        badgeVariant: "neutral"
+      }
+    });
+
+    const createProjectResponse = await request("/projects", {
+      method: "POST",
+      cookie,
+      body: {
+        title: "Projekt mit altem Einreichtyp",
+        companyId: company.id,
+        submissionTypeId: staleSubmissionType.id
+      }
+    });
+    assert.equal(createProjectResponse.status, 201);
+    const createdProject = (await createProjectResponse.json()) as {
+      project: { id: string; submissionTypeId?: string; submissionTypeIsActive?: boolean };
+    };
+    assert.equal(createdProject.project.submissionTypeId, staleSubmissionType.id);
+    assert.equal(createdProject.project.submissionTypeIsActive, true);
+
+    const replaceResponse = await request("/admin/internal/procedure-master-data/bulk-replace", {
+      method: "PUT",
+      cookie,
+      body: {
+        legalMatters: [
+          {
+            id: "lm-export-kept-bulk-replace",
+            code: "KEPT_LAW",
+            name: "Kept Law",
+            isActive: true,
+            sortOrder: 20
+          }
+        ],
+        procedureTypes: [
+          {
+            id: "pt-export-kept-bulk-replace",
+            code: "KEPT_PROC",
+            name: "Kept Procedure",
+            isActive: true,
+            sortOrder: 20
+          }
+        ],
+        submissionTypes: [
+          {
+            id: "st-export-active-bulk-replace",
+            code: "ACTIVE_REPLACEMENT",
+            name: "Active Replacement",
+            shortName: "Active",
+            legalMatterId: "lm-export-kept-bulk-replace",
+            procedureTypeId: "pt-export-kept-bulk-replace",
+            isActive: true,
+            isLegacy: false,
+            sortOrder: 20,
+            badgeVariant: "neutral"
+          },
+          {
+            id: "st-export-inactive-bulk-replace",
+            code: "INACTIVE_REPLACEMENT",
+            name: "Inactive Replacement",
+            shortName: "Inactive",
+            legalMatterId: "lm-export-kept-bulk-replace",
+            procedureTypeId: "pt-export-kept-bulk-replace",
+            isActive: false,
+            isLegacy: false,
+            sortOrder: 30,
+            badgeVariant: "warning"
+          }
+        ]
+      }
+    });
+    assert.equal(replaceResponse.status, 200);
+
+    const staleLegalMatterAfter = await prisma.legalMatter.findUniqueOrThrow({
+      where: { id: staleLegalMatter.id }
+    });
+    assert.equal(staleLegalMatterAfter.isActive, false);
+    const staleProcedureTypeAfter = await prisma.procedureType.findUniqueOrThrow({
+      where: { id: staleProcedureType.id }
+    });
+    assert.equal(staleProcedureTypeAfter.isActive, false);
+    const staleSubmissionTypeAfter = await prisma.submissionType.findUniqueOrThrow({
+      where: { id: staleSubmissionType.id }
+    });
+    assert.equal(staleSubmissionTypeAfter.isActive, false);
+
+    const activeReplacement = await prisma.submissionType.findUniqueOrThrow({
+      where: { code: "ACTIVE_REPLACEMENT" }
+    });
+    assert.equal(activeReplacement.isActive, true);
+    const inactiveReplacement = await prisma.submissionType.findUniqueOrThrow({
+      where: { code: "INACTIVE_REPLACEMENT" }
+    });
+    assert.equal(inactiveReplacement.isActive, false);
+
+    const detailResponse = await request(`/projects/${createdProject.project.id}`, { cookie });
+    assert.equal(detailResponse.status, 200);
+    const detailPayload = (await detailResponse.json()) as {
+      project: { submissionTypeId?: string; submissionTypeIsActive?: boolean };
+    };
+    assert.equal(detailPayload.project.submissionTypeId, staleSubmissionType.id);
+    assert.equal(detailPayload.project.submissionTypeIsActive, false);
+
+    const lookupResponse = await request("/procedure-master-data", { cookie });
+    assert.equal(lookupResponse.status, 200);
+    const lookupPayload = (await lookupResponse.json()) as {
+      legalMatters: Array<{ code: string }>;
+      procedureTypes: Array<{ code: string }>;
+      submissionTypes: Array<{ code: string }>;
+    };
+    assert.equal(lookupPayload.legalMatters.some((entry) => entry.code === "STALE_LAW"), false);
+    assert.equal(lookupPayload.procedureTypes.some((entry) => entry.code === "STALE_PROC"), false);
+    assert.equal(lookupPayload.submissionTypes.some((entry) => entry.code === "STALE_SUBMISSION"), false);
+    assert.equal(lookupPayload.submissionTypes.some((entry) => entry.code === "ACTIVE_REPLACEMENT"), true);
+    assert.equal(lookupPayload.submissionTypes.some((entry) => entry.code === "INACTIVE_REPLACEMENT"), false);
+    assert.equal(
+      lookupPayload.submissionTypes.some((entry) => entry.code === "GEWERBLICHE_BETRIEBSANLAGE"),
+      false
+    );
+  });
+
+  it("bulk-replace keeps omitted defaults inactive on clean databases after response listing", async () => {
+    const admin = await createUser({
+      email: "procedure-master-clean-replace-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const replaceResponse = await request("/admin/internal/procedure-master-data/bulk-replace", {
+      method: "PUT",
+      cookie,
+      body: {
+        legalMatters: [
+          {
+            id: "lm-export-clean-custom",
+            code: "CLEAN_CUSTOM_LAW",
+            name: "Clean Custom Law",
+            isActive: true,
+            sortOrder: 10
+          }
+        ],
+        procedureTypes: [
+          {
+            id: "pt-export-clean-custom",
+            code: "CLEAN_CUSTOM_PROC",
+            name: "Clean Custom Procedure",
+            isActive: true,
+            sortOrder: 10
+          }
+        ],
+        submissionTypes: [
+          {
+            id: "st-export-clean-custom",
+            code: "CLEAN_CUSTOM_SUBMISSION",
+            name: "Clean Custom Submission",
+            shortName: "Clean",
+            legalMatterId: "lm-export-clean-custom",
+            procedureTypeId: "pt-export-clean-custom",
+            isActive: true,
+            isLegacy: false,
+            sortOrder: 10,
+            badgeVariant: "success"
+          }
+        ]
+      }
+    });
+    assert.equal(replaceResponse.status, 200);
+    const replacePayload = (await replaceResponse.json()) as {
+      legalMatters: Array<{ code: string; isActive: boolean }>;
+      procedureTypes: Array<{ code: string; isActive: boolean }>;
+      submissionTypes: Array<{ code: string; isActive: boolean }>;
+    };
+    assert.equal(
+      replacePayload.legalMatters.find((entry) => entry.code === "GEWERBERECHT")?.isActive,
+      false
+    );
+    assert.equal(
+      replacePayload.procedureTypes.find((entry) => entry.code === "GENEHMIGUNG")?.isActive,
+      false
+    );
+    assert.equal(
+      replacePayload.submissionTypes.find((entry) => entry.code === "GEWERBLICHE_BETRIEBSANLAGE")?.isActive,
+      false
+    );
+
+    const defaultLegalMatter = await prisma.legalMatter.findUniqueOrThrow({
+      where: { code: "GEWERBERECHT" }
+    });
+    assert.equal(defaultLegalMatter.isActive, false);
+    const defaultProcedureType = await prisma.procedureType.findUniqueOrThrow({
+      where: { code: "GENEHMIGUNG" }
+    });
+    assert.equal(defaultProcedureType.isActive, false);
+    const defaultSubmissionType = await prisma.submissionType.findUniqueOrThrow({
+      where: { code: "GEWERBLICHE_BETRIEBSANLAGE" }
+    });
+    assert.equal(defaultSubmissionType.isActive, false);
+
+    const lookupResponse = await request("/procedure-master-data", { cookie });
+    assert.equal(lookupResponse.status, 200);
+    const lookupPayload = (await lookupResponse.json()) as {
+      legalMatters: Array<{ code: string }>;
+      procedureTypes: Array<{ code: string }>;
+      submissionTypes: Array<{ code: string }>;
+    };
+    assert.equal(lookupPayload.legalMatters.some((entry) => entry.code === "GEWERBERECHT"), false);
+    assert.equal(lookupPayload.procedureTypes.some((entry) => entry.code === "GENEHMIGUNG"), false);
+    assert.equal(
+      lookupPayload.submissionTypes.some((entry) => entry.code === "GEWERBLICHE_BETRIEBSANLAGE"),
+      false
+    );
+    assert.equal(lookupPayload.submissionTypes.some((entry) => entry.code === "CLEAN_CUSTOM_SUBMISSION"), true);
+  });
+
+  it("imports procedure master data before projects and maps exported submission type ids", async () => {
+    const admin = await createUser({
+      email: "procedure-master-import-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const company = await createCompany("Procedure Master Import Company");
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const localLegalMatter = await prisma.legalMatter.create({
+      data: {
+        id: "lm-local-custom-import",
+        code: "CUSTOM_LAW",
+        name: "Custom Law",
+        sortOrder: 70
+      }
+    });
+    const localProcedureType = await prisma.procedureType.create({
+      data: {
+        id: "pt-local-custom-import",
+        code: "CUSTOM_PROC",
+        name: "Custom Procedure",
+        sortOrder: 80
+      }
+    });
+    const localSubmissionType = await prisma.submissionType.create({
+      data: {
+        id: "st-local-custom-import",
+        code: "CUSTOM_IMPORT",
+        name: "Custom Import",
+        shortName: "CI",
+        legalMatterId: localLegalMatter.id,
+        procedureTypeId: localProcedureType.id,
+        isActive: false,
+        isLegacy: false,
+        sortOrder: 90,
+        badgeVariant: "warning",
+        legacyAliases: ["Custom Import Alias"]
+      }
+    });
+
+    const masterDataResponse = await request("/admin/internal/procedure-master-data/bulk-replace", {
+      method: "PUT",
+      cookie,
+      body: {
+        legalMatters: [
+          {
+            id: "lm-export-custom-import",
+            code: "CUSTOM_LAW",
+            name: "Custom Law",
+            isActive: true,
+            sortOrder: 71
+          }
+        ],
+        procedureTypes: [
+          {
+            id: "pt-export-custom-import",
+            code: "CUSTOM_PROC",
+            name: "Custom Procedure",
+            isActive: true,
+            sortOrder: 81
+          }
+        ],
+        submissionTypes: [
+          {
+            id: "st-export-custom-import",
+            code: "CUSTOM_IMPORT",
+            name: "Custom Import",
+            shortName: "CI",
+            description: "Custom imported submission type",
+            legalMatterId: "lm-export-custom-import",
+            procedureTypeId: "pt-export-custom-import",
+            isActive: false,
+            isLegacy: false,
+            sortOrder: 91,
+            badgeVariant: "warning",
+            legacyAliases: ["Custom Import Alias"]
+          }
+        ]
+      }
+    });
+    assert.equal(masterDataResponse.status, 200);
+    const masterDataPayload = (await masterDataResponse.json()) as {
+      idMapping: {
+        legalMatterIds: Record<string, string>;
+        procedureTypeIds: Record<string, string>;
+        submissionTypeIds: Record<string, string>;
+        submissionTypeCodes: Record<string, string>;
+      };
+    };
+    assert.equal(masterDataPayload.idMapping.legalMatterIds["lm-export-custom-import"], localLegalMatter.id);
+    assert.equal(masterDataPayload.idMapping.procedureTypeIds["pt-export-custom-import"], localProcedureType.id);
+    assert.equal(masterDataPayload.idMapping.submissionTypeIds["st-export-custom-import"], localSubmissionType.id);
+    assert.equal(masterDataPayload.idMapping.submissionTypeCodes.CUSTOM_IMPORT, localSubmissionType.id);
+
+    const projectResponse = await request("/admin/internal/projects/bulk-replace", {
+      method: "PUT",
+      cookie,
+      body: [
+        {
+          id: "project-custom-import",
+          title: "Custom Import Project",
+          companyId: company.id,
+          submissionTypeId: masterDataPayload.idMapping.submissionTypeIds["st-export-custom-import"],
+          submissionTypeCode: "CUSTOM_IMPORT",
+          internalParticipants: [],
+          participantUserIds: [],
+          dependsOnProjectIds: [],
+          referenceLegalDocIds: [],
+          externalParticipants: [],
+          attachments: [],
+          isArchived: false,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z"
+        }
+      ]
+    });
+    assert.equal(projectResponse.status, 200);
+
+    const detailResponse = await request("/projects/project-custom-import", { cookie });
+    assert.equal(detailResponse.status, 200);
+    const detailPayload = (await detailResponse.json()) as {
+      project: {
+        submissionTypeId?: string;
+        submissionTypeCode?: string;
+        submissionTypeLabel?: string;
+        submissionTypeIsActive?: boolean;
+      };
+    };
+    assert.equal(detailPayload.project.submissionTypeId, localSubmissionType.id);
+    assert.equal(detailPayload.project.submissionTypeCode, "CUSTOM_IMPORT");
+    assert.equal(detailPayload.project.submissionTypeLabel, "Custom Import");
+    assert.equal(detailPayload.project.submissionTypeIsActive, false);
+    assert.equal(await prisma.submissionType.count({ where: { code: "LEGACY_CUSTOM_IMPORT" } }), 0);
+  });
+
+  it("keeps old project exports without procedure master data importable through legacy fallback", async () => {
+    const admin = await createUser({
+      email: "legacy-project-import-admin@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const company = await createCompany("Legacy Project Import Company");
+    const cookie = await login(admin.email, "ValidPassword1!");
+
+    const response = await request("/admin/internal/projects/bulk-replace", {
+      method: "PUT",
+      cookie,
+      body: [
+        {
+          id: "project-legacy-import",
+          title: "Legacy Import Project",
+          companyId: company.id,
+          submissionType: "Altes Verfahren",
+          internalParticipants: [],
+          participantUserIds: [],
+          dependsOnProjectIds: [],
+          referenceLegalDocIds: [],
+          externalParticipants: [],
+          attachments: [],
+          isArchived: false,
+          createdAt: "2026-01-02T00:00:00.000Z",
+          updatedAt: "2026-01-02T00:00:00.000Z"
+        }
+      ]
+    });
+    assert.equal(response.status, 200);
+
+    const legacySubmissionType = await prisma.submissionType.findUniqueOrThrow({
+      where: { code: "LEGACY_ALTES_VERFAHREN" },
+      select: { id: true, name: true, isActive: true, isLegacy: true }
+    });
+    assert.equal(legacySubmissionType.name, "Altes Verfahren");
+    assert.equal(legacySubmissionType.isActive, false);
+    assert.equal(legacySubmissionType.isLegacy, true);
+
+    const project = await prisma.project.findUniqueOrThrow({
+      where: { id: "project-legacy-import" },
+      select: { submissionTypeId: true }
+    });
+    assert.equal(project.submissionTypeId, legacySubmissionType.id);
   });
 
   it("blocks legal document bulk replace while downstream obligations exist", async () => {

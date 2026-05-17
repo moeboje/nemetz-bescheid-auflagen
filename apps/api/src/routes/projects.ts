@@ -12,6 +12,12 @@ import {
   type RouteUser
 } from "./routeAuth.js";
 import {
+  INVALID_PROJECT_SUBMISSION_TYPE_MESSAGE,
+  legacySubmissionTypeForManagedType,
+  normalizeLegacyProjectSubmissionType,
+  resolveSubmissionTypeSelection
+} from "../procedureMasterData.js";
+import {
   canManageProjectAccess,
   getReadableProjectIdsForDomain,
   getProjectAccessFacts,
@@ -39,13 +45,8 @@ const PROJECT_STATUS_VALUES = [
 
 type ProjectStatus = (typeof PROJECT_STATUS_VALUES)[number];
 
-const PROJECT_SUBMISSION_TYPE_VALUES = ["GEWERBE", "AWG", "UVP_UVE"] as const;
-
-type ProjectSubmissionType = (typeof PROJECT_SUBMISSION_TYPE_VALUES)[number];
-
 const DEFAULT_PROJECT_STATUS: ProjectStatus = "DRAFT";
 const INVALID_PROJECT_STATUS_MESSAGE = `Invalid project status. Allowed values: ${PROJECT_STATUS_VALUES.join(", ")}.`;
-const INVALID_PROJECT_SUBMISSION_TYPE_MESSAGE = `Invalid project submission type. Allowed values: ${PROJECT_SUBMISSION_TYPE_VALUES.join(", ")}.`;
 
 type ProjectAttachmentDto = {
   id: string;
@@ -82,7 +83,19 @@ type ProjectDto = {
   id: string;
   title: string;
   status?: ProjectStatus;
-  submissionType?: ProjectSubmissionType;
+  submissionType?: string;
+  submissionTypeId?: string;
+  submissionTypeCode?: string;
+  submissionTypeLabel?: string;
+  submissionTypeShortName?: string;
+  submissionTypeIsActive?: boolean;
+  submissionTypeBadgeVariant?: "neutral" | "success" | "warning" | "danger";
+  legalMatterCode?: string;
+  legalMatterLabel?: string;
+  legalMatterShortName?: string;
+  procedureTypeCode?: string;
+  procedureTypeLabel?: string;
+  procedureTypeShortName?: string;
   shortDescription?: string;
   detailedDescription?: string;
   authorityRef?: string;
@@ -137,11 +150,42 @@ type ProjectStatusRow = {
   status: string | null;
 };
 
+const projectSubmissionTypeSelect = {
+  id: true,
+  code: true,
+  name: true,
+  shortName: true,
+  isActive: true,
+  badgeVariant: true,
+  legacyAliases: true,
+  legalMatter: {
+    select: {
+      code: true,
+      name: true,
+      shortName: true,
+      isActive: true,
+      badgeVariant: true
+    }
+  },
+  procedureType: {
+    select: {
+      code: true,
+      name: true,
+      shortName: true,
+      isActive: true
+    }
+  }
+} satisfies Prisma.SubmissionTypeSelect;
+
 const projectListSelect = {
   id: true,
   title: true,
   status: true,
   submissionType: true,
+  submissionTypeId: true,
+  submissionTypeRef: {
+    select: projectSubmissionTypeSelect
+  },
   shortDescription: true,
   authorityRef: true,
   companyId: true,
@@ -244,27 +288,6 @@ function normalizeProjectStatus(value: unknown) {
   }
 
   throw new Error(INVALID_PROJECT_STATUS_MESSAGE);
-}
-
-function normalizeProjectSubmissionType(value: unknown) {
-  if (value === undefined || value === null) {
-    return undefined;
-  }
-
-  if (typeof value !== "string") {
-    throw new Error(INVALID_PROJECT_SUBMISSION_TYPE_MESSAGE);
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  if (PROJECT_SUBMISSION_TYPE_VALUES.includes(trimmed as ProjectSubmissionType)) {
-    return trimmed as ProjectSubmissionType;
-  }
-
-  throw new Error(INVALID_PROJECT_SUBMISSION_TYPE_MESSAGE);
 }
 
 function toDateValue(value?: string) {
@@ -659,7 +682,7 @@ function normalizeProjectDto(value: unknown, index: number): ProjectDto | null {
   const updatedAt =
     typeof row.updatedAt === "string" && row.updatedAt.trim() ? row.updatedAt : createdAt;
   const status = normalizeProjectStatus(row.status);
-  const submissionType = normalizeProjectSubmissionType(row.submissionType);
+  const submissionType = toOptionalTrimmedString(row.submissionType ?? row.submissionTypeCode);
 
   const participantUserIds = normalizeParticipantUserIds({
     internalParticipants: row.internalParticipants,
@@ -696,6 +719,18 @@ function normalizeProjectDto(value: unknown, index: number): ProjectDto | null {
     title: row.title,
     status,
     submissionType,
+    submissionTypeId: toOptionalTrimmedString(row.submissionTypeId),
+    submissionTypeCode: toOptionalTrimmedString(row.submissionTypeCode),
+    submissionTypeLabel: toOptionalTrimmedString(row.submissionTypeLabel),
+    submissionTypeShortName: toOptionalTrimmedString(row.submissionTypeShortName),
+    submissionTypeIsActive: row.submissionTypeIsActive,
+    submissionTypeBadgeVariant: row.submissionTypeBadgeVariant,
+    legalMatterCode: toOptionalTrimmedString(row.legalMatterCode),
+    legalMatterLabel: toOptionalTrimmedString(row.legalMatterLabel),
+    legalMatterShortName: toOptionalTrimmedString(row.legalMatterShortName),
+    procedureTypeCode: toOptionalTrimmedString(row.procedureTypeCode),
+    procedureTypeLabel: toOptionalTrimmedString(row.procedureTypeLabel),
+    procedureTypeShortName: toOptionalTrimmedString(row.procedureTypeShortName),
     shortDescription: row.shortDescription ?? "",
     detailedDescription: row.detailedDescription ?? "",
     authorityRef: row.authorityRef ?? "",
@@ -768,12 +803,42 @@ function toProjectDto(
         )
         .filter(isPresent)
     : [];
+  const managedSubmissionType = project.submissionTypeRef ?? null;
+  const legacySubmissionType =
+    normalizeLegacyProjectSubmissionType(project.submissionType) ??
+    (managedSubmissionType ? legacySubmissionTypeForManagedType(managedSubmissionType) : undefined);
+  const submissionTypeBadgeVariant = managedSubmissionType?.badgeVariant ??
+    managedSubmissionType?.legalMatter.badgeVariant ??
+    undefined;
+  const isManagedSubmissionTypeActive = managedSubmissionType
+    ? managedSubmissionType.isActive &&
+      managedSubmissionType.legalMatter.isActive &&
+      managedSubmissionType.procedureType.isActive
+    : undefined;
 
   const dto: ProjectDto = {
     id: project.id,
     title: project.title,
     status,
-    submissionType: normalizeProjectSubmissionType(project.submissionType),
+    submissionType: legacySubmissionType ?? managedSubmissionType?.code ?? undefined,
+    submissionTypeId: managedSubmissionType?.id ?? project.submissionTypeId ?? undefined,
+    submissionTypeCode: managedSubmissionType?.code ?? undefined,
+    submissionTypeLabel: managedSubmissionType?.name ?? undefined,
+    submissionTypeShortName: managedSubmissionType?.shortName ?? undefined,
+    submissionTypeIsActive: isManagedSubmissionTypeActive,
+    submissionTypeBadgeVariant:
+      submissionTypeBadgeVariant === "neutral" ||
+      submissionTypeBadgeVariant === "success" ||
+      submissionTypeBadgeVariant === "warning" ||
+      submissionTypeBadgeVariant === "danger"
+        ? submissionTypeBadgeVariant
+        : undefined,
+    legalMatterCode: managedSubmissionType?.legalMatter.code ?? undefined,
+    legalMatterLabel: managedSubmissionType?.legalMatter.name ?? undefined,
+    legalMatterShortName: managedSubmissionType?.legalMatter.shortName ?? undefined,
+    procedureTypeCode: managedSubmissionType?.procedureType.code ?? undefined,
+    procedureTypeLabel: managedSubmissionType?.procedureType.name ?? undefined,
+    procedureTypeShortName: managedSubmissionType?.procedureType.shortName ?? undefined,
     shortDescription: project.shortDescription ?? "",
     authorityRef: project.authorityRef ?? "",
     companyId: project.companyId,
@@ -806,7 +871,8 @@ function toProjectCreateInput(project: ProjectDto): Prisma.ProjectUncheckedCreat
   return {
     id: project.id,
     title: project.title,
-    submissionType: project.submissionType ?? null,
+    submissionType: normalizeLegacyProjectSubmissionType(project.submissionType) ?? null,
+    submissionTypeId: project.submissionTypeId ?? null,
     shortDescription: project.shortDescription || null,
     detailedDescription: project.detailedDescription || null,
     authorityRef: project.authorityRef || null,
@@ -833,7 +899,8 @@ function toProjectCreateInput(project: ProjectDto): Prisma.ProjectUncheckedCreat
 function toProjectUpdateInput(project: ProjectDto): Prisma.ProjectUncheckedUpdateInput {
   return {
     title: project.title,
-    submissionType: project.submissionType ?? null,
+    submissionType: normalizeLegacyProjectSubmissionType(project.submissionType) ?? null,
+    submissionTypeId: project.submissionTypeId ?? null,
     shortDescription: project.shortDescription || null,
     detailedDescription: project.detailedDescription || null,
     authorityRef: project.authorityRef || null,
@@ -1329,7 +1396,8 @@ async function validateExternalParticipants(
 async function normalizeProjectForWrite(
   prisma: PrismaClient,
   input: ProjectDto,
-  currentProjects: ProjectDto[]
+  currentProjects: ProjectDto[],
+  options: { allowCreateLegacySubmissionType?: boolean; allowInactiveSubmissionType?: boolean } = {}
 ) {
   const relationValidation = await validateProjectRelations(prisma, {
     companyId: input.companyId,
@@ -1377,13 +1445,29 @@ async function normalizeProjectForWrite(
     projectId: input.id,
     dependencyIds: normalizeRelationIds(input.dependsOnProjectIds)
   }).dependencyIds;
+  const currentProject = currentProjects.find((project) => project.id === input.id);
+  const submissionTypeSelection = await resolveSubmissionTypeSelection(
+    prisma,
+    {
+      submissionTypeId: input.submissionTypeId,
+      submissionTypeCode: input.submissionTypeCode,
+      submissionType: input.submissionType
+    },
+    {
+      allowInactiveCurrent: Boolean(currentProject?.submissionTypeId),
+      currentSubmissionTypeId: currentProject?.submissionTypeId,
+      allowInactiveSelection: options.allowInactiveSubmissionType,
+      allowCreateLegacy: options.allowCreateLegacySubmissionType
+    }
+  );
 
   return {
     ok: true as const,
     project: {
       ...input,
       status: input.status,
-      submissionType: input.submissionType,
+      submissionType: submissionTypeSelection.legacySubmissionType,
+      submissionTypeId: submissionTypeSelection.submissionTypeId,
       companyId: relationValidation.companyId,
       siteId: relationValidation.siteId,
       facilityId: relationValidation.facilityId,
@@ -1857,7 +1941,13 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
       const companyId = ensureStringField(req.body?.companyId);
       const status = normalizeProjectStatus(req.body?.status) ?? DEFAULT_PROJECT_STATUS;
       const submissionType = hasOwn(req.body, "submissionType")
-        ? normalizeProjectSubmissionType(req.body?.submissionType)
+        ? toOptionalTrimmedString(req.body?.submissionType)
+        : undefined;
+      const submissionTypeId = hasOwn(req.body, "submissionTypeId")
+        ? toOptionalTrimmedString(req.body?.submissionTypeId)
+        : undefined;
+      const submissionTypeCode = hasOwn(req.body, "submissionTypeCode")
+        ? toOptionalTrimmedString(req.body?.submissionTypeCode)
         : undefined;
 
       if (!title || !companyId) {
@@ -1873,6 +1963,8 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
           title,
           status,
           submissionType,
+          submissionTypeId,
+          submissionTypeCode,
           shortDescription: ensureStringField(req.body?.shortDescription),
           detailedDescription: ensureStringField(req.body?.detailedDescription),
           authorityRef: ensureStringField(req.body?.authorityRef),
@@ -1929,7 +2021,8 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
 
       const project = await prisma.$transaction(async (tx) => {
         const created = await tx.project.create({
-          data: toProjectCreateInput(normalized.project)
+          data: toProjectCreateInput(normalized.project),
+          select: projectDetailSelect
         });
         await updateProjectStatus(tx, created.id, normalized.project.status);
         if (!hasGlobalProjectReadAccess(user)) {
@@ -2010,9 +2103,19 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
             participantUserIds: req.body?.participantUserIds
           })
         : existing.participantUserIds;
-      const submissionType = hasOwn(req.body, "submissionType")
-        ? normalizeProjectSubmissionType(req.body?.submissionType)
+      const hasSubmissionTypeUpdate =
+        hasOwn(req.body, "submissionType") ||
+        hasOwn(req.body, "submissionTypeId") ||
+        hasOwn(req.body, "submissionTypeCode");
+      const submissionType = hasSubmissionTypeUpdate
+        ? toOptionalTrimmedString(req.body?.submissionType)
         : existing.submissionType;
+      const submissionTypeId = hasSubmissionTypeUpdate
+        ? toOptionalTrimmedString(req.body?.submissionTypeId)
+        : existing.submissionTypeId;
+      const submissionTypeCode = hasSubmissionTypeUpdate
+        ? toOptionalTrimmedString(req.body?.submissionTypeCode)
+        : existing.submissionTypeCode;
 
       const merged: ProjectDto = {
         ...existing,
@@ -2021,6 +2124,8 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
           ? normalizeProjectStatus(req.body?.status)
           : existing.status,
         submissionType,
+        submissionTypeId,
+        submissionTypeCode,
         shortDescription: hasOwn(req.body, "shortDescription")
           ? ensureStringField(req.body?.shortDescription)
           : existing.shortDescription ?? "",
@@ -2107,7 +2212,8 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
           where: {
             id: existing.id
           },
-          data: toProjectUpdateInput(normalized.project)
+          data: toProjectUpdateInput(normalized.project),
+          select: projectDetailSelect
         });
         await updateProjectStatus(tx, existing.id, normalized.project.status);
         return nextProject;
@@ -2172,7 +2278,8 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
             data: {
               archivedAt: new Date(),
               isArchived: true
-            }
+            },
+            select: projectDetailSelect
           });
 
       res.json({
@@ -2225,7 +2332,8 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
             data: {
               archivedAt: null,
               isArchived: false
-            }
+            },
+            select: projectDetailSelect
           });
 
       res.json({
@@ -2268,7 +2376,10 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
       const normalizedProjects: ProjectDto[] = [];
 
       for (const project of snapshot) {
-        const normalized = await normalizeProjectForWrite(prisma, project, normalizedProjects);
+        const normalized = await normalizeProjectForWrite(prisma, project, normalizedProjects, {
+          allowCreateLegacySubmissionType: true,
+          allowInactiveSubmissionType: true
+        });
         if (!normalized.ok) {
           res.status(normalized.status).json({ ok: false, message: normalized.message });
           return;
@@ -2353,7 +2464,10 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
 
       const normalizedProjects: ProjectDto[] = [];
       for (const project of snapshot) {
-        const normalized = await normalizeProjectForWrite(prisma, project, normalizedProjects);
+        const normalized = await normalizeProjectForWrite(prisma, project, normalizedProjects, {
+          allowCreateLegacySubmissionType: true,
+          allowInactiveSubmissionType: true
+        });
         if (!normalized.ok) {
           res.status(normalized.status).json({ ok: false, message: normalized.message });
           return;

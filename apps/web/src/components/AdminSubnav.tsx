@@ -4,13 +4,22 @@ import { t } from "../i18n";
 import { type AuthorizationPermissions, useAuthorization } from "../state/AuthorizationStore";
 
 type AdminSubnavItem = {
-  key: "users" | "roles" | "externalOrgs" | "authorities" | "security" | "design" | "notifications";
+  key:
+    | "users"
+    | "roles"
+    | "externalOrgs"
+    | "authorities"
+    | "procedureMasterData"
+    | "security"
+    | "design"
+    | "notifications";
   path: string;
   labelKey:
     | "admin.nav.users"
     | "admin.nav.roles"
     | "admin.nav.externalOrgs"
     | "admin.nav.authorities"
+    | "admin.nav.procedureMasterData"
     | "admin.nav.security"
     | "admin.nav.design"
     | "admin.nav.notifications";
@@ -43,6 +52,12 @@ const ITEMS: AdminSubnavItem[] = [
     isVisible: (permissions) => permissions.canViewAuthoritiesAdmin
   },
   {
+    key: "procedureMasterData",
+    path: "/admin/procedure-master-data",
+    labelKey: "admin.nav.procedureMasterData",
+    isVisible: (permissions) => permissions.canViewProcedureMasterDataAdmin
+  },
+  {
     key: "security",
     path: "/admin/security",
     labelKey: "admin.nav.security",
@@ -71,6 +86,9 @@ function getActiveKey(pathname: string): AdminSubnavItem["key"] {
   }
   if (pathname.includes("/admin/authorities")) {
     return "authorities";
+  }
+  if (pathname.includes("/admin/procedure-master-data")) {
+    return "procedureMasterData";
   }
   if (pathname.includes("/admin/security")) {
     return "security";

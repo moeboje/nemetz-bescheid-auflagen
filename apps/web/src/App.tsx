@@ -29,6 +29,7 @@ import AdminUsersPage from "./pages/AdminUsersPage";
 import AdminRolesPage from "./pages/AdminRolesPage";
 import AdminExternalOrgsPage from "./pages/AdminExternalOrgsPage";
 import AdminAuthoritiesPage from "./pages/AdminAuthoritiesPage";
+import AdminProcedureMasterDataPage from "./pages/AdminProcedureMasterDataPage";
 import AdminSecurityPage from "./pages/AdminSecurityPage";
 import AdminNotificationsPage from "./pages/AdminNotificationsPage";
 import AdminDesignPage from "./pages/AdminDesignPage";
@@ -69,6 +70,7 @@ import { RolesProvider } from "./state/RolesStore";
 import { ExternalOrgsProvider } from "./state/ExternalOrgsStore";
 import { BrandingProvider, useBranding } from "./state/BrandingStore";
 import { resolveBrandingAssetUrl } from "./api/branding";
+import { ProcedureMasterDataProvider } from "./state/ProcedureMasterDataStore";
 
 const MODULE_PREFIX = "compliance";
 const MODULE_BASE_PATH = `/${MODULE_PREFIX}`;
@@ -231,6 +233,8 @@ function AppLayout() {
     ? `${ADMIN_BASE_PATH}/security`
     : permissions.canViewDesignAdmin
     ? `${ADMIN_BASE_PATH}/design`
+    : permissions.canViewProcedureMasterDataAdmin
+    ? `${ADMIN_BASE_PATH}/procedure-master-data`
     : permissions.canViewExternalOrgsAdmin
     ? `${ADMIN_BASE_PATH}/external-orgs`
     : permissions.canViewAuthoritiesAdmin
@@ -616,6 +620,10 @@ function AppLayout() {
             element={permissions.canViewAuthoritiesAdmin ? <Navigate to={`${ADMIN_BASE_PATH}/authorities`} replace /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route
+            path="admin/procedure-master-data"
+            element={permissions.canViewProcedureMasterDataAdmin ? <Navigate to={`${ADMIN_BASE_PATH}/procedure-master-data`} replace /> : <Navigate to={restrictedFallback} replace />}
+          />
+          <Route
             path="admin/security"
             element={permissions.canViewSecurityAdmin ? <Navigate to={`${ADMIN_BASE_PATH}/security`} replace /> : <Navigate to={restrictedFallback} replace />}
           />
@@ -715,6 +723,10 @@ function AppLayout() {
           element={permissions.canViewAuthoritiesAdmin ? <AdminAuthoritiesPage /> : <Navigate to={restrictedFallback} replace />}
         />
         <Route
+          path="/admin/procedure-master-data"
+          element={permissions.canViewProcedureMasterDataAdmin ? <AdminProcedureMasterDataPage /> : <Navigate to={restrictedFallback} replace />}
+        />
+        <Route
           path="/admin/security"
           element={permissions.canViewSecurityAdmin ? <AdminSecurityPage /> : <Navigate to={restrictedFallback} replace />}
         />
@@ -806,21 +818,23 @@ export default function App() {
                   <AuthorizationProvider>
                     <BrandingProvider>
                       <AuditLogProvider>
-                        <ProjectsProvider>
-                          <LegalDocsProvider>
-                            <ObligationsProvider>
-                              <DeadlinesProvider>
-                                <TaskStateProvider>
-                                  <TasksProvider>
-                                    <NotificationsProvider>
-                                      <AppRouter />
-                                    </NotificationsProvider>
-                                  </TasksProvider>
-                                </TaskStateProvider>
-                              </DeadlinesProvider>
-                            </ObligationsProvider>
-                          </LegalDocsProvider>
-                        </ProjectsProvider>
+                        <ProcedureMasterDataProvider>
+                          <ProjectsProvider>
+                            <LegalDocsProvider>
+                              <ObligationsProvider>
+                                <DeadlinesProvider>
+                                  <TaskStateProvider>
+                                    <TasksProvider>
+                                      <NotificationsProvider>
+                                        <AppRouter />
+                                      </NotificationsProvider>
+                                    </TasksProvider>
+                                  </TaskStateProvider>
+                                </DeadlinesProvider>
+                              </ObligationsProvider>
+                            </LegalDocsProvider>
+                          </ProjectsProvider>
+                        </ProcedureMasterDataProvider>
                       </AuditLogProvider>
                     </BrandingProvider>
                   </AuthorizationProvider>

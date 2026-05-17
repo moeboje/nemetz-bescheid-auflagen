@@ -6,6 +6,7 @@ import { useAuthorities } from "../state/AuthoritiesStore";
 import { useProjects } from "../state/ProjectsStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useAuthorization } from "../state/AuthorizationStore";
+import { useProcedureMasterData } from "../state/ProcedureMasterDataStore";
 import FileUploadStub, { UploadItem } from "./FileUploadStub";
 import { ProjectPolicy } from "../policies/ProjectPolicy";
 import type { Project } from "../data/projects";
@@ -13,15 +14,17 @@ import UserSelect from "./UserSelect";
 import UserMultiSelect from "./UserMultiSelect";
 import ScopeInlineCreateModal, { ScopeInlineCreateMode } from "./ScopeInlineCreateModal";
 import { getProjectStatusOptions } from "../projectStatus";
-import { getProjectSubmissionTypeOptions } from "../projectSubmissionType";
+import {
+  getProjectSubmissionTypeFilterValue,
+  getProjectSubmissionTypeOptions
+} from "../projectSubmissionType";
 
 type ProjectFormStatus = Project["status"] | "";
-type ProjectFormSubmissionType = Project["submissionType"] | "";
 
 const emptyForm = {
   title: "",
   status: "DRAFT" as ProjectFormStatus,
-  submissionType: "" as ProjectFormSubmissionType,
+  submissionTypeId: "",
   shortDescription: "",
   detailedDescription: "",
   companyId: "",
@@ -74,6 +77,11 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
   const { authorities, contacts, getContactsForAuthority } = useAuthorities();
   const { legalDocs } = useLegalDocs();
   const { addProject, updateProject, projects, validateDependencyCandidate } = useProjects();
+  const {
+    hasLoadedProcedureMasterData,
+    isProcedureMasterDataLoading,
+    submissionTypes
+  } = useProcedureMasterData();
   const [form, setForm] = useState(emptyForm);
   const [inlineCreateOpen, setInlineCreateOpen] = useState(false);
   const [inlineCreateMode, setInlineCreateMode] = useState<ScopeInlineCreateMode | null>(null);
@@ -98,7 +106,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
       setForm({
         title: project.title,
         status: project.status ?? "",
-        submissionType: project.submissionType ?? "",
+        submissionTypeId: getProjectSubmissionTypeFilterValue(project),
         shortDescription: project.shortDescription ?? "",
         detailedDescription: project.detailedDescription ?? "",
         companyId: project.companyId,
@@ -249,10 +257,23 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
   const submissionTypeOptions = useMemo(
     () =>
       getProjectSubmissionTypeOptions({
-        includeUnset: !project || Boolean(project && !project.submissionType)
+        submissionTypes,
+        currentProject: project,
+        includeUnset: !project || Boolean(project && !getProjectSubmissionTypeFilterValue(project)),
+        mode: project ? "edit" : "create"
       }),
-    [project]
+    [project, submissionTypes]
   );
+  const hasSelectableSubmissionTypeOption = submissionTypeOptions.some(
+    (option) => option.value && !option.disabled
+  );
+  const showNoSubmissionTypeOptionsHint =
+    !project && hasLoadedProcedureMasterData && !hasSelectableSubmissionTypeOption;
+  const isSubmissionTypeSelectDisabled =
+    !project &&
+    (isProcedureMasterDataLoading ||
+      !hasLoadedProcedureMasterData ||
+      !hasSelectableSubmissionTypeOption);
   const projectById = useMemo(
     () => new Map(projects.map((item) => [item.id, item] as const)),
     [projects]
@@ -445,7 +466,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
       saveSucceeded = await updateProject(project.id, {
         title: form.title,
         status: form.status || undefined,
-        submissionType: form.submissionType || undefined,
+        submissionTypeId: form.submissionTypeId || undefined,
         shortDescription: form.shortDescription,
         detailedDescription: form.detailedDescription,
         companyId: form.companyId,
@@ -466,7 +487,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
       saveSucceeded = await addProject({
         title: form.title,
         status: form.status || undefined,
-        submissionType: form.submissionType || undefined,
+        submissionTypeId: form.submissionTypeId || undefined,
         shortDescription: form.shortDescription,
         detailedDescription: form.detailedDescription,
         companyId: form.companyId,
@@ -587,14 +608,18 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
           <span className="fieldLabel">{t("projects.form.submissionType")}</span>
           <Select
             options={submissionTypeOptions}
-            value={form.submissionType}
+            value={form.submissionTypeId}
+            disabled={isSubmissionTypeSelectDisabled}
             onChange={(event) =>
               setForm((prev) => ({
                 ...prev,
-                submissionType: event.target.value as ProjectFormSubmissionType
+                submissionTypeId: event.target.value
               }))
             }
           />
+          {showNoSubmissionTypeOptionsHint ? (
+            <span className="placeholderText">{t("projects.form.submissionTypeUnavailable")}</span>
+          ) : null}
         </div>
         <div className="formField">
           <span className="fieldLabel">{t("projects.form.shortDescription")}</span>
