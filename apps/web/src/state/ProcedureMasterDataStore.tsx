@@ -24,6 +24,10 @@ import type {
   ProcedureType,
   SubmissionType
 } from "../data/procedureMasterData";
+import {
+  applyLegalMatterToSubmissionTypes,
+  applyProcedureTypeToSubmissionTypes
+} from "../procedureMasterDataSnapshot";
 import { useAuth } from "./AuthStore";
 import { shouldAutoLoadDomainStore } from "./routeLoading";
 
@@ -179,7 +183,8 @@ export function ProcedureMasterDataProvider({ children }: { children: React.Reac
       setSnapshot((prev) =>
         normalizeSnapshot({
           ...prev,
-          legalMatters: mergeById(prev.legalMatters, legalMatter)
+          legalMatters: mergeById(prev.legalMatters, legalMatter),
+          submissionTypes: applyLegalMatterToSubmissionTypes(prev.submissionTypes, legalMatter)
         })
       );
       return legalMatter;
@@ -188,7 +193,8 @@ export function ProcedureMasterDataProvider({ children }: { children: React.Reac
       setSnapshot((prev) =>
         normalizeSnapshot({
           ...prev,
-          procedureTypes: mergeById(prev.procedureTypes, procedureType)
+          procedureTypes: mergeById(prev.procedureTypes, procedureType),
+          submissionTypes: applyProcedureTypeToSubmissionTypes(prev.submissionTypes, procedureType)
         })
       );
       return procedureType;
