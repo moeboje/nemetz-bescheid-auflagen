@@ -4,6 +4,25 @@ import path from "path";
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          const reactVendorPackages = [
+            "/node_modules/react/",
+            "/node_modules/react-dom/",
+            "/node_modules/react-router/",
+            "/node_modules/react-router-dom/",
+            "/node_modules/scheduler/"
+          ];
+
+          if (reactVendorPackages.some((packagePath) => id.includes(packagePath))) {
+            return "vendor-react";
+          }
+        }
+      }
+    }
+  },
   resolve: {
     alias: {
       "@nemetz/ui": path.resolve(__dirname, "../../packages/ui/src")
