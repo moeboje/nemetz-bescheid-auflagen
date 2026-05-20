@@ -1,5 +1,8 @@
 const ADMIN_BASE_PATH = "/admin";
 const MODULE_ADMIN_BASE_PATH = "/compliance/admin";
+const DASHBOARD_BASE_PATH = "/dashboard";
+const MODULE_DASHBOARD_ROOT_PATH = "/compliance";
+const MODULE_DASHBOARD_BASE_PATH = "/compliance/dashboard";
 const PROJECTS_BASE_PATH = "/projects";
 const MODULE_PROJECTS_BASE_PATH = "/compliance/projects";
 
@@ -40,6 +43,16 @@ export function isLegacyAdminRootPath(pathname: string) {
   return normalized === ADMIN_BASE_PATH || normalized === MODULE_ADMIN_BASE_PATH;
 }
 
+export function isDashboardRoutePath(pathname: string) {
+  const normalized = normalizePath(pathname);
+  return (
+    normalized === "/" ||
+    normalized === DASHBOARD_BASE_PATH ||
+    normalized === MODULE_DASHBOARD_ROOT_PATH ||
+    normalized === MODULE_DASHBOARD_BASE_PATH
+  );
+}
+
 export function isProjectDetailRoutePath(pathname: string) {
   const normalized = normalizePath(pathname);
   return (
@@ -50,6 +63,10 @@ export function isProjectDetailRoutePath(pathname: string) {
 
 export function shouldAutoLoadDomainStore(pathname: string, store?: DomainStoreKey) {
   if (isAdminRoutePath(pathname)) {
+    return false;
+  }
+
+  if (isDashboardRoutePath(pathname)) {
     return false;
   }
 

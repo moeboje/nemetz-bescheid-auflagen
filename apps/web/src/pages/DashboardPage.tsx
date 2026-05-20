@@ -1,12 +1,16 @@
-import React, { useMemo } from "react";
-import { Breadcrumbs, Card, DataTable, StatusDot } from "@nemetz/ui";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { Breadcrumbs, Button, Card, DataTable, StatusDot } from "@nemetz/ui";
+import {
+  getDashboardSummary,
+  type DashboardNotificationSummaryItem,
+  type DashboardSummary,
+  type DashboardTaskSummaryItem
+} from "../api/dashboard";
+import { ApiError } from "../api/client";
 import { t } from "../i18n";
 import HelpHintCard from "../components/HelpHintCard";
 import { useRuntimeConfig } from "../config/runtimeConfig";
 import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
-import { useTasks } from "../state/TasksStore";
-import { useDeadlines } from "../state/DeadlinesStore";
-import { useNotifications } from "../state/NotificationsStore";
 
 const statusVariant = {
   OVERDUE: "danger"
@@ -14,54 +18,59 @@ const statusVariant = {
 
 export default function DashboardPage() {
   const runtimeConfig = useRuntimeConfig();
-  const { tasks } = useTasks();
-  const { deadlines, getDeadlineStatus } = useDeadlines();
-  const { activeNotifications } = useNotifications();
+  const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const overdueTasks = useMemo(
-    () => tasks.filter((task) => task.status === "OVERDUE").slice(0, 5),
-    [tasks]
-  );
+  const loadSummary = useCallback(async () => {
+    setIsLoading(true);
+    setError("");
+    try {
+      setSummary(await getDashboardSummary(5));
+    } catch (loadError) {
+      const timeoutSuffix =
+        loadError instanceof ApiError && loadError.status === 504 ? " (504 Gateway Timeout)" : "";
+      setError(`${t("dashboard.error.load")}${timeoutSuffix}`);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadSummary();
+  }, [loadSummary]);
 
   const stats = useMemo(() => {
-    const today = new Date();
-    const todayStamp = today.toISOString().slice(0, 10);
-    const twelveMonthsAgo = new Date(today);
-    twelveMonthsAgo.setDate(twelveMonthsAgo.getDate() - 365);
-    const twelveMonthsAgoStamp = twelveMonthsAgo.toISOString().slice(0, 10);
-    const inThirtyDays = new Date(today);
-    inThirtyDays.setDate(inThirtyDays.getDate() + 30);
-    const inThirtyDaysStamp = inThirtyDays.toISOString().slice(0, 10);
-    const openTasks = tasks.filter((task) => task.status === "OPEN" || task.status === "IN_PROGRESS")
-      .length;
-    const overdue = tasks.filter((task) => task.status === "OVERDUE").length;
-    const dueSoon = tasks.filter(
-      (task) =>
-        task.status !== "DONE" &&
-        task.dueDate >= todayStamp &&
-        task.dueDate <= inThirtyDaysStamp
-    ).length;
-    const deadlinesOpen = deadlines.filter((deadline) => getDeadlineStatus(deadline) !== "DONE").length;
-    const tasksInPastYear = tasks.filter(
-      (task) => task.dueDate >= twelveMonthsAgoStamp && task.dueDate <= todayStamp
-    );
-    const doneInPastYear = tasksInPastYear.filter((task) => task.status === "DONE").length;
-    const completionRate =
-      tasksInPastYear.length > 0
-        ? `${Math.round((doneInPastYear / tasksInPastYear.length) * 100)}%`
-        : "0%";
+    const values = summary?.stats;
+    const pendingValue = isLoading ? "..." : "0";
     return [
-      { key: "openTasks", label: t("dashboard.stats.openTasks"), value: String(openTasks) },
-      { key: "overdue", label: t("dashboard.stats.overdue"), value: String(overdue) },
-      { key: "dueSoon", label: t("dashboard.stats.dueSoon"), value: String(dueSoon) },
-      { key: "deadlines", label: t("dashboard.stats.deadlines"), value: String(deadlinesOpen) },
+      {
+        key: "openTasks",
+        label: t("dashboard.stats.openTasks"),
+        value: values ? String(values.openTasks) : pendingValue
+      },
+      {
+        key: "overdue",
+        label: t("dashboard.stats.overdue"),
+        value: values ? String(values.overdueTasks) : pendingValue
+      },
+      {
+        key: "dueSoon",
+        label: t("dashboard.stats.dueSoon"),
+        value: values ? String(values.tasksDueSoon) : pendingValue
+      },
+      {
+        key: "deadlines",
+        label: t("dashboard.stats.deadlines"),
+        value: values ? String(values.openDeadlines) : pendingValue
+      },
       {
         key: "completionRate",
         label: t("dashboard.stats.completionRate"),
-        value: completionRate
+        value: values ? `${values.completionRatePercent}%` : isLoading ? "..." : "0%"
       }
     ];
-  }, [deadlines, getDeadlineStatus, tasks]);
+  }, [isLoading, summary?.stats]);
 
   const columns = [
     {
@@ -77,22 +86,22 @@ export default function DashboardPage() {
     {
       key: "title",
       header: t("dashboard.overdue.table.title"),
-      render: (task: (typeof tasks)[number]) => task.title
+      render: (task: DashboardTaskSummaryItem) => task.title
     },
     {
       key: "dueDate",
       header: t("dashboard.overdue.table.due"),
-      render: (task: (typeof tasks)[number]) => task.dueDate
+      render: (task: DashboardTaskSummaryItem) => task.dueDate
     },
     {
       key: "assignee",
       header: t("dashboard.overdue.table.assignee"),
-      render: (task: (typeof tasks)[number]) => task.assignedTo
+      render: (task: DashboardTaskSummaryItem) => task.assignedTo || t("tasks.unassigned")
     },
     {
       key: "scope",
       header: t("dashboard.overdue.table.scope"),
-      render: (task: (typeof tasks)[number]) => task.scopeLabel
+      render: (task: DashboardTaskSummaryItem) => task.scopeLabel || t("common.notAvailable")
     }
   ];
 
@@ -100,19 +109,22 @@ export default function DashboardPage() {
     {
       key: "createdAt",
       header: t("notifications.table.createdAt"),
-      render: (row: (typeof activeNotifications)[number]) =>
+      render: (row: DashboardNotificationSummaryItem) =>
         row.createdAt.slice(0, 16).replace("T", " ")
     },
     {
       key: "title",
       header: t("notifications.table.title"),
-      render: (row: (typeof activeNotifications)[number]) => row.title
+      render: (row: DashboardNotificationSummaryItem) =>
+        row.type === "REMINDER"
+          ? t("notifications.generated.reminderTitle")
+          : t("notifications.generated.overdueTitle")
     },
     {
       key: "body",
       header: t("notifications.table.body"),
-      render: (row: (typeof activeNotifications)[number]) =>
-        row.body || t("common.notAvailable")
+      render: (row: DashboardNotificationSummaryItem) =>
+        row.title ? `${row.title} - ${row.dueDate}` : t("common.notAvailable")
     }
   ];
 
@@ -155,20 +167,41 @@ export default function DashboardPage() {
         ))}
       </div>
 
+      {error ? (
+        <Card>
+          <div className="tableActions">
+            <p className="validationText">{error}</p>
+            <Button variant="secondary" onClick={() => void loadSummary()} disabled={isLoading}>
+              {t("dashboard.action.retry")}
+            </Button>
+          </div>
+        </Card>
+      ) : null}
+
       <div className="tableSection">
         <div className="sectionHeader">
           <h2 className="sectionTitle">{t("dashboard.overdue.title")}</h2>
         </div>
-        <DataTable columns={columns} data={overdueTasks} getRowKey={(task) => task.id} />
+        {isLoading && !summary ? (
+          <p className="placeholderText">{t("dashboard.loading")}</p>
+        ) : null}
+        <DataTable
+          columns={columns}
+          data={summary?.overdueTasks ?? []}
+          getRowKey={(task) => task.id}
+        />
       </div>
 
       <div className="tableSection">
         <div className="sectionHeader">
           <h2 className="sectionTitle">{t("dashboard.notifications.title")}</h2>
         </div>
+        {isLoading && !summary ? (
+          <p className="placeholderText">{t("dashboard.loading")}</p>
+        ) : null}
         <DataTable
           columns={notificationColumns}
-          data={activeNotifications.slice(0, 5)}
+          data={summary?.notifications ?? []}
           getRowKey={(notification) => notification.id}
         />
       </div>

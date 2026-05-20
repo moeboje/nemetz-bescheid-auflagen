@@ -11,7 +11,7 @@ import {
   type AdminRolesQuery
 } from "../api/roles";
 import { useAuth } from "./AuthStore";
-import { isProjectDetailRoutePath } from "./routeLoading";
+import { isDashboardRoutePath, isProjectDetailRoutePath } from "./routeLoading";
 
 type RolesContextValue = {
   roles: AdminRole[];
@@ -44,7 +44,8 @@ export function RolesProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const location = useLocation();
   const [roles, setRoles] = useState<AdminRole[]>([]);
-  const shouldAutoLoadLookup = !isProjectDetailRoutePath(location.pathname);
+  const shouldAutoLoadLookup =
+    !isDashboardRoutePath(location.pathname) && !isProjectDetailRoutePath(location.pathname);
   const permissionKeys = Array.isArray(user?.effectivePermissions) ? user.effectivePermissions : [];
   const hasAdminAccess = permissionKeys.includes("admin.access");
   const canLookupRoles =

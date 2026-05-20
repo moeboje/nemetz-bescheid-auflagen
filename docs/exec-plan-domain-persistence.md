@@ -1231,3 +1231,69 @@
 - Full-Refreshes verwenden spaeter wieder die Serverliste als Source of Truth.
 - Initiale Auth-Hydration `null -> user` invalidiert legitime Direct Loads nicht.
 - Request-Deduping bleibt ownerKey- und Auth-Scope-basiert.
+
+## 13f. Phase 3 2026-05-20: Dashboard Initial Load Summary
+- Ziel ist ausschliesslich die Dashboard-Initial-Load-Optimierung auf Branch `perf/portal-load-stability`.
+- Nicht-Ziele: keine Admin-Rollen-/Authorities-Optimierung, keine Static-Asset-/Nginx-/Vite-/Docker-/Azure-Aenderungen, keine ProjectDetail- oder DocumentsStore-Grundlogik-Aenderungen, keine neuen Fachfeatures.
+- Backend-Plan:
+- Neuer `GET /api/dashboard/summary` Endpoint mit Auth und `dashboard.view`.
+- Interne User erhalten nur RBAC- und ProjectAccess-gescopte Aggregates; externe User bleiben fail-closed und erhalten keine breiten Fachdomain-Daten.
+- Summary enthaelt Counts und kleine Top-Listen, aber keine vollstaendigen Projekt-/Dokument-/User-/Authorities-/Scopes-/Admin-Lookup-Listen.
+- Keine Langtexte, Dokumentlisten, Storage-Pfade, Download-/Preview-Daten oder sensiblen Debugdaten im Payload.
+- Frontend-Plan:
+- Dashboard rendert Kacheln, ueberfaellige Aufgaben und Top-Benachrichtigungen aus `dashboard/summary`.
+- Dashboard initialisiert keine globalen Fachstores und keine Admin-Lookups.
+- Domain-Details werden erst auf den jeweiligen Detail-/Listenrouten geladen.
+- Route-Loading-Plan:
+- Dashboard-Routen `/`, `/dashboard`, `/compliance`, `/compliance/dashboard` unterdruecken Domain-Store-Autoloads.
+- Roles- und ExternalOrgs-Lookups werden auf Dashboard-Routen nicht eager geladen.
+- Bestehende ProjectDetail- und Admin-Lookalike-Regeln bleiben unveraendert.
+- Test-/Review-Fokus:
+- Keine N+1 Dokument-Requests, keine `documents?ownerType=...` Einzelrequests, keine vollstaendigen Domainlisten fuer Kachel-Counts.
+- RBAC/ProjectAccess serverseitig korrekt, externe User ohne breite Daten, Summary-Payload klein.
+- Phase-1 ProjectDetail/DocumentsStore- und Phase-2 Static-Asset-Verhalten nicht regressieren.
+
+## 13g. Phase-3 Review-Blocker-Fixlauf 2026-05-20
+- Dies ist keine neue Phase, keine Phase-4-Admin-Optimierung und keine Azure-/Nginx-/Static-Asset-Aenderung.
+- Ziel ist ausschliesslich die Behebung der drei aktuellen P2-Review-Blocker im Dashboard-Summary-Endpoint.
+- Geplanter Backend-Fix:
+- `today` fuer `/api/dashboard/summary` wird aus der konfigurierten Anwendungszeitzone abgeleitet, nicht aus der Host-Prozesszeitzone.
+- Obligation-seitige Summary-Arbeit wird auf kleine, datumsrelevante Kandidaten-Slices begrenzt; Recurrence-Expansion laeuft nur noch fuer diese Kandidaten und innerhalb der Summary-Fenster.
+- Scope-Overrides von Rechtsdokumenten werden vor dem Rendern der Dashboard-Labels gegen Firmen-/Standort-/Anlagen-Namen aufgeloest; IDs bleiben nur Fallback fuer inkonsistente Altdaten.
+- Nicht-Ziele:
+- keine UI-Neugestaltung, keine neuen Dashboard-Kacheln, keine Admin-Rollen-/Authorities-Optimierung, keine Phase-4-Arbeit, keine Deployment-Aenderungen.
+- Pflicht-Verifikation fuer diesen Fixlauf:
+- `cd apps/api && npm test`
+- `cd apps/api && npm run build`
+- `cd apps/web && npm run build`
+
+## 13h. Phase-3 P2 Review-Fix 2026-05-20 fuer Dashboard-Aggregate und Reminder-Kandidaten
+- Ziel ist ausschliesslich die Behebung der zwei verbleibenden P2-Blocker im Dashboard-Summary-Endpoint auf Branch `perf/portal-load-stability`.
+- Obligation-Aggregates duerfen nicht mehr aus gekappten Anzeige-Kandidaten berechnet werden. Vollstaendige Counts fuer `openTasks`, `overdueTasks`, `tasksDueSoon` und `completionRatePercent` werden separat ueber den serverseitigen RBAC-/ProjectAccess-Scope berechnet.
+- Gekappte Obligation-Kandidaten bleiben nur fuer Top-Listen und Notifications erlaubt; sie werden nach fachlicher Datumsrelevanz geladen und nie als Gesamtbestand interpretiert.
+- Wiederkehrende Auflagen werden fuer Aggregates nur im Dashboard-Fenster expandiert; alte einmalige Overdues werden vollstaendig per DB-Aggregat gezaehlt.
+- Deadline-Reminder-Kandidaten werden bereits in der Query auf heutige Trigger eingeschraenkt. `emailReminderDaysBefore=0` bleibt gueltig; fehlende Werte nutzen den bestehenden Default von 7 Tagen.
+- Nicht-Ziele: keine Phase-4-Admin-Optimierung, keine Frontend-/Store-/Static-Asset-/Docker-/Azure-Aenderungen, keine RBAC-Lockerung und keine neuen Fachfeatures.
+
+## 13i. Phase-3 Re-Review-Fix 2026-05-20 fuer Recurrence-Aggregate und ONCE_THEN_RECURRING-Candidates
+- Dies ist kein neuer Optimierungs- oder Featurelauf, sondern ausschliesslich die Nachschaerfung der zwei verbleibenden Review-Findings im Dashboard-Summary-Endpoint.
+- Wiederkehrende Auflagen-Aggregates werden rechnerisch ueber Recurrence-Regeln und vorhandene `TaskStateEntry`-Rows berechnet; es werden keine vollstaendigen Occurrence-Arrays und keine synthetischen TaskState-ID-Listen fuer alle Vorkommen mehr erzeugt.
+- `DAY` und `WEEK` nutzen date-only Differenz/Division; `MONTH`, `QUARTER` und `YEAR` bleiben kalenderkompatibel und iterieren nur ueber Intervallschritte.
+- `DONE`-TaskStates werden nur aus vorhandenen Rows im Summary-Fenster gelesen und gegen die Recurrence-Regel validiert, bevor sie Counts und `completionRatePercent` beeinflussen.
+- Initiale `ONCE_THEN_RECURRING`-Occurrences bleiben vom recurring Serienanteil getrennt; ended initial overdues werden in den Anzeige-Kandidaten beruecksichtigt, ohne doppelte Anzeige derselben Auflage im selben Listenbereich.
+- Nicht-Ziele bleiben unveraendert: keine Phase-4-Admin-Optimierung, keine Frontend-/Store-/Static-Asset-/Docker-/Azure-Aenderungen, keine RBAC-Lockerung und keine neuen Fachfeatures.
+
+## 13j. Phase-3 Review-Fix 2026-05-20 fuer bounded Dashboard-Display-Candidates
+- Ziel ist ausschliesslich die Behebung der zwei verbleibenden Review-Findings im Anzeige-Pfad von `GET /api/dashboard/summary`.
+- Display-Candidates fuer Overdue und Reminder werden getrennt von Aggregates gesammelt; Aggregates bleiben die vollstaendige, RBAC-gescopte Count-Quelle.
+- Wiederkehrende Display-Occurrences werden bounded erzeugt: pro Obligation nur der naechste listenrelevante Candidate, bei `DONE` kontrolliert weiter bis zum naechsten offenen Candidate oder bis zum Guard.
+- Der Anzeige-Pfad baut keine synthetischen TaskState-ID-Listen fuer alle moeglichen Occurrences im Fenster mehr; TaskState-Abfragen bleiben auf bounded Candidates bzw. vorhandene DONE-Rows begrenzt.
+- Einmalige und initiale `ONCE_THEN_RECURRING`-Overdues filtern `DONE` per Anti-Join vor dem finalen Take, sodass alte erledigte Eintraege keine Anzeige-Slots blockieren.
+- Nicht-Ziele bleiben unveraendert: keine Phase-4-Admin-Optimierung, keine Frontend-/Store-/Static-Asset-/Docker-/Azure-Aenderungen, keine RBAC-Lockerung und keine neuen Fachfeatures.
+
+## 13k. Phase-3 P2 Review-Fix 2026-05-20 fuer Recurring-Aggregate und Deadline-DateOnly
+- Ziel ist ausschliesslich die Behebung der zwei verbleibenden P2-Blocker im Dashboard-Summary-Endpoint.
+- Wiederkehrende Auflagen-Aggregates werden per keyset Chunks nach `Obligation.id` berechnet; Chunking begrenzt nur Speicher und Query-Groesse, nicht die fachlichen Counts.
+- DONE-TaskState-Rows fuer recurring obligations werden nur pro Chunk und nur im relevanten Summary-Fenster geladen und gegen die Recurrence-Regel validiert.
+- Deadline-Reminder normalisieren DateOnly-Werte in einer sicheren CASE/CTE-Schicht; ungueltige Legacy-/Import-Werte werden uebersprungen statt den Summary-Endpoint abbrechen zu koennen.
+- Nicht-Ziele bleiben unveraendert: keine Phase-4-Admin-Optimierung, keine Frontend-/Store-/Static-Asset-/Docker-/Azure-Aenderungen, keine RBAC-Lockerung, kein Commit und kein Push.

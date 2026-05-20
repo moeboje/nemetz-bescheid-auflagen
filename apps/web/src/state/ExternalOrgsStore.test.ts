@@ -6,9 +6,13 @@ import {
 } from "./externalOrgsLookupGuards";
 
 describe("external org lookup route guards", () => {
-  it("suppresses only eager lookup on project detail routes", () => {
+  it("suppresses eager lookup on project detail and dashboard routes", () => {
     assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance/projects/project-1"), false);
     assert.equal(shouldAutoLoadExternalOrgsLookup("/projects/project-1"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/dashboard"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance/dashboard"), false);
     assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance/projects"), true);
     assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance/obligations"), true);
   });

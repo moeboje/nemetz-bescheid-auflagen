@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   isAdminRoutePath,
+  isDashboardRoutePath,
   isProjectDetailRoutePath,
   shouldAutoLoadDomainStore
 } from "./routeLoading";
@@ -16,6 +17,38 @@ describe("route loading guards", () => {
     assert.equal(isProjectDetailRoutePath("/projects/project-1"), true);
     assert.equal(isProjectDetailRoutePath("/compliance/projects/project-1"), true);
     assert.equal(isProjectDetailRoutePath("/compliance/projects"), false);
+  });
+
+  it("detects dashboard routes without matching adjacent compliance routes", () => {
+    assert.equal(isDashboardRoutePath("/"), true);
+    assert.equal(isDashboardRoutePath("/dashboard"), true);
+    assert.equal(isDashboardRoutePath("/dashboard/extra"), false);
+    assert.equal(isDashboardRoutePath("/compliance"), true);
+    assert.equal(isDashboardRoutePath("/compliance/dashboard"), true);
+    assert.equal(isDashboardRoutePath("/compliance/dashboard/extra"), false);
+    assert.equal(isDashboardRoutePath("/compliance/projects"), false);
+  });
+
+  it("suppresses domain autoloads on dashboard routes", () => {
+    const routes = ["/", "/dashboard", "/compliance", "/compliance/dashboard"];
+    const stores = [
+      "projects",
+      "legalDocs",
+      "obligations",
+      "deadlines",
+      "taskState",
+      "procedureMasterData",
+      "users",
+      "authorities",
+      "scopes"
+    ] as const;
+
+    routes.forEach((route) => {
+      stores.forEach((store) => {
+        assert.equal(shouldAutoLoadDomainStore(route, store), false);
+      });
+      assert.equal(shouldAutoLoadDomainStore(route), false);
+    });
   });
 
   it("suppresses heavy domain autoloads on project detail routes", () => {

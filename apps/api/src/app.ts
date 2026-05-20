@@ -8,6 +8,7 @@ import { Issuer } from "openid-client";
 import { loadConfig, type AppConfig } from "./config.js";
 import { prisma } from "./prisma.js";
 import { createAuthoritiesRouter } from "./routes/authorities.js";
+import { createDashboardRouter } from "./routes/dashboard.js";
 import { createDeadlinesRouter } from "./routes/deadlines.js";
 import { createLegalDocsRouter } from "./routes/legalDocs.js";
 import { createLegacyDecisionsRouter } from "./routes/legacyDecisions.js";
@@ -2874,6 +2875,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   const router = express.Router();
   router.use(createLegacyRecoveryGuard(prisma, config));
   router.use(createAuthoritiesRouter(prisma));
+  router.use(createDashboardRouter(prisma, config));
   router.use(createDeadlinesRouter(prisma));
   router.use(createLegalDocsRouter(prisma));
   router.use(createLegacyDecisionsRouter(prisma));
