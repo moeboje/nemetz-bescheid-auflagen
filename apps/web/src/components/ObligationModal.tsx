@@ -51,7 +51,7 @@ export default function ObligationModal({
   availableLegalDocs
 }: ObligationModalProps) {
   const { legalDocs } = useLegalDocs();
-  const { externalOrgs } = useExternalOrgs();
+  const { externalOrgs, reloadExternalOrgs } = useExternalOrgs();
   const { listActiveUsers, getUserLabel } = useUsers();
   const { addObligation, updateObligation, mutationError, clearMutationError } = useObligations();
   const [form, setForm] = useState(emptyForm);
@@ -61,6 +61,7 @@ export default function ObligationModal({
     if (!open) {
       return;
     }
+    void reloadExternalOrgs().catch(() => undefined);
     setSaveError("");
     clearMutationError();
     if (obligation) {
@@ -94,7 +95,7 @@ export default function ObligationModal({
       ...emptyForm,
       legalDocId: initialLegalDocId
     });
-  }, [availableLegalDocs, clearMutationError, legalDocId, obligation, open]);
+  }, [availableLegalDocs, clearMutationError, legalDocId, obligation, open, reloadExternalOrgs]);
 
   const legalDocOptions = useMemo(
     () =>

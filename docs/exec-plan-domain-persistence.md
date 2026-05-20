@@ -1087,3 +1087,147 @@
 - nur Permission-Katalog-/Filterlogik des Role-Editors sowie direkte API-Tests fuer Create/Update von Custom Roles.
 - Nicht-Ziele:
 - keine weiteren Rechteaenderungen ausser der Wiederfreigabe von `authorities.view` im vorhandenen Admin-Rollenworkflow.
+
+## 13. P0 Performance-/Stability-Fixlauf 2026-05-18 fuer Projekt-Detail und Projekt-Unterlagen
+- Dies ist keine neue Persistenzphase, keine Dashboard-Optimierung, keine Admin-Rollen-Optimierung und keine Azure-/Nginx-/Static-Asset-Aenderung.
+- Ziel ist ausschliesslich, echte 240s-/504-Stalls und doppelte Requests beim Oeffnen von `/compliance/projects/:projectId` zu beseitigen.
+- Betroffene P0-Pfade:
+- `GET /api/projects/:projectId`
+- `GET /api/documents?ownerType=PROJECT&ownerId=:projectId`
+- Geplanter Frontend-Umfang:
+- `ProjectsStore` erhaelt eine In-flight-Promise-Map pro `projectId`, Detail-Cache-Vermeidung fuer nicht-stale Details und Schutz vor stale response overwrites.
+- `DocumentsStore` wird als ownerKey-basierter Store (`ownerType:ownerId`) eingefuehrt; parallele Listen-Loads deduplizieren, Mutationen aktualisieren nur den betroffenen ownerKey.
+- `ProjectDetailPage` kontrolliert den initialen Detail-Load selbst und laedt Tabs nur lazy, wenn sie sichtbar werden.
+- `DocumentsPanel` nutzt den ownerKey-Store, startet Preview/Download nur auf Klick und ersetzt lokale reloadAll-artige Refreshes durch ownerKey-Updates.
+- `routeLoading` unterdrueckt auf Projekt-Detailrouten globale Domain-Autoloads, die fuer den ersten sichtbaren Render nicht noetig sind, und bleibt bei `/administrator` sowie `/compliance/administrator` fail-closed gegen falsche Admin-Erkennung.
+- Geplanter Backend-Umfang:
+- `GET /projects/:id` vermeidet doppelte ProjectAccess-Pruefung und bleibt bei minimalem Detail-DTO ohne Dokumentlisten oder Storage-Pruefungen.
+- `GET /documents` nutzt den vorhandenen `Document(ownerType, ownerId)`-Index, vermeidet Datei-Existenzpruefungen im Listenpfad und selektiert nur DTO-relevante Felder.
+- Security-/RBAC-Regeln:
+- Backend bleibt finale Autoritaet; keine Permission-Checks werden entfernt.
+- Externe User bleiben fuer Document-Endpunkte gesperrt.
+- Dedupe gilt nur im aktuellen Browser-/User-Kontext; keine useruebergreifenden Caches.
+- Keine sensiblen Logs, keine Payload-/Cookie-/Authorization-Header-Logs, keine Secrets im Diff.
+- Pflicht-Verifikation:
+- `cd apps/api && npx prisma validate`
+- `cd apps/api && npx prisma generate`
+- `cd apps/api && node scripts/assert-prisma-client.mjs`
+- `cd apps/api && npm run build`
+- `cd apps/api && npm test`
+- `cd apps/web && npm run build`
+- falls vorhanden: `cd apps/web && npm test -- --run`
+- `git diff --check`
+- `docker compose config`
+- `sh -n apps/api/start-container.sh`
+- falls lokale DB erreichbar: `cd apps/api && npx prisma db push --skip-generate`
+
+## 13a. Review-Blocker-Fixlauf 2026-05-18 fuer Phase-1 Projekt-Detail-Stabilisierung
+- Dies ist keine neue Persistenzphase, keine Phase-2-Arbeit, keine Dashboard-Optimierung, keine Admin-Rollen-/Authorities-Optimierung und keine Azure-/Nginx-/Static-Asset-Aenderung.
+- Ziel ist ausschliesslich die Behebung der drei Review-Blocker aus Phase 1, ohne die Performance-Ziele aus Abschnitt 13 zurueckzudrehen.
+- Blocker 1: Projekt-Detail-Aktionen duerfen auf Direct Loads nicht mit leer unterdrueckten Stores arbeiten.
+- Geplanter Fix: `routeLoading` laedt weiterhin nicht blind alle Domain-Stores auf Projekt-Detailrouten. Stattdessen laden die sichtbaren Aktionen ihre benoetigten Daten gezielt:
+- Projekt-Edit oeffnet erst nach `ensureProject`, `reloadProjects`, `reloadLegalDocs` und `reloadProcedureMasterData`, damit Submission-Type-, Relation- und Legal-Reference-Optionen verfuegbar sind.
+- Projekt-Archivierung oeffnet mit explizitem Loading-/Fehlerzustand fuer Child Counts und laedt `legalDocs`, `obligations` und `deadlines` gezielt vor Cascade-Bewertung. Unloaded wird nicht als 0 interpretiert.
+- Blocker 2: External-Orgs-Lookup darf auf Projekt-Detailrouten nur im Eager-Load unterdrueckt werden.
+- Geplanter Fix: Route-Guard gilt nur fuer Auto-Load. Explizite `reloadExternalOrgs()`-Aufrufe aus Tabs/Modals laden weiter, bleiben aber durch die bestehenden Berechtigungen begrenzt.
+- Blocker 3: Document-Mutations duerfen partielle Upload-/Replace-/Delete-Ergebnisse nicht als volle Owner-Liste markieren.
+- Geplanter Fix: Nur erfolgreiche Full-List-Loads setzen `loaded=true`. Partielle Mutationen aktualisieren den betroffenen ownerKey sichtbar, halten ungeladene Owner ungeladen/invalidated und werden mit laufenden Full-List-Responses gemerged.
+- Security-/RBAC-Regeln:
+- Backend bleibt finale Autoritaet; keine Permission-Checks werden entfernt.
+- External-Orgs-Lookup umgeht keine Berechtigungen; die bestehende Admin-/ExternalOrg-Permission-Grenze bleibt bestehen.
+- Document ownerType/ownerId-Scoping bleibt ownerKey-basiert und browser-/userlokal.
+- Keine sensiblen Logs, keine Payload-/Cookie-/Authorization-Header-Logs, keine Secrets im Diff.
+- Pflicht-Verifikation:
+- `cd apps/api && npx prisma validate`
+- `cd apps/api && npx prisma generate`
+- `cd apps/api && node scripts/assert-prisma-client.mjs`
+- `cd apps/api && npm run build`
+- `cd apps/api && npm test`
+- `cd apps/web && npm run build`
+- falls vorhanden: `cd apps/web && npm test -- --run`
+- `git diff --check`
+- `docker compose config`
+- `sh -n apps/api/start-container.sh`
+- falls lokale DB erreichbar: `cd apps/api && npx prisma db push --skip-generate`
+
+## 13b. Review-Blocker-Fixlauf 2026-05-19 fuer Auth-Hydration-Races in Phase 1
+- Dies ist keine neue Persistenzphase, keine Phase-2-Arbeit, keine Dashboard-Optimierung, keine Admin-Rollen-/Authorities-Optimierung und keine Azure-/Nginx-/Static-Asset-Aenderung.
+- Ziel ist ausschliesslich die Behebung der zweiten Review-Rueckmeldung zu direkten Project-Detail- und DocumentPanel-Cold-Starts.
+- Root Cause:
+- `ProjectsStore` und `DocumentsStore` haben authUser-abhaengige passive Effects genutzt, um Sequenz-/In-flight-Maps und Store-Eintraege zu leeren.
+- Bei einem direkten geschuetzten Route-Load kann ein Child-Effect bereits `ensureProject()` oder `ensureDocuments()` starten, bevor der Parent-/Store-Effect diese Maps leert.
+- Die erfolgreiche Response wurde danach faelschlich als stale behandelt und nicht in den Store uebernommen.
+- Geplanter Frontend-Fix:
+- Request-Reihenfolge pro `projectId` bzw. `ownerKey` wird von Auth-/Session-Invalidierung getrennt.
+- Ein auth-scoped Request-Helper verwaltet `generation` und `userId`.
+- Initiale Hydration `null -> user` invalidiert keine legitimen Requests.
+- Echter Logout oder User-Wechsel erhoeht die Generation, leert benutzerspezifischen Store-Zustand und verhindert, dass alte Responses in die neue Session schreiben.
+- In-flight-Dedupe-Keys enthalten Auth-Generation und User-ID, bleiben aber innerhalb derselben Session pro `projectId` bzw. `ownerKey` dedupliziert.
+- Eine fehlende latest-seq bedeutet nicht automatisch stale; angewendet wird, wenn die Auth-Generation passt und kein neuerer Request fuer denselben Key bekannt ist.
+- Nicht-Ziele:
+- keine Backend-Aenderungen, keine Permission-/RBAC-Aenderungen, kein globales reloadAll, keine Ruecknahme der lazy Project-Detail-Loads.
+- Vorherige Phase-1-Fixes bleiben erhalten:
+- Project-Edit und Archive-Dialog laden aktive Aktionsdaten gezielt.
+- ExternalOrgs explicit/lazy lookup bleibt auf Projekt-Detail moeglich.
+- Document partial mutations setzen nie faelschlich `loaded=true`, wenn keine Full-List geladen wurde.
+- Security-/RBAC-Regeln:
+- Backend bleibt finale Autoritaet; keine Permission-Checks werden entfernt.
+- Keine useruebergreifenden Caches; alte User-Responses duerfen nicht in neue Sessions schreiben.
+- Keine sensiblen Logs, keine Payload-/Cookie-/Authorization-Header-Logs, keine Secrets im Diff.
+- Pflicht-Verifikation:
+- `cd apps/api && npx prisma validate`
+- `cd apps/api && npx prisma generate`
+- `cd apps/api && node scripts/assert-prisma-client.mjs`
+- `cd apps/api && npm run build`
+- `cd apps/api && npm test`
+- `cd apps/web && npm run build`
+- falls vorhanden: `cd apps/web && npm test -- --run`
+- `git diff --check`
+- `docker compose config`
+- `sh -n apps/api/start-container.sh`
+- falls lokale DB erreichbar: `cd apps/api && npx prisma db push --skip-generate`
+
+## 13c. Gezielter P2-Fixlauf 2026-05-19 fuer DocumentsStore Mutation-Replay
+- Dies ist keine neue Persistenzphase, keine Phase-2-Arbeit, keine Backend-, RBAC-, Azure-, Nginx- oder Static-Asset-Aenderung.
+- Ziel ist ausschliesslich die Behebung des verbleibenden DocumentsStore-P2, bei dem alte lokale Dokument-Mutationen beim naechsten Full-Refresh ueber die frische Serverliste gelegt werden konnten.
+- Geplanter Frontend-Fix:
+- Full-List-Requests fuer `GET /api/documents?ownerType=...&ownerId=...` erhalten eine ownerKey-lokale `loadId`.
+- Lokale erfolgreiche Upload-/Replace-/Copy-/Delete-Mutationen werden nur fuer bereits pending Full-List-Loads desselben ownerKey als one-shot Replay vorgemerkt.
+- Die passende Full-List-Response konsumiert nur Replays fuer ihre eigene `loadId`; danach werden diese Replays geloescht.
+- Spaetere Full-Refreshes erhalten neue `loadId`s und uebernehmen wieder die Serverliste als Source of Truth, ohne alte lokale Upsert- oder Delete-Ergebnisse erneut anzuwenden.
+- Vorherige Phase-1-Fixes bleiben erhalten:
+- Auth-Hydration darf Direct Loads nicht invalidieren.
+- Logout/User-Wechsel leert benutzerspezifische Dokument- und Replay-Zustaende.
+- Request-Deduping bleibt auth-scope- und ownerKey-basiert.
+- Partielle Mutationen setzen `loaded` nie faelschlich auf `true`.
+- Uploads waehrend pending Full-Load bleiben sichtbar und werden genau fuer diese alte Response gemerged.
+- Pflicht-Verifikation bleibt wie in Abschnitt 13b; zusaetzlich werden die DocumentsStore-Tests fuer loaded-owner Refresh, pending one-shot Replay, failed/unloaded Owner und Replay-Cleanup erweitert.
+
+## 13d. Gezielter P1-Fixlauf 2026-05-19 fuer DocumentsStore Mutation-Auth-Scope
+- Dies ist keine neue Persistenzphase, keine Phase-2-Arbeit, keine Backend-, RBAC-, Azure-, Nginx-, Static-Asset-, Dashboard- oder Admin-Optimierung.
+- Ziel ist ausschliesslich, erfolgreiche Dokument-Mutation-Responses aus alten Auth-Sessions daran zu hindern, den aktuellen DocumentsStore oder pending Mutation-Replays zu veraendern.
+- Geplanter Frontend-Fix:
+- Upload-/Replace-/Delete- sowie Metadaten-/Approval-Mutationen erfassen beim Requeststart den aktuellen Auth-Scope und ownerKey.
+- Mutation-Success-Callbacks duerfen `recordOwnerMutation`, `setOwnerEntry`, lokale Upserts/Removes, Invalidierungen, Refreshes und UI-Erfolgsmeldungen nur ausfuehren, wenn Auth-Generation und User-ID noch passen.
+- Pending Replay wird zusaetzlich pro pending Full-Load mit Auth-Scope markiert; User-A-Mutationen koennen nicht in User-B-Full-Loads desselben ownerKey replayed werden.
+- Auth cleanup leert weiterhin Entries, In-flight-Maps, Mutation-Versionen und Replay-State.
+- Vorherige Phase-1-Fixes bleiben erhalten:
+- Full-List-Responses bleiben auth-scoped.
+- Initiale Auth-Hydration `null -> user` invalidiert legitime Direct Loads nicht.
+- OwnerKey-Dedupe bleibt innerhalb derselben Auth-Session wirksam.
+- Partielle Mutationen setzen `loaded` nicht faelschlich auf `true`.
+- Spaetere Full-Refreshes verwenden wieder die Serverliste als Source of Truth.
+
+## 13e. Gezielter P2-Fixlauf 2026-05-20 fuer Preview-Missing Mutation-Scope
+- Dies ist keine neue Persistenzphase, keine Phase-2-Arbeit, keine Backend-, RBAC-, Azure-, Nginx-, Static-Asset-, Dashboard- oder Admin-Optimierung.
+- Ziel ist ausschliesslich, den Preview-Fehlerpfad fuer `FILE_MISSING` und `DOCUMENT_NOT_FOUND` wieder mit dem beim Preview-Requeststart erfassten Dokument-Mutation-Scope zu verbinden.
+- Geplanter Frontend-Fix:
+- `DocumentPreviewModal` erfasst beim Start des Preview-Blob-Requests einen `DocumentsMutationScope` ueber den aufrufenden `DocumentsPanel`-Owner-Kontext.
+- `FILE_MISSING`- und `DOCUMENT_NOT_FOUND`-Callbacks erhalten diesen captured Scope typisiert als Pflichtargument, sodass dieselbe Session defekte Dateien wieder markieren bzw. fehlende Dokumenteintraege entfernen/invalidieren kann.
+- Alte Preview-Responses aus frueheren Auth-Sessions bleiben durch `canApplyDocumentsMutationScope` wirkungslos und duerfen keine User-B-Owner, Replays oder lokalen Dokumentlisten veraendern.
+- Vorherige Phase-1-Fixes bleiben erhalten:
+- Upload-/Replace-/Delete-/Metadaten-/Approval-Mutationen bleiben auth-scoped.
+- Pending Replay bleibt ownerKey- und Auth-Scope-basiert, one-shot pro pending Full-Load und wird bei Cleanup geloescht.
+- Full-Refreshes verwenden spaeter wieder die Serverliste als Source of Truth.
+- Initiale Auth-Hydration `null -> user` invalidiert legitime Direct Loads nicht.
+- Request-Deduping bleibt ownerKey- und Auth-Scope-basiert.

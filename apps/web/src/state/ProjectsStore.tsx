@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import {
   ExternalParticipant,
@@ -20,6 +20,7 @@ import {
   restoreProject as apiRestoreProject,
   updateProject as apiUpdateProject
 } from "../api/projects";
+import { ApiError } from "../api/client";
 import { useAuth } from "./AuthStore";
 import {
   normalizeRelationIds,
@@ -30,6 +31,15 @@ import {
 } from "./projectRelations";
 import { normalizeProjectStatus } from "../projectStatus";
 import { normalizeProjectSubmissionType } from "../projectSubmissionType";
+import {
+  canApplyAuthScopedResponse,
+  createAuthScopeState,
+  getAuthScopedRequestKey,
+  getCurrentAuthRequestScope,
+  isAuthRequestScopeCurrent,
+  syncAuthScopeState
+} from "./authScopedRequest";
+import { getOrCreateInFlight } from "./inFlightDedupe";
 import { shouldAutoLoadDomainStore } from "./routeLoading";
 
 type ProjectCreateInput = Omit<
@@ -52,6 +62,10 @@ type ProjectCreateInput = Omit<
   participantUserIds?: string[];
   dependsOnProjectIds?: string[];
   referenceLegalDocIds?: string[];
+};
+
+type ProjectDetailLoadOptions = {
+  force?: boolean;
 };
 
 export type ProjectsContextValue = {
@@ -84,7 +98,9 @@ export type ProjectsContextValue = {
   replaceProjects: (projects: Project[]) => Promise<void>;
   resetProjects: () => Promise<void>;
   reloadProjects: () => Promise<Project[]>;
+  ensureProject: (id: string, options?: ProjectDetailLoadOptions) => Promise<Project | null>;
   loadProjectDetail: (id: string) => Promise<Project | null>;
+  getProjectDetailErrorStatus: (id: string) => number | undefined;
 };
 
 const ProjectsContext = createContext<ProjectsContextValue | undefined>(undefined);
@@ -280,6 +296,13 @@ function isProjectArchived(project: Project) {
   return Boolean(project.archivedAt || project.isArchived);
 }
 
+function isIncomingProjectOlder(existing: Project | undefined, incoming: Project) {
+  if (!existing?.updatedAt || !incoming.updatedAt) {
+    return false;
+  }
+  return incoming.updatedAt < existing.updatedAt;
+}
+
 const normalizedInitialProjects = sanitizeProjectRelations(initialProjects).projects;
 
 export function ProjectsProvider({ children }: { children: React.ReactNode }) {
@@ -288,17 +311,61 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
   const { actor } = useAuthorization();
   const { logEvent } = useAuditLog();
   const [projects, setProjects] = useState<Project[]>([]);
-  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname, "projects");
+  const projectsRef = useRef<Project[]>([]);
+  const projectDetailInFlightRef = useRef<Map<string, Promise<Project | null>>>(new Map());
+  const projectDetailVersionRef = useRef<Map<string, string>>(new Map());
+  const projectDetailErrorStatusRef = useRef<Map<string, number>>(new Map());
+  const projectDetailRequestSeqRef = useRef(0);
+  const latestProjectDetailSeqByIdRef = useRef<Map<string, number>>(new Map());
+  const authScopeRef = useRef(createAuthScopeState());
+
+  const setProjectsState = useCallback((value: React.SetStateAction<Project[]>) => {
+    setProjects((prev) => {
+      const next = typeof value === "function"
+        ? (value as (previous: Project[]) => Project[])(prev)
+        : value;
+      projectsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    projectsRef.current = projects;
+  }, [projects]);
+
+  const clearProjectUserState = useCallback(() => {
+    setProjectsState([]);
+    projectDetailInFlightRef.current.clear();
+    projectDetailVersionRef.current.clear();
+    projectDetailErrorStatusRef.current.clear();
+    latestProjectDetailSeqByIdRef.current.clear();
+    clearPersistedValue(PROJECTS_STORAGE_KEY);
+  }, [setProjectsState]);
+
+  useLayoutEffect(() => {
+    const result = syncAuthScopeState(authScopeRef.current, authUser);
+    if (result.shouldClearStore) {
+      clearProjectUserState();
+    }
+  }, [authUser, clearProjectUserState]);
 
   const reloadProjects = useCallback(async () => {
     if (!authUser) {
-      setProjects([]);
+      setProjectsState([]);
       clearPersistedValue(PROJECTS_STORAGE_KEY);
+      return [];
+    }
+    const requestScope = getCurrentAuthRequestScope(authScopeRef.current);
+    if (!requestScope || requestScope.userId !== authUser.id) {
       return [];
     }
 
     const next = normalizeProjects(await listProjects());
-    setProjects((prev) => {
+    if (!isAuthRequestScopeCurrent(authScopeRef.current, requestScope)) {
+      return [];
+    }
+    setProjectsState((prev) => {
       const previousById = new Map(prev.map((project) => [project.id, project] as const));
       return sanitizeProjectRelations(
         next.map((project) => ({
@@ -306,45 +373,108 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
           detailedDescription:
             project.detailedDescription !== undefined
               ? project.detailedDescription
-              : previousById.get(project.id)?.detailedDescription
+              : previousById.get(project.id)?.updatedAt === project.updatedAt
+              ? previousById.get(project.id)?.detailedDescription
+              : undefined
         }))
       ).projects;
     });
+    next.forEach((project) => {
+      const loadedVersion = projectDetailVersionRef.current.get(project.id);
+      if (loadedVersion && loadedVersion !== project.updatedAt) {
+        projectDetailVersionRef.current.delete(project.id);
+      }
+    });
     clearPersistedValue(PROJECTS_STORAGE_KEY);
     return next;
-  }, [authUser]);
+  }, [authUser, setProjectsState]);
 
-  const loadProjectDetail = useCallback(
-    async (id: string) => {
+  const ensureProject = useCallback(
+    async (id: string, options: ProjectDetailLoadOptions = {}) => {
       if (!authUser) {
         return null;
       }
-
-      try {
-        const project = normalizeProject(await apiGetProject(id), 0);
-        if (!project) {
-          return null;
-        }
-
-        setProjects((prev) => {
-          const exists = prev.some((item) => item.id === project.id);
-          const merged = exists
-            ? prev.map((item) => (item.id === project.id ? { ...item, ...project } : item))
-            : [project, ...prev];
-          return sanitizeProjectRelations(merged).projects;
-        });
-        clearPersistedValue(PROJECTS_STORAGE_KEY);
-        return project;
-      } catch {
+      const requestScope = getCurrentAuthRequestScope(authScopeRef.current);
+      if (!requestScope || requestScope.userId !== authUser.id) {
         return null;
       }
+      const projectId = id.trim();
+      if (!projectId) {
+        return null;
+      }
+
+      const cached = projectsRef.current.find((project) => project.id === projectId);
+      if (
+        !options.force &&
+        cached &&
+        projectDetailVersionRef.current.get(projectId) === cached.updatedAt
+      ) {
+        return cached;
+      }
+
+      const inFlightKey = getAuthScopedRequestKey(requestScope, projectId);
+      return getOrCreateInFlight(projectDetailInFlightRef.current, inFlightKey, async () => {
+        const requestSeq = projectDetailRequestSeqRef.current + 1;
+        projectDetailRequestSeqRef.current = requestSeq;
+        latestProjectDetailSeqByIdRef.current.set(projectId, requestSeq);
+        projectDetailErrorStatusRef.current.delete(projectId);
+
+        try {
+          const project = normalizeProject(await apiGetProject(projectId), 0);
+          if (!project) {
+            return null;
+          }
+
+          const latestSeq = latestProjectDetailSeqByIdRef.current.get(projectId);
+          if (!isAuthRequestScopeCurrent(authScopeRef.current, requestScope)) {
+            return null;
+          }
+          if (!canApplyAuthScopedResponse(authScopeRef.current, requestScope, latestSeq, requestSeq)) {
+            return projectsRef.current.find((item) => item.id === projectId) ?? null;
+          }
+
+          const existing = projectsRef.current.find((item) => item.id === project.id);
+          if (isIncomingProjectOlder(existing, project)) {
+            return existing ?? project;
+          }
+
+          setProjectsState((prev) => {
+            const exists = prev.some((item) => item.id === project.id);
+            const merged = exists
+              ? prev.map((item) => (item.id === project.id ? { ...item, ...project } : item))
+              : [project, ...prev];
+            return sanitizeProjectRelations(merged).projects;
+          });
+          projectDetailVersionRef.current.set(project.id, project.updatedAt);
+          projectDetailErrorStatusRef.current.delete(project.id);
+          clearPersistedValue(PROJECTS_STORAGE_KEY);
+          return project;
+        } catch (error) {
+          const latestSeq = latestProjectDetailSeqByIdRef.current.get(projectId);
+          if (error instanceof ApiError && canApplyAuthScopedResponse(
+            authScopeRef.current,
+            requestScope,
+            latestSeq,
+            requestSeq
+          )) {
+            projectDetailErrorStatusRef.current.set(projectId, error.status);
+          }
+          return null;
+        }
+      });
     },
-    [authUser]
+    [authUser, setProjectsState]
   );
+
+  const loadProjectDetail = useCallback((id: string) => ensureProject(id), [ensureProject]);
+
+  const getProjectDetailErrorStatus = useCallback((id: string) => {
+    return projectDetailErrorStatusRef.current.get(id.trim());
+  }, []);
 
   useEffect(() => {
     if (!authUser) {
-      setProjects([]);
+      setProjectsState([]);
       clearPersistedValue(PROJECTS_STORAGE_KEY);
       return;
     }
@@ -353,10 +483,10 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
     }
 
     void reloadProjects().catch(() => {
-      setProjects([]);
+      setProjectsState([]);
       clearPersistedValue(PROJECTS_STORAGE_KEY);
     });
-  }, [authUser, reloadProjects, shouldAutoLoad]);
+  }, [authUser, reloadProjects, setProjectsState, shouldAutoLoad]);
 
   const addProject = useCallback(
     async (input: ProjectCreateInput) => {
@@ -404,7 +534,9 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
           return false;
         }
 
-        setProjects((prev) => sanitizeProjectRelations([createdProject, ...prev]).projects);
+        setProjectsState((prev) => sanitizeProjectRelations([createdProject, ...prev]).projects);
+        projectDetailVersionRef.current.set(createdProject.id, createdProject.updatedAt);
+        projectDetailErrorStatusRef.current.delete(createdProject.id);
         clearPersistedValue(PROJECTS_STORAGE_KEY);
         logEvent({
           actorLabel: "Demo User",
@@ -418,7 +550,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
     },
-    [actor, logEvent, projects]
+    [actor, logEvent, projects, setProjectsState]
   );
 
   const updateProject = useCallback(
@@ -495,11 +627,13 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
           return false;
         }
 
-        setProjects((prev) =>
+        setProjectsState((prev) =>
           sanitizeProjectRelations(
             prev.map((project) => (project.id === id ? updatedProject : project))
           ).projects
         );
+        projectDetailVersionRef.current.set(updatedProject.id, updatedProject.updatedAt);
+        projectDetailErrorStatusRef.current.delete(updatedProject.id);
         clearPersistedValue(PROJECTS_STORAGE_KEY);
 
         logEvent({
@@ -514,7 +648,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
     },
-    [actor, logEvent, projects]
+    [actor, logEvent, projects, setProjectsState]
   );
 
   const archiveProject = useCallback(
@@ -533,9 +667,11 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
           return false;
         }
 
-        setProjects((prev) =>
+        setProjectsState((prev) =>
           prev.map((project) => (project.id === id ? updatedProject : project))
         );
+        projectDetailVersionRef.current.set(updatedProject.id, updatedProject.updatedAt);
+        projectDetailErrorStatusRef.current.delete(updatedProject.id);
         clearPersistedValue(PROJECTS_STORAGE_KEY);
         logEvent({
           actorLabel: "Demo User",
@@ -549,7 +685,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
     },
-    [actor, logEvent, projects]
+    [actor, logEvent, projects, setProjectsState]
   );
 
   const restoreProject = useCallback(
@@ -568,9 +704,11 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
           return false;
         }
 
-        setProjects((prev) =>
+        setProjectsState((prev) =>
           prev.map((project) => (project.id === id ? updatedProject : project))
         );
+        projectDetailVersionRef.current.set(updatedProject.id, updatedProject.updatedAt);
+        projectDetailErrorStatusRef.current.delete(updatedProject.id);
         clearPersistedValue(PROJECTS_STORAGE_KEY);
         logEvent({
           actorLabel: "Demo User",
@@ -584,7 +722,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
         return false;
       }
     },
-    [actor, logEvent, projects]
+    [actor, logEvent, projects, setProjectsState]
   );
 
   const setOwner = useCallback(
@@ -767,15 +905,19 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
 
   const replaceProjects = useCallback(async (value: Project[]) => {
     const replaced = normalizeProjects(await bulkReplaceProjects(normalizeProjects(value)));
-    setProjects(replaced);
+    setProjectsState(replaced);
+    projectDetailVersionRef.current.clear();
+    projectDetailErrorStatusRef.current.clear();
     clearPersistedValue(PROJECTS_STORAGE_KEY);
-  }, []);
+  }, [setProjectsState]);
 
   const resetProjects = useCallback(async () => {
     const replaced = normalizeProjects(await bulkReplaceProjects(normalizedInitialProjects));
-    setProjects(replaced);
+    setProjectsState(replaced);
+    projectDetailVersionRef.current.clear();
+    projectDetailErrorStatusRef.current.clear();
     clearPersistedValue(PROJECTS_STORAGE_KEY);
-  }, []);
+  }, [setProjectsState]);
 
   const value = useMemo(
     () => ({
@@ -797,7 +939,9 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       replaceProjects,
       resetProjects,
       reloadProjects,
-      loadProjectDetail
+      ensureProject,
+      loadProjectDetail,
+      getProjectDetailErrorStatus
     }),
     [
       addExternalParticipant,
@@ -805,6 +949,8 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       addProjectAttachment,
       archiveExternalParticipant,
       archiveProject,
+      ensureProject,
+      getProjectDetailErrorStatus,
       loadProjectDetail,
       projects,
       reloadProjects,

@@ -250,7 +250,7 @@ export function ScopesProvider({ children }: { children: React.ReactNode }) {
   });
 
   const { companies, sites, facilities } = scopeData;
-  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname, "scopes");
 
   const reloadScopes = useCallback(async () => {
     if (!authUser || authUser.type === "EXTERNAL") {

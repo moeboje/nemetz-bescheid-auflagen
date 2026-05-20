@@ -197,7 +197,7 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
   const { user: authUser } = useAuth();
   const location = useLocation();
   const [users, setUsers] = useState<User[]>([]);
-  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname, "users");
   const isLegacyAdminRoot = isLegacyAdminRootPath(location.pathname);
   const permissionKeys = Array.isArray(authUser?.effectivePermissions) ? authUser.effectivePermissions : [];
   const canManageUsers = Boolean(

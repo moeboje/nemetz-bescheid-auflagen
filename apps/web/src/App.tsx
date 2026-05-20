@@ -53,6 +53,7 @@ import { ProjectsProvider } from "./state/ProjectsStore";
 import { AuthoritiesProvider } from "./state/AuthoritiesStore";
 import { UsersProvider, useUsers } from "./state/UsersStore";
 import { LegalDocsProvider } from "./state/LegalDocsStore";
+import { DocumentsProvider } from "./state/DocumentsStore";
 import { ObligationsProvider } from "./state/ObligationsStore";
 import { DeadlinesProvider } from "./state/DeadlinesStore";
 import { TasksProvider } from "./state/TasksStore";
@@ -820,19 +821,21 @@ export default function App() {
                       <AuditLogProvider>
                         <ProcedureMasterDataProvider>
                           <ProjectsProvider>
-                            <LegalDocsProvider>
-                              <ObligationsProvider>
-                                <DeadlinesProvider>
-                                  <TaskStateProvider>
-                                    <TasksProvider>
-                                      <NotificationsProvider>
-                                        <AppRouter />
-                                      </NotificationsProvider>
-                                    </TasksProvider>
-                                  </TaskStateProvider>
-                                </DeadlinesProvider>
-                              </ObligationsProvider>
-                            </LegalDocsProvider>
+                            <DocumentsProvider>
+                              <LegalDocsProvider>
+                                <ObligationsProvider>
+                                  <DeadlinesProvider>
+                                    <TaskStateProvider>
+                                      <TasksProvider>
+                                        <NotificationsProvider>
+                                          <AppRouter />
+                                        </NotificationsProvider>
+                                      </TasksProvider>
+                                    </TaskStateProvider>
+                                  </DeadlinesProvider>
+                                </ObligationsProvider>
+                              </LegalDocsProvider>
+                            </DocumentsProvider>
                           </ProjectsProvider>
                         </ProcedureMasterDataProvider>
                       </AuditLogProvider>

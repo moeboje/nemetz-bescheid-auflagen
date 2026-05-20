@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import {
   archiveExternalOrganization,
   createExternalOrganization,
@@ -10,6 +11,10 @@ import {
   type ExternalOrganizationsQuery
 } from "../api/externalOrgs";
 import { useAuth } from "./AuthStore";
+import {
+  canUserLookupExternalOrgs,
+  shouldAutoLoadExternalOrgsLookup
+} from "./externalOrgsLookupGuards";
 
 type ExternalOrgsContextValue = {
   externalOrgs: ExternalOrganization[];
@@ -42,20 +47,22 @@ type ExternalOrgsContextValue = {
 const ExternalOrgsContext = createContext<ExternalOrgsContextValue | undefined>(undefined);
 let externalOrgsLookupInFlight: Promise<ExternalOrganization[]> | null = null;
 
+export {
+  canUserLookupExternalOrgs,
+  shouldAutoLoadExternalOrgsLookup,
+  type ExternalOrgsLookupUser
+} from "./externalOrgsLookupGuards";
+
 function sortExternalOrgs(rows: ExternalOrganization[]) {
   return [...rows].sort((left, right) => left.name.localeCompare(right.name));
 }
 
 export function ExternalOrgsProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
+  const location = useLocation();
   const [externalOrgs, setExternalOrgs] = useState<ExternalOrganization[]>([]);
-  const permissionKeys = Array.isArray(user?.effectivePermissions) ? user.effectivePermissions : [];
-  const hasAdminAccess = permissionKeys.includes("admin.access");
-  const canLookupExternalOrgs =
-    hasAdminAccess &&
-    (permissionKeys.includes("externalOrgs.view") ||
-      permissionKeys.includes("externalOrgs.manage") ||
-      permissionKeys.includes("users.manage"));
+  const shouldAutoLoadLookup = shouldAutoLoadExternalOrgsLookup(location.pathname);
+  const canLookupExternalOrgs = canUserLookupExternalOrgs(user);
 
   const loadExternalOrgs = useCallback(async (query: ExternalOrganizationsQuery = {}) => {
     return listExternalOrganizations(query);
@@ -86,10 +93,14 @@ export function ExternalOrgsProvider({ children }: { children: React.ReactNode }
       return;
     }
 
+    if (!shouldAutoLoadLookup) {
+      return;
+    }
+
     void reloadExternalOrgs().catch(() => {
       setExternalOrgs([]);
     });
-  }, [canLookupExternalOrgs, reloadExternalOrgs, user]);
+  }, [canLookupExternalOrgs, reloadExternalOrgs, shouldAutoLoadLookup, user]);
 
   const createExternalOrgEntry = useCallback(
     async (input: {

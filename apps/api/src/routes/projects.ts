@@ -23,9 +23,10 @@ import {
   getProjectAccessFacts,
   hasGlobalProjectReadAccess,
   isInternalUser,
-  requireProjectDomainRead,
+  requireProjectDomainReadPermission,
   requireProjectDomainWrite,
   toProjectAccessEntryDto,
+  type ProjectAccessFacts,
   type ProjectAccessSource
 } from "../projectAccess.js";
 import { hasPermission } from "../accessControl.js";
@@ -998,6 +999,14 @@ async function annotateProjectForUser(
   project: ProjectDto
 ) {
   const facts = await getProjectAccessFacts(db, user, project.id);
+  return annotateProjectForUserWithFacts(user, project, facts);
+}
+
+function annotateProjectForUserWithFacts(
+  user: RouteUser,
+  project: ProjectDto,
+  facts: ProjectAccessFacts
+) {
   const canWriteProject = isInternalUser(user) && facts.canWrite;
   return {
     ...project,
@@ -1711,33 +1720,46 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
 
   router.get("/projects/:id", async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const perf = createPerfTimer(config, req, "projects.detail");
       applyNoStoreHeaders(res);
 
-      const user = await requireAuthenticatedRouteUser(req, res, prisma);
+      const user = await perf.measure("auth", async () => requireAuthenticatedRouteUser(req, res, prisma));
       if (!user) {
         return;
       }
 
-      const canReadProject = await requireProjectDomainRead({
-        db: prisma,
+      if (!requireProjectDomainReadPermission({
         user,
-        projectId: req.params.id,
         domain: "projects",
         res
-      });
-      if (!canReadProject) {
+      })) {
         return;
       }
 
-      const project = await findProjectSnapshotById(prisma, req.params.id);
+      const accessFacts = await perf.measure("project access", async () =>
+        getProjectAccessFacts(prisma, user, req.params.id)
+      );
+      if (!accessFacts.exists) {
+        res.status(404).json({ ok: false, message: "Project not found." });
+        return;
+      }
+      if (!accessFacts.canRead) {
+        res.status(403).json({ ok: false, message: "Forbidden." });
+        return;
+      }
+
+      const project = await perf.measure("project query", async () =>
+        findProjectSnapshotById(prisma, req.params.id)
+      );
       if (!project) {
         res.status(404).json({ ok: false, message: "Project not found." });
         return;
       }
 
+      perf.mark("response");
       res.json({
         ok: true,
-        project: await annotateProjectForUser(prisma, user, project)
+        project: annotateProjectForUserWithFacts(user, project, accessFacts)
       });
     } catch (error) {
       if (

@@ -201,7 +201,7 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
   });
 
   const { authorities, contacts } = authorityData;
-  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname, "authorities");
 
   const reloadAuthorities = useCallback(async () => {
     if (!authUser || authUser.type === "EXTERNAL") {

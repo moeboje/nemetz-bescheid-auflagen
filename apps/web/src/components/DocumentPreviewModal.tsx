@@ -3,16 +3,21 @@ import { Button, Modal } from "@nemetz/ui";
 import { fetchDocumentBlob, getDocumentApiErrorCode } from "../api/documents";
 import { t } from "../i18n";
 import type { DocumentDto } from "../api/documents";
+import type { DocumentsMutationScope } from "../state/DocumentsStore";
 import { getStoredMimePreviewKind, isStoredMimePreviewable } from "../utils/documentPresentation";
 import PdfViewer from "./PdfViewer";
+import { notifyDocumentPreviewMissingCallback } from "./documentPreviewMissingCallbacks";
 
 type DocumentPreviewModalProps = {
   open: boolean;
   document?: DocumentDto;
   onClose: () => void;
   onDownload: (document: DocumentDto) => void;
-  onFileMissing?: (document: DocumentDto) => void;
-  onDocumentNotFound?: (document: DocumentDto) => void;
+  captureMutationScope?: (document: DocumentDto) => DocumentsMutationScope | null;
+  onFileMissing?: (document: DocumentDto, mutationScope: DocumentsMutationScope) => void;
+  onDocumentNotFound?: (document: DocumentDto, mutationScope: DocumentsMutationScope) => void;
+  onPreviewFileMissing?: (document: DocumentDto) => void;
+  onPreviewDocumentNotFound?: (document: DocumentDto) => void;
 };
 
 export default function DocumentPreviewModal({
@@ -20,13 +25,36 @@ export default function DocumentPreviewModal({
   document,
   onClose,
   onDownload,
+  captureMutationScope,
   onFileMissing,
-  onDocumentNotFound
+  onDocumentNotFound,
+  onPreviewFileMissing,
+  onPreviewDocumentNotFound
 }: DocumentPreviewModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
   const [fileMissing, setFileMissing] = useState(false);
   const [objectUrl, setObjectUrl] = useState("");
+  const captureMutationScopeRef = React.useRef(captureMutationScope);
+  const missingCallbacksRef = React.useRef({
+    onFileMissing,
+    onDocumentNotFound,
+    onPreviewFileMissing,
+    onPreviewDocumentNotFound
+  });
+
+  React.useEffect(() => {
+    captureMutationScopeRef.current = captureMutationScope;
+  }, [captureMutationScope]);
+
+  React.useEffect(() => {
+    missingCallbacksRef.current = {
+      onFileMissing,
+      onDocumentNotFound,
+      onPreviewFileMissing,
+      onPreviewDocumentNotFound
+    };
+  }, [onDocumentNotFound, onFileMissing, onPreviewDocumentNotFound, onPreviewFileMissing]);
 
   React.useEffect(() => {
     if (!open || !document || !isStoredMimePreviewable(document)) {
@@ -44,6 +72,7 @@ export default function DocumentPreviewModal({
 
     let isCancelled = false;
     let nextObjectUrl = "";
+    const mutationScope = captureMutationScopeRef.current?.(document) ?? null;
 
     setLoading(true);
     setError(false);
@@ -67,11 +96,14 @@ export default function DocumentPreviewModal({
           return;
         }
         const errorCode = getDocumentApiErrorCode(error);
-        if (errorCode === "FILE_MISSING") {
+        const missingResult = notifyDocumentPreviewMissingCallback(
+          errorCode,
+          document,
+          mutationScope,
+          missingCallbacksRef.current
+        );
+        if (missingResult === "file-missing") {
           setFileMissing(true);
-          onFileMissing?.(document);
-        } else if (errorCode === "DOCUMENT_NOT_FOUND") {
-          onDocumentNotFound?.(document);
         }
         setError(true);
       })
@@ -87,7 +119,7 @@ export default function DocumentPreviewModal({
         URL.revokeObjectURL(nextObjectUrl);
       }
     };
-  }, [document, onDocumentNotFound, onFileMissing, open]);
+  }, [document, open]);
 
   React.useEffect(
     () => () => {

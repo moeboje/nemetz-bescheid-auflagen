@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import {
   archiveAdminRole,
   createAdminRole,
@@ -10,6 +11,7 @@ import {
   type AdminRolesQuery
 } from "../api/roles";
 import { useAuth } from "./AuthStore";
+import { isProjectDetailRoutePath } from "./routeLoading";
 
 type RolesContextValue = {
   roles: AdminRole[];
@@ -40,7 +42,9 @@ function sortRoles(rows: AdminRole[]) {
 
 export function RolesProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
+  const location = useLocation();
   const [roles, setRoles] = useState<AdminRole[]>([]);
+  const shouldAutoLoadLookup = !isProjectDetailRoutePath(location.pathname);
   const permissionKeys = Array.isArray(user?.effectivePermissions) ? user.effectivePermissions : [];
   const hasAdminAccess = permissionKeys.includes("admin.access");
   const canLookupRoles =
@@ -55,7 +59,7 @@ export function RolesProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const reloadRoles = useCallback(async () => {
-    if (!user || !canLookupRoles) {
+    if (!user || !canLookupRoles || !shouldAutoLoadLookup) {
       setRoles([]);
       return [];
     }
@@ -71,10 +75,10 @@ export function RolesProvider({ children }: { children: React.ReactNode }) {
     const next = await rolesLookupInFlight;
     setRoles(next);
     return next;
-  }, [canLookupRoles, user]);
+  }, [canLookupRoles, shouldAutoLoadLookup, user]);
 
   useEffect(() => {
-    if (!user || !canLookupRoles) {
+    if (!user || !canLookupRoles || !shouldAutoLoadLookup) {
       setRoles([]);
       return;
     }
@@ -82,7 +86,7 @@ export function RolesProvider({ children }: { children: React.ReactNode }) {
     void reloadRoles().catch(() => {
       setRoles([]);
     });
-  }, [canLookupRoles, reloadRoles, user]);
+  }, [canLookupRoles, reloadRoles, shouldAutoLoadLookup, user]);
 
   const createRoleEntry = useCallback(
     async (input: { key: string; labelDe: string; descriptionDe?: string; permissionKeys?: string[] }) => {

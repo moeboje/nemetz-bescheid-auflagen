@@ -83,6 +83,7 @@ import {
 } from "./notificationSettings.js";
 import {
   canReadProjectDomain,
+  getProjectAccessFacts,
   hasDomainReadPermission,
   hasGlobalProjectReadAccess,
   requireProjectDomainWrite,
@@ -1133,6 +1134,64 @@ const documentDtoInclude = {
   }
 };
 
+const documentDtoSelect = {
+  id: true,
+  ownerType: true,
+  ownerId: true,
+  category: true,
+  fileVersion: true,
+  filename: true,
+  originalFilename: true,
+  mimeType: true,
+  sizeBytes: true,
+  createdAt: true,
+  createdByUserId: true,
+  createdByUser: {
+    select: {
+      firstName: true,
+      lastName: true
+    }
+  },
+  approvalRequests: {
+    orderBy: {
+      createdAt: "desc" as const
+    },
+    take: 10,
+    select: {
+      id: true,
+      documentId: true,
+      fileVersion: true,
+      status: true,
+      requestedByUserId: true,
+      requestedAt: true,
+      requestedComment: true,
+      approverUserId: true,
+      decidedByUserId: true,
+      decidedAt: true,
+      decisionComment: true,
+      updatedAt: true,
+      requestedByUser: {
+        select: {
+          firstName: true,
+          lastName: true
+        }
+      },
+      approverUser: {
+        select: {
+          firstName: true,
+          lastName: true
+        }
+      },
+      decidedByUser: {
+        select: {
+          firstName: true,
+          lastName: true
+        }
+      }
+    }
+  }
+} satisfies Prisma.DocumentSelect;
+
 type DocumentWithDtoRelations = Prisma.DocumentGetPayload<{ include: typeof documentDtoInclude }>;
 
 function getCurrentDocumentApprovalRequest(document: {
@@ -2032,6 +2091,22 @@ async function assertCanReadDocumentOwner(
   const permission = getDocumentOwnerReadPermission(ownerType);
   const domain = documentOwnerDomain(ownerType);
   if (!permission || !hasDomainReadPermission(user, domain)) {
+    res.status(403).json({
+      ok: false,
+      message: "Forbidden."
+    });
+    return false;
+  }
+
+  if (ownerType.trim().toUpperCase() === "PROJECT") {
+    const facts = await getProjectAccessFacts(prisma, user, ownerId);
+    if (!facts.exists) {
+      res.status(404).json({ ok: false, message: "Document owner not found." });
+      return false;
+    }
+    if (facts.canRead) {
+      return true;
+    }
     res.status(403).json({
       ok: false,
       message: "Forbidden."
@@ -3728,7 +3803,7 @@ export function createApp(config: AppConfig = loadConfig()) {
           orderBy: {
             createdAt: "desc"
           },
-          include: documentDtoInclude
+          select: documentDtoSelect
         })
       );
 

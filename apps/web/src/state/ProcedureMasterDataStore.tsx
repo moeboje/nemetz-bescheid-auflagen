@@ -127,7 +127,7 @@ function mergeById<T extends { id: string }>(items: T[], incoming: T) {
 export function ProcedureMasterDataProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const location = useLocation();
-  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname, "procedureMasterData");
   const [snapshot, setSnapshot] = useState<ProcedureMasterDataSnapshot>(emptySnapshot);
   const [hasLoadedProcedureMasterData, setHasLoadedProcedureMasterData] = useState(false);
   const [isProcedureMasterDataLoading, setIsProcedureMasterDataLoading] = useState(false);

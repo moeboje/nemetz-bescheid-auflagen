@@ -201,7 +201,7 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
   const { getScopeLabel } = useScopes();
   const [legalDocs, setLegalDocs] = useState<LegalDoc[]>([]);
   const [writableProjectOptions, setWritableProjectOptions] = useState<DomainProjectOption[]>([]);
-  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname, "legalDocs");
 
   const reloadLegalDocs = useCallback(async () => {
     if (!authUser || authUser.type === "EXTERNAL") {

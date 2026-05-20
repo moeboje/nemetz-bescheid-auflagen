@@ -44,6 +44,7 @@ type TaskStateContextValue = {
   cleanupOld: (horizonDays?: number) => Promise<number>;
   replaceTaskState: (value: TaskStateMap) => Promise<void>;
   resetTaskState: () => Promise<void>;
+  reloadTaskState: () => Promise<TaskStateMap>;
 };
 
 const TaskStateContext = createContext<TaskStateContextValue | undefined>(undefined);
@@ -252,7 +253,7 @@ export function TaskStateProvider({ children }: { children: React.ReactNode }) {
   const { currentUser, getUserLabel } = useUsers();
   const [taskState, setTaskState] = useState<TaskStateMap>({});
   const legacyCleanupReadyRef = useRef(false);
-  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname, "taskState");
 
   const clearLegacyTaskStateIfReady = useCallback(() => {
     if (legacyCleanupReadyRef.current) {
@@ -525,7 +526,8 @@ export function TaskStateProvider({ children }: { children: React.ReactNode }) {
       reopen,
       cleanupOld,
       replaceTaskState,
-      resetTaskState
+      resetTaskState,
+      reloadTaskState
     }),
     [
       addEvidence,
@@ -534,6 +536,7 @@ export function TaskStateProvider({ children }: { children: React.ReactNode }) {
       markDoneWithEvidence,
       markAttachmentUnavailable,
       reopen,
+      reloadTaskState,
       replaceTaskState,
       resetTaskState,
       setTaskStatus,
