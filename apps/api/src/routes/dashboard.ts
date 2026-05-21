@@ -542,13 +542,15 @@ async function findObligationSummaryRows(
   prisma: PrismaClient,
   where: Prisma.ObligationWhereInput,
   take: number,
-  orderBy: Prisma.ObligationOrderByWithRelationInput[]
+  orderBy: Prisma.ObligationOrderByWithRelationInput[],
+  skip = 0
 ): Promise<DashboardObligationRow[]> {
   return prisma.obligation.findMany({
     where,
     select: obligationSummarySelect,
     orderBy,
-    take
+    take,
+    ...(skip > 0 ? { skip } : {})
   }) as Promise<DashboardObligationRow[]>;
 }
 
@@ -1068,14 +1070,7 @@ async function computeSingleOccurrenceObligationAggregates(input: {
         AND o."firstDueDate" IS NOT NULL
         AND ${validDateOnlySql(Prisma.sql`o."firstDueDate"`)}
         AND o."firstDueDate" <= ${taskHorizonEnd}
-        AND (
-          o."scheduleType" <> 'ONCE_THEN_RECURRING'
-          OR o."recurrenceEndDate" IS NULL
-          OR (
-            ${validDateOnlySql(Prisma.sql`o."recurrenceEndDate"`)}
-            AND o."firstDueDate" <= o."recurrenceEndDate"
-          )
-        )
+        AND ${validOnceThenRecurringInitialSql()}
     )
     SELECT
       COUNT(*) FILTER (
@@ -1580,6 +1575,72 @@ function collectRecurringReminderDisplayCandidates(input: {
   return { tasks, diagnostics };
 }
 
+async function loadRecurringOverdueObligationDisplayCandidates(input: {
+  prisma: PrismaClient;
+  recurringWhere: Prisma.ObligationWhereInput;
+  today: string;
+  completionStart: string;
+  overdueEnd: string;
+  take: number;
+}) {
+  const { prisma, recurringWhere, today, completionStart, overdueEnd, take } = input;
+  const tasks: GeneratedObligationTask[] = [];
+  const diagnostics = emptyDisplayCandidateDiagnostics();
+  let rowOffset = 0;
+  let remainingOccurrenceScans = MAX_DISPLAY_OCCURRENCE_SCANS;
+
+  while (
+    tasks.length < take
+    && rowOffset < MAX_DISPLAY_CANDIDATE_ROW_SCAN_LIMIT
+    && remainingOccurrenceScans > 0
+  ) {
+    const pageTake = Math.min(
+      DISPLAY_CANDIDATE_PAGE_SIZE,
+      MAX_DISPLAY_CANDIDATE_ROW_SCAN_LIMIT - rowOffset
+    );
+    const recurringRows = await findObligationSummaryRows(
+      prisma,
+      recurringWhere,
+      pageTake,
+      [{ firstDueDate: "asc" }, { title: "asc" }, { id: "asc" }],
+      rowOffset
+    );
+    rowOffset += recurringRows.length;
+    if (recurringRows.length === 0) {
+      break;
+    }
+
+    const completedRows = await loadCompletedRecurringTaskStateRows(
+      prisma,
+      recurringRows.map((row) => row.id),
+      completionStart,
+      overdueEnd
+    );
+    diagnostics.taskStateIdsRequested += completedRows.length;
+    const recurringResult = collectRecurringOverdueDisplayCandidates({
+      obligations: recurringRows,
+      today,
+      completionStart,
+      overdueEnd,
+      completedTaskInstanceIds: new Set(completedRows.map((row) => row.taskInstanceId)),
+      maxOccurrenceScans: remainingOccurrenceScans
+    });
+    mergeDisplayCandidateDiagnostics(diagnostics, recurringResult.diagnostics);
+    remainingOccurrenceScans -= recurringResult.diagnostics.occurrenceCandidatesScanned;
+    tasks.push(...recurringResult.tasks);
+
+    if (recurringResult.diagnostics.guardReached || recurringRows.length < pageTake) {
+      break;
+    }
+  }
+
+  if (tasks.length < take && rowOffset >= MAX_DISPLAY_CANDIDATE_ROW_SCAN_LIMIT) {
+    diagnostics.guardReached = true;
+  }
+
+  return { tasks, diagnostics };
+}
+
 async function loadOverdueObligationDisplayCandidates(input: {
   prisma: PrismaClient;
   accessScope: AccessScope;
@@ -1608,37 +1669,25 @@ async function loadOverdueObligationDisplayCandidates(input: {
       today,
       take
     }),
-    findObligationSummaryRows(
+    loadRecurringOverdueObligationDisplayCandidates({
       prisma,
       recurringWhere,
-      take,
-      [{ firstDueDate: "asc" }, { title: "asc" }, { id: "asc" }]
-    )
+      today,
+      completionStart,
+      overdueEnd,
+      take
+    })
   ]);
+
+  const recurringResult = recurringRows;
 
   diagnostics.rowsScanned += singleRows.length;
   diagnostics.occurrenceCandidatesScanned += singleRows.length;
   diagnostics.taskStateIdsRequested += singleRows.length;
+  mergeDisplayCandidateDiagnostics(diagnostics, recurringResult.diagnostics);
   const singleTasks = singleRows
     .map((row) => (row.firstDueDate ? createGeneratedObligationTask(row, row.firstDueDate) : undefined))
     .filter((task): task is GeneratedObligationTask => Boolean(task));
-
-  const completedRows = await loadCompletedRecurringTaskStateRows(
-    prisma,
-    recurringRows.map((row) => row.id),
-    completionStart,
-    overdueEnd
-  );
-  diagnostics.taskStateIdsRequested += completedRows.length;
-  const recurringResult = collectRecurringOverdueDisplayCandidates({
-    obligations: recurringRows,
-    today,
-    completionStart,
-    overdueEnd,
-    completedTaskInstanceIds: new Set(completedRows.map((row) => row.taskInstanceId)),
-    maxOccurrenceScans: MAX_DISPLAY_OCCURRENCE_SCANS
-  });
-  mergeDisplayCandidateDiagnostics(diagnostics, recurringResult.diagnostics);
 
   return {
     tasks: sortGeneratedObligationTasks([...singleTasks, ...recurringResult.tasks]).slice(0, take),
@@ -1690,6 +1739,7 @@ async function loadReminderObligationDisplayCandidates(input: {
   const singleTasks = singleRows
     .map((row) => (row.firstDueDate ? createGeneratedObligationTask(row, row.firstDueDate) : undefined))
     .filter((task): task is GeneratedObligationTask => Boolean(task));
+
   const recurringResult = collectRecurringReminderDisplayCandidates({
     obligations: recurringRows,
     today,

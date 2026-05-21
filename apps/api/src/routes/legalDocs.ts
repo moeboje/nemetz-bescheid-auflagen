@@ -61,6 +61,8 @@ type LegalDocDto = {
 };
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
+const LEGAL_DOC_LOOKUP_LIMIT = 200;
+const LEGAL_DOC_LOOKUP_IDS_LIMIT = 200;
 
 const legalDocListSelect = {
   id: true,
@@ -85,6 +87,29 @@ type LegalDocDbRow = Prisma.LegalDocumentGetPayload<{ select: typeof legalDocLis
   detailedDescription?: string | null;
   contentSummary?: string | null;
 };
+
+const legalDocLookupSelect = {
+  id: true,
+  projectId: true,
+  type: true,
+  title: true,
+  shortDescription: true,
+  reference: true,
+  issuedAt: true,
+  authorityId: true,
+  authorityContactId: true,
+  scopeOverride: true,
+  archivedAt: true,
+  isArchived: true,
+  createdAt: true,
+  updatedAt: true
+} satisfies Prisma.LegalDocumentSelect;
+
+type LegalDocLookupDbRow = Prisma.LegalDocumentGetPayload<{ select: typeof legalDocLookupSelect }>;
+type LegalDocLookupDto = Omit<
+  LegalDocDto,
+  "attachments" | "aiExtraction" | "detailedDescription" | "contentSummary"
+>;
 
 const legalDocDetailSelect = {
   ...legalDocListSelect,
@@ -135,6 +160,32 @@ function toOptionalTrimmedString(value: unknown) {
 
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function toIdList(value: unknown, maxIds = LEGAL_DOC_LOOKUP_IDS_LIMIT) {
+  const rawValues = Array.isArray(value)
+    ? value.flatMap((entry) => (typeof entry === "string" ? entry.split(",") : []))
+    : typeof value === "string"
+    ? value.split(",")
+    : [];
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  let exceededLimit = false;
+
+  rawValues.forEach((entry) => {
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      return;
+    }
+    seen.add(trimmed);
+    if (ids.length >= maxIds) {
+      exceededLimit = true;
+      return;
+    }
+    ids.push(trimmed);
+  });
+
+  return { ids, exceededLimit };
 }
 
 function nowStamp() {
@@ -310,6 +361,25 @@ function toLegalDocDto(
   return dto;
 }
 
+function toLegalDocLookupDto(legalDoc: LegalDocLookupDbRow): LegalDocLookupDto {
+  return {
+    id: legalDoc.id,
+    projectId: legalDoc.projectId,
+    type: legalDoc.type,
+    title: legalDoc.title,
+    shortDescription: legalDoc.shortDescription ?? "",
+    reference: legalDoc.reference ?? "",
+    issuedAt: legalDoc.issuedAt ?? "",
+    authorityId: legalDoc.authorityId ?? undefined,
+    authorityContactId: legalDoc.authorityContactId ?? undefined,
+    scopeOverride: normalizeScopeOverride(legalDoc.scopeOverride),
+    archivedAt: legalDoc.archivedAt ? legalDoc.archivedAt.toISOString() : undefined,
+    isArchived: legalDoc.isArchived,
+    createdAt: legalDoc.createdAt.toISOString(),
+    updatedAt: legalDoc.updatedAt.toISOString()
+  };
+}
+
 function toLegalDocCreateInput(input: LegalDocDto): Prisma.LegalDocumentUncheckedCreateInput {
   return {
     id: input.id,
@@ -364,6 +434,100 @@ async function listLegalDocsFromDb(db: DbClient, where?: Prisma.LegalDocumentWhe
   return legalDocs.map((legalDoc) => toLegalDocDto(legalDoc));
 }
 
+function readableLegalDocProjectScope(readableProjectIds: string[] | null): Prisma.LegalDocumentWhereInput {
+  return readableProjectIds === null
+    ? {}
+    : {
+        projectId: {
+          in: readableProjectIds
+        }
+      };
+}
+
+async function loadRequestedLookupLegalDocs(input: {
+  db: DbClient;
+  requestedIds: string[];
+  readableProjectIds: string[] | null;
+}) {
+  if (input.requestedIds.length === 0) {
+    return [] satisfies LegalDocLookupDto[];
+  }
+
+  const rows = await input.db.legalDocument.findMany({
+    where: {
+      AND: [
+        {
+          id: {
+            in: input.requestedIds
+          }
+        },
+        readableLegalDocProjectScope(input.readableProjectIds)
+      ]
+    },
+    select: legalDocLookupSelect,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: input.requestedIds.length
+  });
+  const dtoById = new Map(rows.map((row) => [row.id, toLegalDocLookupDto(row)] as const));
+
+  return input.requestedIds
+    .map((id) => dtoById.get(id))
+    .filter((legalDoc): legalDoc is LegalDocLookupDto => Boolean(legalDoc));
+}
+
+async function loadProjectLookupLegalDocs(input: {
+  db: DbClient;
+  projectId: string;
+  readableProjectIds: string[] | null;
+  excludedIds: string[];
+  take: number;
+}) {
+  if (input.take <= 0) {
+    return [] satisfies LegalDocLookupDto[];
+  }
+
+  if (input.readableProjectIds !== null && !input.readableProjectIds.includes(input.projectId)) {
+    return [] satisfies LegalDocLookupDto[];
+  }
+
+  const rows = await input.db.legalDocument.findMany({
+    where: {
+      AND: [
+        {
+          projectId: input.projectId
+        },
+        input.excludedIds.length > 0
+          ? {
+              id: {
+                notIn: input.excludedIds
+              }
+            }
+          : {}
+      ]
+    },
+    select: legalDocLookupSelect,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: input.take
+  });
+
+  return rows.map((legalDoc) => toLegalDocLookupDto(legalDoc));
+}
+
+function mergeLookupLegalDocs(requestedDocs: LegalDocLookupDto[], projectDocs: LegalDocLookupDto[]) {
+  const seen = new Set<string>();
+  const merged: LegalDocLookupDto[] = [];
+
+  [...requestedDocs, ...projectDocs].forEach((legalDoc) => {
+    if (seen.has(legalDoc.id)) {
+      return;
+    }
+    seen.add(legalDoc.id);
+    merged.push(legalDoc);
+  });
+
+  return merged;
+}
+
 async function listLegalDocsForExport(db: DbClient): Promise<LegalDocDto[]> {
   const legalDocs = await db.legalDocument.findMany({
     select: legalDocDetailSelect,
@@ -377,7 +541,17 @@ async function enrichLegalDocDtosWithProjectAccess(
   db: DbClient,
   user: RouteUser,
   legalDocs: LegalDocDto[]
-): Promise<LegalDocDto[]> {
+): Promise<LegalDocDto[]>;
+async function enrichLegalDocDtosWithProjectAccess(
+  db: DbClient,
+  user: RouteUser,
+  legalDocs: LegalDocLookupDto[]
+): Promise<LegalDocLookupDto[]>;
+async function enrichLegalDocDtosWithProjectAccess<T extends Pick<LegalDocDto, "projectId">>(
+  db: DbClient,
+  user: RouteUser,
+  legalDocs: T[]
+): Promise<Array<T & Pick<LegalDocDto, "projectTitle" | "currentUserCanWriteProject">>> {
   if (legalDocs.length === 0) {
     return legalDocs;
   }
@@ -805,6 +979,68 @@ export function createLegalDocsRouter(prisma: PrismaClient) {
       });
 
       res.json(projects);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/legal-docs/lookup", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      applyNoStoreHeaders(res);
+
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
+      if (!user) {
+        return;
+      }
+
+      if (!requireProjectDomainReadPermission({ user, domain: "legalDocs", res })) {
+        return;
+      }
+
+      const requestedIdList = toIdList(req.query.ids);
+      if (requestedIdList.exceededLimit) {
+        res.status(400).json({
+          ok: false,
+          message: `Too many legal document ids requested. Maximum is ${LEGAL_DOC_LOOKUP_IDS_LIMIT}.`
+        });
+        return;
+      }
+
+      const requestedIds = requestedIdList.ids;
+      const projectId = toOptionalTrimmedString(req.query.projectId);
+      if (requestedIds.length === 0 && !projectId) {
+        res.json({ ok: true, legalDocs: [] });
+        return;
+      }
+
+      const readableProjectIds = await getReadableProjectIdsForDomain(prisma, user, "legalDocs");
+      if (readableProjectIds !== null && readableProjectIds.length === 0) {
+        res.json({ ok: true, legalDocs: [] });
+        return;
+      }
+
+      const requestedDocs = await loadRequestedLookupLegalDocs({
+        db: prisma,
+        requestedIds,
+        readableProjectIds
+      });
+      const remaining = LEGAL_DOC_LOOKUP_LIMIT - requestedDocs.length;
+      const projectDocs =
+        projectId && remaining > 0
+          ? await loadProjectLookupLegalDocs({
+              db: prisma,
+              projectId,
+              readableProjectIds,
+              excludedIds: requestedIds,
+              take: remaining
+            })
+          : [];
+      const legalDocs = mergeLookupLegalDocs(requestedDocs, projectDocs);
+
+      res.json({
+        ok: true,
+        legalDocs: await enrichLegalDocDtosWithProjectAccess(prisma, user, legalDocs)
+      });
     } catch (error) {
       next(error);
     }

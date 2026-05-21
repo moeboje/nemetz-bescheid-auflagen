@@ -29,6 +29,11 @@ type ProjectInput = {
 };
 
 export type ProjectExternalParticipantInput = Project["externalParticipants"][number];
+export type ProjectHistoryDependencies = {
+  legalDocIds: string[];
+  obligationIds: string[];
+  deadlineIds: string[];
+};
 
 export async function listProjects() {
   return apiRequest<Project[]>("/projects");
@@ -37,6 +42,24 @@ export async function listProjects() {
 export async function getProject(id: string) {
   const payload = await apiRequest<{ ok: boolean; project: Project }>(`/projects/${id}`);
   return payload.project;
+}
+
+export async function getProjectRelationLookups(id: string) {
+  const payload = await apiRequest<{ ok: boolean; projects: Project[] }>(
+    `/projects/${id}/relation-lookups`
+  );
+  return payload.projects;
+}
+
+export async function getProjectHistoryDependencies(id: string) {
+  const payload = await apiRequest<{ ok: boolean } & ProjectHistoryDependencies>(
+    `/projects/${id}/history-dependencies`
+  );
+  return {
+    legalDocIds: payload.legalDocIds,
+    obligationIds: payload.obligationIds,
+    deadlineIds: payload.deadlineIds
+  };
 }
 
 export async function createProject(input: ProjectInput) {

@@ -1950,6 +1950,597 @@ describe("Projects submission type", () => {
     assert.deepEqual(await internalAfterRemove.json(), []);
   });
 
+  it("returns scoped project relation lookups for project detail without leaking hidden projects", async () => {
+    await createRole("PROJECT_RELATION_LOOKUP_READER", ["projects.view"]);
+    const user = await createUser({
+      email: "project-relation-lookup@example.com",
+      password: "ValidPassword1!",
+      role: "PROJECT_RELATION_LOOKUP_READER"
+    });
+    const company = await createCompany("Project Relation Lookup Company");
+    const predecessor = await prisma.project.create({
+      data: {
+        id: "project-relation-predecessor",
+        title: "Visible Predecessor",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+    const current = await prisma.project.create({
+      data: {
+        id: "project-relation-current",
+        title: "Current Relation Detail",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [predecessor.id],
+        referenceLegalDocIds: []
+      }
+    });
+    const dependent = await prisma.project.create({
+      data: {
+        id: "project-relation-dependent",
+        title: "Visible Dependent",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [current.id],
+        referenceLegalDocIds: []
+      }
+    });
+    const hiddenDependent = await prisma.project.create({
+      data: {
+        id: "project-relation-hidden",
+        title: "Hidden Dependent",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [current.id],
+        referenceLegalDocIds: []
+      }
+    });
+    await prisma.projectAccess.createMany({
+      data: [current, predecessor, dependent].map((project) => ({
+        projectId: project.id,
+        userId: user.id,
+        accessRole: "PROJECT_VIEWER"
+      }))
+    });
+
+    const cookie = await login(user.email, "ValidPassword1!");
+    const response = await request(`/projects/${current.id}/relation-lookups`, { cookie });
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as {
+      projects: Array<{ id: string; title: string; dependsOnProjectIds?: string[] }>;
+    };
+    const projectsById = new Map(payload.projects.map((project) => [project.id, project] as const));
+
+    assert.equal(projectsById.get(predecessor.id)?.title, predecessor.title);
+    assert.equal(projectsById.get(dependent.id)?.title, dependent.title);
+    assert.deepEqual(projectsById.get(dependent.id)?.dependsOnProjectIds, [current.id]);
+    assert.equal(projectsById.has(hiddenDependent.id), false);
+    assert.doesNotMatch(JSON.stringify(payload), /Hidden Dependent/);
+  });
+
+  it("returns project history dependency ids without child payloads", async () => {
+    await createRole("PROJECT_HISTORY_DEPENDENCY_READER", [
+      "projects.view",
+      "legalDocs.view",
+      "obligations.view",
+      "deadlines.view"
+    ]);
+    const user = await createUser({
+      email: "project-history-dependencies@example.com",
+      password: "ValidPassword1!",
+      role: "PROJECT_HISTORY_DEPENDENCY_READER"
+    });
+    const company = await createCompany("Project History Dependency Company");
+    const project = await prisma.project.create({
+      data: {
+        id: "project-history-dependencies-project",
+        title: "Project History Dependencies",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+    const legalDoc = await prisma.legalDocument.create({
+      data: {
+        id: "project-history-dependencies-legal-doc",
+        projectId: project.id,
+        type: "NOTICE",
+        title: "History Dependency Legal Doc Title",
+        detailedDescription: "History dependency legal doc long text",
+        contentSummary: "History dependency legal doc summary",
+        attachments: [
+          {
+            id: "history-dependency-attachment",
+            filename: "history-dependency.pdf",
+            sizeKb: 123,
+            addedAt: "2026-01-01"
+          }
+        ],
+        aiExtraction: {
+          secretSummary: "AI extraction must not be returned"
+        }
+      }
+    });
+    const obligation = await prisma.obligation.create({
+      data: {
+        id: "project-history-dependencies-obligation",
+        legalDocId: legalDoc.id,
+        title: "History Dependency Obligation Title",
+        infoTextLong: "History dependency obligation long text",
+        level: "MANDATORY",
+        scheduleType: "RECURRING",
+        firstDueDate: "2026-01-15",
+        intervalUnit: "MONTH",
+        intervalValue: 6,
+        emailReminderEnabled: false,
+        evidenceRequirements: {}
+      }
+    });
+    const directDeadline = await prisma.deadline.create({
+      data: {
+        id: "project-history-dependencies-direct-deadline",
+        projectId: project.id,
+        title: "History Dependency Direct Deadline Title",
+        description: "History dependency direct deadline description",
+        dueDate: "2026-02-01",
+        status: "OPEN",
+        emailReminderEnabled: false,
+        evidence: []
+      }
+    });
+    const linkedDeadline = await prisma.deadline.create({
+      data: {
+        id: "project-history-dependencies-linked-deadline",
+        legalDocId: legalDoc.id,
+        title: "History Dependency Linked Deadline Title",
+        description: "History dependency linked deadline description",
+        dueDate: "2026-03-01",
+        status: "OPEN",
+        emailReminderEnabled: false,
+        evidence: []
+      }
+    });
+    await prisma.projectAccess.create({
+      data: {
+        projectId: project.id,
+        userId: user.id,
+        accessRole: "PROJECT_VIEWER"
+      }
+    });
+
+    const cookie = await login(user.email, "ValidPassword1!");
+    const response = await request(`/projects/${project.id}/history-dependencies`, { cookie });
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as {
+      legalDocIds: string[];
+      obligationIds: string[];
+      deadlineIds: string[];
+    };
+    const serialized = JSON.stringify(payload);
+
+    assert.deepEqual(payload.legalDocIds, [legalDoc.id]);
+    assert.deepEqual(payload.obligationIds, [obligation.id]);
+    assert.deepEqual(new Set(payload.deadlineIds), new Set([directDeadline.id, linkedDeadline.id]));
+    assert.doesNotMatch(serialized, /History Dependency Legal Doc Title/);
+    assert.doesNotMatch(serialized, /History dependency legal doc long text/);
+    assert.doesNotMatch(serialized, /History Dependency Obligation Title/);
+    assert.doesNotMatch(serialized, /History Dependency Direct Deadline Title/);
+    assert.doesNotMatch(serialized, /history-dependency\.pdf/);
+    assert.doesNotMatch(serialized, /AI extraction must not be returned/);
+  });
+
+  it("does not leak project history child ids without child domain permissions", async () => {
+    await createRole("PROJECT_HISTORY_PROJECT_ONLY_READER", ["projects.view"]);
+    const user = await createUser({
+      email: "project-history-project-only@example.com",
+      password: "ValidPassword1!",
+      role: "PROJECT_HISTORY_PROJECT_ONLY_READER"
+    });
+    const company = await createCompany("Project History Project Only Company");
+    const project = await prisma.project.create({
+      data: {
+        id: "project-history-project-only-project",
+        title: "Project History Project Only",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+    const legalDoc = await prisma.legalDocument.create({
+      data: {
+        id: "project-history-project-only-legal-doc",
+        projectId: project.id,
+        type: "NOTICE",
+        title: "Project Only Hidden Legal Doc",
+        attachments: []
+      }
+    });
+    const obligation = await prisma.obligation.create({
+      data: {
+        id: "project-history-project-only-obligation",
+        legalDocId: legalDoc.id,
+        title: "Project Only Hidden Obligation",
+        level: "MANDATORY",
+        scheduleType: "RECURRING",
+        firstDueDate: "2026-01-15",
+        intervalUnit: "MONTH",
+        intervalValue: 6,
+        emailReminderEnabled: false,
+        evidenceRequirements: {}
+      }
+    });
+    const deadline = await prisma.deadline.create({
+      data: {
+        id: "project-history-project-only-deadline",
+        projectId: project.id,
+        title: "Project Only Hidden Deadline",
+        dueDate: "2026-02-01",
+        status: "OPEN",
+        emailReminderEnabled: false,
+        evidence: []
+      }
+    });
+    await prisma.projectAccess.create({
+      data: {
+        projectId: project.id,
+        userId: user.id,
+        accessRole: "PROJECT_VIEWER"
+      }
+    });
+
+    const cookie = await login(user.email, "ValidPassword1!");
+    const response = await request(`/projects/${project.id}/history-dependencies`, { cookie });
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as {
+      legalDocIds: string[];
+      obligationIds: string[];
+      deadlineIds: string[];
+    };
+    const serialized = JSON.stringify(payload);
+
+    assert.deepEqual(payload.legalDocIds, []);
+    assert.deepEqual(payload.obligationIds, []);
+    assert.deepEqual(payload.deadlineIds, []);
+    assert.doesNotMatch(serialized, new RegExp(legalDoc.id));
+    assert.doesNotMatch(serialized, new RegExp(obligation.id));
+    assert.doesNotMatch(serialized, new RegExp(deadline.id));
+    assert.doesNotMatch(serialized, /Project Only Hidden/);
+  });
+
+  it("returns scoped legal document relation lookups by ids and project without leaking hidden documents", async () => {
+    await createRole("LEGAL_DOC_RELATION_LOOKUP_READER", ["legalDocs.view"]);
+    const user = await createUser({
+      email: "legal-doc-relation-lookup@example.com",
+      password: "ValidPassword1!",
+      role: "LEGAL_DOC_RELATION_LOOKUP_READER"
+    });
+    const company = await createCompany("Legal Doc Relation Lookup Company");
+    const currentProject = await prisma.project.create({
+      data: {
+        id: "legal-doc-relation-current-project",
+        title: "Current Legal Doc Relation Project",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+    const referenceProject = await prisma.project.create({
+      data: {
+        id: "legal-doc-relation-reference-project",
+        title: "Reference Legal Doc Relation Project",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+    const hiddenProject = await prisma.project.create({
+      data: {
+        id: "legal-doc-relation-hidden-project",
+        title: "Hidden Legal Doc Relation Project",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+    const currentProjectDoc = await prisma.legalDocument.create({
+      data: {
+        id: "legal-doc-relation-current-doc",
+        projectId: currentProject.id,
+        type: "NOTICE",
+        title: "Current Project Child Doc",
+        detailedDescription: "Project child detail must not be needed for lookup.",
+        contentSummary: "Project child content must not be needed for lookup.",
+        attachments: [
+          {
+            id: "legal-doc-relation-current-attachment",
+            filename: "heavy-current-project-child.pdf",
+            sizeKb: 9999,
+            addedAt: "2026-01-01"
+          }
+        ],
+        aiExtraction: {
+          largeExtraction: "Project child AI extraction must not be needed for lookup."
+        }
+      }
+    });
+    const referenceDoc = await prisma.legalDocument.create({
+      data: {
+        id: "legal-doc-relation-reference-doc",
+        projectId: referenceProject.id,
+        type: "NOTICE",
+        title: "Visible Reference Doc",
+        attachments: []
+      }
+    });
+    const hiddenDoc = await prisma.legalDocument.create({
+      data: {
+        id: "legal-doc-relation-hidden-doc",
+        projectId: hiddenProject.id,
+        type: "NOTICE",
+        title: "Hidden Reference Doc",
+        attachments: []
+      }
+    });
+    await prisma.projectAccess.createMany({
+      data: [currentProject, referenceProject].map((project) => ({
+        projectId: project.id,
+        userId: user.id,
+        accessRole: "PROJECT_VIEWER"
+      }))
+    });
+
+    const cookie = await login(user.email, "ValidPassword1!");
+    const response = await request(
+      `/legal-docs/lookup?ids=${referenceDoc.id},${hiddenDoc.id}&projectId=${currentProject.id}`,
+      { cookie }
+    );
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as {
+      legalDocs: Array<{
+        id: string;
+        title: string;
+        attachments?: unknown;
+        aiExtraction?: unknown;
+        detailedDescription?: string;
+        contentSummary?: string;
+      }>;
+    };
+    const legalDocIds = payload.legalDocs.map((doc) => doc.id).sort();
+
+    assert.deepEqual(legalDocIds, [currentProjectDoc.id, referenceDoc.id].sort());
+    assert.equal(payload.legalDocs.some((doc) => doc.title === hiddenDoc.title), false);
+    assert.equal(
+      payload.legalDocs.some((doc) => Object.prototype.hasOwnProperty.call(doc, "attachments")),
+      false
+    );
+    assert.equal(
+      payload.legalDocs.some((doc) => Object.prototype.hasOwnProperty.call(doc, "aiExtraction")),
+      false
+    );
+    assert.equal(payload.legalDocs.some((doc) => doc.detailedDescription), false);
+    assert.equal(payload.legalDocs.some((doc) => doc.contentSummary), false);
+    assert.doesNotMatch(JSON.stringify(payload), /heavy-current-project-child\.pdf/);
+    assert.doesNotMatch(JSON.stringify(payload), /Project child AI extraction/);
+    assert.doesNotMatch(JSON.stringify(payload), /Hidden Reference Doc/);
+  });
+
+  it("preserves requested legal document ids before filling remaining project lookup slots", async () => {
+    await createRole("LEGAL_DOC_LOOKUP_LIMIT_READER", ["legalDocs.view"]);
+    const user = await createUser({
+      email: "legal-doc-lookup-limit@example.com",
+      password: "ValidPassword1!",
+      role: "LEGAL_DOC_LOOKUP_LIMIT_READER"
+    });
+    const company = await createCompany("Legal Doc Lookup Limit Company");
+    const currentProject = await prisma.project.create({
+      data: {
+        id: "legal-doc-lookup-limit-project",
+        title: "Lookup Limit Project",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+    const referenceProject = await prisma.project.create({
+      data: {
+        id: "legal-doc-lookup-limit-reference-project",
+        title: "Lookup Limit Reference Project",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+    const referenceDoc = await prisma.legalDocument.create({
+      data: {
+        id: "legal-doc-lookup-limit-reference",
+        projectId: referenceProject.id,
+        type: "NOTICE",
+        title: "Old Requested Reference Doc",
+        attachments: [],
+        createdAt: new Date("2025-01-01T00:00:00.000Z"),
+        updatedAt: new Date("2025-01-01T00:00:00.000Z")
+      }
+    });
+    await prisma.legalDocument.createMany({
+      data: Array.from({ length: 205 }, (_, index) => ({
+        id: `legal-doc-lookup-limit-project-${String(index).padStart(3, "0")}`,
+        projectId: currentProject.id,
+        type: "NOTICE",
+        title: `Project Fill Doc ${String(index).padStart(3, "0")}`,
+        attachments: [],
+        createdAt: new Date(`2026-01-01T00:${String(index % 60).padStart(2, "0")}:00.000Z`),
+        updatedAt: new Date(`2026-01-01T00:${String(index % 60).padStart(2, "0")}:00.000Z`)
+      }))
+    });
+    await prisma.projectAccess.createMany({
+      data: [currentProject, referenceProject].map((project) => ({
+        projectId: project.id,
+        userId: user.id,
+        accessRole: "PROJECT_VIEWER"
+      }))
+    });
+
+    const findManyCalls: unknown[] = [];
+    const legalDocumentDelegate = prisma.legalDocument as any;
+    const originalFindMany = legalDocumentDelegate.findMany.bind(prisma.legalDocument);
+    legalDocumentDelegate.findMany = async (args: unknown) => {
+      findManyCalls.push(args);
+      return originalFindMany(args);
+    };
+
+    try {
+      const cookie = await login(user.email, "ValidPassword1!");
+      const response = await request(
+        `/legal-docs/lookup?ids=${referenceDoc.id}&projectId=${currentProject.id}`,
+        { cookie }
+      );
+      assert.equal(response.status, 200);
+      const payload = (await response.json()) as { legalDocs: Array<{ id: string; title: string }> };
+      const legalDocIds = payload.legalDocs.map((doc) => doc.id);
+      const projectDocCount = payload.legalDocs.filter((doc) =>
+        doc.id.startsWith("legal-doc-lookup-limit-project-")
+      ).length;
+      const projectLookupCall = findManyCalls.find((call) => {
+        const args = call as { take?: number; where?: unknown };
+        return args.take === 199 && JSON.stringify(args.where).includes(currentProject.id);
+      }) as { select?: Record<string, unknown>; take?: number } | undefined;
+
+      assert.equal(payload.legalDocs.length, 200);
+      assert.equal(legalDocIds[0], referenceDoc.id);
+      assert.equal(new Set(legalDocIds).size, legalDocIds.length);
+      assert.equal(projectDocCount, 199);
+      assert.ok(projectLookupCall, "Expected project lookup to use take: remaining in the DB query");
+      assert.equal(projectLookupCall?.take, 199);
+      assert.equal(projectLookupCall?.select?.attachments, undefined);
+      assert.equal(projectLookupCall?.select?.aiExtraction, undefined);
+      assert.equal(projectLookupCall?.select?.detailedDescription, undefined);
+      assert.equal(projectLookupCall?.select?.contentSummary, undefined);
+    } finally {
+      legalDocumentDelegate.findMany = originalFindMany;
+    }
+  });
+
+  it("dedupes requested legal document ids that also appear in project lookup results", async () => {
+    await createRole("LEGAL_DOC_LOOKUP_DEDUPE_READER", ["legalDocs.view"]);
+    const user = await createUser({
+      email: "legal-doc-lookup-dedupe@example.com",
+      password: "ValidPassword1!",
+      role: "LEGAL_DOC_LOOKUP_DEDUPE_READER"
+    });
+    const company = await createCompany("Legal Doc Lookup Dedupe Company");
+    const project = await prisma.project.create({
+      data: {
+        id: "legal-doc-lookup-dedupe-project",
+        title: "Lookup Dedupe Project",
+        companyId: company.id,
+        participantUserIds: [],
+        internalParticipants: [],
+        externalParticipants: [],
+        attachments: [],
+        dependsOnProjectIds: [],
+        referenceLegalDocIds: []
+      }
+    });
+    const requestedProjectDoc = await prisma.legalDocument.create({
+      data: {
+        id: "legal-doc-lookup-dedupe-requested",
+        projectId: project.id,
+        type: "NOTICE",
+        title: "Requested Project Doc",
+        attachments: []
+      }
+    });
+    const fillDoc = await prisma.legalDocument.create({
+      data: {
+        id: "legal-doc-lookup-dedupe-fill",
+        projectId: project.id,
+        type: "NOTICE",
+        title: "Fill Project Doc",
+        attachments: []
+      }
+    });
+    await prisma.projectAccess.create({
+      data: {
+        projectId: project.id,
+        userId: user.id,
+        accessRole: "PROJECT_VIEWER"
+      }
+    });
+
+    const cookie = await login(user.email, "ValidPassword1!");
+    const response = await request(
+      `/legal-docs/lookup?ids=${requestedProjectDoc.id},missing-legal-doc-id&projectId=${project.id}`,
+      { cookie }
+    );
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as { legalDocs: Array<{ id: string }> };
+    const legalDocIds = payload.legalDocs.map((doc) => doc.id);
+
+    assert.equal(legalDocIds[0], requestedProjectDoc.id);
+    assert.equal(legalDocIds.filter((id) => id === requestedProjectDoc.id).length, 1);
+    assert.equal(legalDocIds.includes(fillDoc.id), true);
+    assert.equal(legalDocIds.includes("missing-legal-doc-id"), false);
+  });
+
+  it("rejects unbounded explicit legal document id lookups", async () => {
+    await createRole("LEGAL_DOC_LOOKUP_TOO_MANY_READER", ["legalDocs.view"]);
+    const user = await createUser({
+      email: "legal-doc-lookup-too-many@example.com",
+      password: "ValidPassword1!",
+      role: "LEGAL_DOC_LOOKUP_TOO_MANY_READER"
+    });
+    const cookie = await login(user.email, "ValidPassword1!");
+    const ids = Array.from({ length: 201 }, (_, index) => `legal-doc-too-many-${index}`).join(",");
+
+    const response = await request(`/legal-docs/lookup?ids=${ids}`, { cookie });
+    assert.equal(response.status, 400);
+    const payload = (await response.json()) as { message?: string };
+    assert.match(payload.message ?? "", /Maximum is 200/);
+  });
+
   it("requires legal document read permission in addition to project access", async () => {
     await createRole("PROJECT_SCOPE_ONLY", ["projects.view"]);
     await createRole("LEGAL_DOC_READER_ONLY", ["legalDocs.view"]);

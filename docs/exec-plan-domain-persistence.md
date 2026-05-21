@@ -1309,3 +1309,14 @@
 - Backend-Rollen-Endpunkte bleiben `admin.access` plus passende Rollen-Permission, externe User bleiben fail-closed, und der statische Permission Catalog darf pro Prozess gecacht werden.
 - `/api/authorities` bleibt intern/RBAC-geschuetzt, wird auf Admin-Routen nur fuer `/admin/authorities` explizit geladen und vermeidet unnoetige Includes oder breite Domain-Daten.
 - Nicht-Ziele: keine Dashboard-, ProjectDetail-, DocumentsStore-/ProjectsStore-Grundlogik-, Static-Asset-/Nginx-/Vite-/Docker-/Azure-, Prisma-Schema-/Migration-, Recovery-/Import-/Reset- oder neuen Fachfeature-Aenderungen.
+
+## 13m. Finaler Gesamtbranch-Review-P2-Fix 2026-05-21
+- Dies ist keine neue Performance-Phase und kein Azure-/Deployment-Lauf, sondern ausschliesslich die Behebung der drei finalen P2-Blocker auf Branch `perf/portal-load-stability`.
+- ProjectDetail bleibt beim direkten Cold-Start schmal: `/compliance/projects/:id` laedt nicht wieder globale `projects`- oder `legalDocs`-Listen, sondern holt nur die sichtbaren Relation-Lookups fuer das konkrete Detailprojekt.
+- Die gezielten Lookups muessen ProjectAccess/RBAC serverseitig beachten und duerfen keine Projekt- oder Rechtsdokumentnamen ohne passende Leserechte leaken.
+- LegalDoc-Relation-Lookups laden explizit angeforderte IDs zuerst und fuellen `projectId`-Treffer nur mit dem verbleibenden, DB-seitig begrenzten Platz auf; ein gemeinsames OR-Ergebnis darf requested IDs nicht mehr verdrängen.
+- Der LegalDoc-Lookup bleibt ein schlanker Relation-/History-Lookup und darf keine Attachments, AI-Extraction, Langtexte, Dokumentlisten oder Storage-Pfade selektieren oder serialisieren.
+- ProjectDetail-History darf beim direkten Cold-Start leere Child-Stores nicht als geladen interpretieren; History wartet auf gezielte projektbezogene LegalDoc-/Obligation-/Deadline-Abhaengigkeits-IDs und rendert bis dahin einen Loading-State.
+- Dashboard-Aggregates fuer initiale `ONCE_THEN_RECURRING`-Occurrences verwenden dieselbe Validierung wie Display-Candidates und Task-Generierung; Legacy-Reihen mit fehlender/ungueltiger Intervalleinheit oder `intervalValue <= 0` duerfen Counts nicht aufblasen.
+- Recurring-overdue Display-Candidates werden seitenweise ueber erledigte `DONE`-Occurrences hinweg gescannt, bis Anzeigekandidaten gefunden sind oder die bestehende Scan-Grenze erreicht ist.
+- Nicht-Ziele bleiben unveraendert: keine Static-Asset-/Nginx-/Vite-/Docker-/Azure-Aenderungen, keine Admin-Phase-4-Dateien, keine DocumentsStore-/UsersStore-Aenderungen, keine neuen Fachfeatures, keine RBAC-Lockerung, kein Commit und kein Push.

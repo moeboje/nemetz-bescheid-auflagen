@@ -15,6 +15,7 @@ import {
   archiveProject as apiArchiveProject,
   bulkReplaceProjects,
   createProject as apiCreateProject,
+  getProjectRelationLookups,
   getProject as apiGetProject,
   listProjects,
   restoreProject as apiRestoreProject,
@@ -99,6 +100,7 @@ export type ProjectsContextValue = {
   resetProjects: () => Promise<void>;
   reloadProjects: () => Promise<Project[]>;
   ensureProject: (id: string, options?: ProjectDetailLoadOptions) => Promise<Project | null>;
+  ensureProjectRelationLookups: (id: string) => Promise<Project[]>;
   loadProjectDetail: (id: string) => Promise<Project | null>;
   getProjectDetailErrorStatus: (id: string) => number | undefined;
 };
@@ -286,10 +288,16 @@ function normalizeProjects(value: unknown): Project[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  const normalized = value
+  return sanitizeProjectRelations(normalizeProjectList(value)).projects;
+}
+
+function normalizeProjectList(value: unknown): Project[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
     .map((project, index) => normalizeProject(project as Partial<Project>, index))
     .filter((project): project is Project => Boolean(project));
-  return sanitizeProjectRelations(normalized).projects;
 }
 
 function isProjectArchived(project: Project) {
@@ -303,6 +311,20 @@ function isIncomingProjectOlder(existing: Project | undefined, incoming: Project
   return incoming.updatedAt < existing.updatedAt;
 }
 
+function mergeProject(existing: Project | undefined, incoming: Project) {
+  if (!existing) {
+    return incoming;
+  }
+  return {
+    ...existing,
+    ...incoming,
+    detailedDescription:
+      incoming.detailedDescription !== undefined
+        ? incoming.detailedDescription
+        : existing.detailedDescription
+  };
+}
+
 const normalizedInitialProjects = sanitizeProjectRelations(initialProjects).projects;
 
 export function ProjectsProvider({ children }: { children: React.ReactNode }) {
@@ -314,6 +336,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
   const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname, "projects");
   const projectsRef = useRef<Project[]>([]);
   const projectDetailInFlightRef = useRef<Map<string, Promise<Project | null>>>(new Map());
+  const projectRelationLookupInFlightRef = useRef<Map<string, Promise<Project[]>>>(new Map());
   const projectDetailVersionRef = useRef<Map<string, string>>(new Map());
   const projectDetailErrorStatusRef = useRef<Map<string, number>>(new Map());
   const projectDetailRequestSeqRef = useRef(0);
@@ -337,6 +360,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
   const clearProjectUserState = useCallback(() => {
     setProjectsState([]);
     projectDetailInFlightRef.current.clear();
+    projectRelationLookupInFlightRef.current.clear();
     projectDetailVersionRef.current.clear();
     projectDetailErrorStatusRef.current.clear();
     latestProjectDetailSeqByIdRef.current.clear();
@@ -440,10 +464,9 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
 
           setProjectsState((prev) => {
             const exists = prev.some((item) => item.id === project.id);
-            const merged = exists
-              ? prev.map((item) => (item.id === project.id ? { ...item, ...project } : item))
+            return exists
+              ? prev.map((item) => (item.id === project.id ? mergeProject(item, project) : item))
               : [project, ...prev];
-            return sanitizeProjectRelations(merged).projects;
           });
           projectDetailVersionRef.current.set(project.id, project.updatedAt);
           projectDetailErrorStatusRef.current.delete(project.id);
@@ -461,6 +484,42 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
           }
           return null;
         }
+      });
+    },
+    [authUser, setProjectsState]
+  );
+
+  const ensureProjectRelationLookups = useCallback(
+    async (id: string) => {
+      if (!authUser) {
+        return [];
+      }
+      const requestScope = getCurrentAuthRequestScope(authScopeRef.current);
+      if (!requestScope || requestScope.userId !== authUser.id) {
+        return [];
+      }
+      const projectId = id.trim();
+      if (!projectId) {
+        return [];
+      }
+
+      const inFlightKey = getAuthScopedRequestKey(requestScope, `relations:${projectId}`);
+      return getOrCreateInFlight(projectRelationLookupInFlightRef.current, inFlightKey, async () => {
+        const relationProjects = normalizeProjectList(await getProjectRelationLookups(projectId));
+        if (!isAuthRequestScopeCurrent(authScopeRef.current, requestScope)) {
+          return [];
+        }
+
+        setProjectsState((prev) => {
+          const previousById = new Map(prev.map((project) => [project.id, project] as const));
+          const nextById = new Map(prev.map((project) => [project.id, project] as const));
+          relationProjects.forEach((project) => {
+            nextById.set(project.id, mergeProject(previousById.get(project.id), project));
+          });
+          return Array.from(nextById.values());
+        });
+        clearPersistedValue(PROJECTS_STORAGE_KEY);
+        return relationProjects;
       });
     },
     [authUser, setProjectsState]
@@ -506,7 +565,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
           dependencyIds: input.dependsOnProjectIds ?? []
         }).dependencyIds;
         const referenceLegalDocIds = normalizeRelationIds(input.referenceLegalDocIds);
-        const createdProject = normalizeProjects([
+        const createdProject = normalizeProjectList([
           await apiCreateProject({
             ...input,
             shortDescription: input.shortDescription ?? "",
@@ -619,7 +678,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
           payload.detailedDescription = input.detailedDescription;
         }
 
-        const updatedProject = normalizeProjects([
+        const updatedProject = normalizeProjectList([
           await apiUpdateProject(id, payload)
         ])[0];
 
@@ -662,7 +721,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        const updatedProject = normalizeProjects([await apiArchiveProject(id)])[0];
+        const updatedProject = normalizeProjectList([await apiArchiveProject(id)])[0];
         if (!updatedProject) {
           return false;
         }
@@ -699,7 +758,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       }
 
       try {
-        const updatedProject = normalizeProjects([await apiRestoreProject(id)])[0];
+        const updatedProject = normalizeProjectList([await apiRestoreProject(id)])[0];
         if (!updatedProject) {
           return false;
         }
@@ -940,6 +999,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       resetProjects,
       reloadProjects,
       ensureProject,
+      ensureProjectRelationLookups,
       loadProjectDetail,
       getProjectDetailErrorStatus
     }),
@@ -950,6 +1010,7 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       archiveExternalParticipant,
       archiveProject,
       ensureProject,
+      ensureProjectRelationLookups,
       getProjectDetailErrorStatus,
       loadProjectDetail,
       projects,

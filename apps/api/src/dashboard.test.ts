@@ -876,6 +876,131 @@ describe("Dashboard summary API", () => {
     ]);
   });
 
+  it("pages recurring overdue display candidates past completed rows", async () => {
+    await createRole("DASHBOARD_RECURRING_DISPLAY_PAGE_DONE", [
+      "dashboard.view",
+      "tasks.view",
+      "obligations.view"
+    ]);
+    const user = await createUser({
+      email: "dashboard-recurring-display-page-done@example.com",
+      password: "ValidPassword1!",
+      role: "DASHBOARD_RECURRING_DISPLAY_PAGE_DONE"
+    });
+    const project = await seedProject("Recurring Display Page Done Project");
+    await prisma.projectAccess.create({
+      data: {
+        projectId: project.id,
+        userId: user.id,
+        accessRole: "PROJECT_VIEWER"
+      }
+    });
+    const legalDocument = await seedLegalDocument(project.id, "Recurring Display Page Done Legal Doc");
+    const today = todayDateOnlyInTimeZone(new Date(), "Europe/Vienna");
+    const dueDate = addDays(today, -10);
+    const doneCount = 55;
+
+    await prisma.obligation.createMany({
+      data: [
+        ...Array.from({ length: doneCount }, (_, index) => ({
+          id: `dashboard-recurring-page-done-${index}`,
+          legalDocId: legalDocument.id,
+          title: `A Done Recurring ${String(index).padStart(2, "0")}`,
+          level: "MANDATORY",
+          scheduleType: "RECURRING",
+          firstDueDate: dueDate,
+          recurrenceEndDate: dueDate,
+          intervalUnit: "DAY",
+          intervalValue: 1,
+          evidenceRequirements: {}
+        })),
+        {
+          id: "dashboard-recurring-page-open",
+          legalDocId: legalDocument.id,
+          title: "Z Open Recurring After Done Page",
+          level: "MANDATORY",
+          scheduleType: "RECURRING",
+          firstDueDate: dueDate,
+          recurrenceEndDate: dueDate,
+          intervalUnit: "DAY",
+          intervalValue: 1,
+          evidenceRequirements: {}
+        }
+      ]
+    });
+    await prisma.taskStateEntry.createMany({
+      data: Array.from({ length: doneCount }, (_, index) => ({
+        taskInstanceId: `obligation:dashboard-recurring-page-done-${index}:${dueDate}`,
+        status: "DONE",
+        completedAt: new Date(`${dueDate}T10:00:00.000Z`),
+        evidence: []
+      }))
+    });
+
+    const cookie = await login(user.email, "ValidPassword1!");
+    const response = await request("/dashboard/summary?limit=1", { cookie });
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as {
+      stats: { overdueTasks: number };
+      overdueTasks: Array<{ title: string; dueDate: string }>;
+    };
+
+    assert.equal(payload.stats.overdueTasks, 1);
+    assert.deepEqual(payload.overdueTasks.map((task) => [task.title, task.dueDate]), [
+      ["Z Open Recurring After Done Page", dueDate]
+    ]);
+  });
+
+  it("keeps recurring overdue display scans bounded when all candidates are completed", async () => {
+    const project = await seedProject("Recurring Display Guard Project");
+    const legalDocument = await seedLegalDocument(project.id, "Recurring Display Guard Legal Doc");
+    const today = todayDateOnlyInTimeZone(new Date(), "Europe/Vienna");
+    const dueDate = addDays(today, -10);
+    const scanLimit = dashboardSummaryTestInternals.displayCandidateScanLimit(10);
+    const obligationCount = scanLimit + 5;
+
+    await prisma.obligation.createMany({
+      data: Array.from({ length: obligationCount }, (_, index) => ({
+        id: `dashboard-recurring-guard-completed-${index}`,
+        legalDocId: legalDocument.id,
+        title: `A Completed Guard ${String(index).padStart(3, "0")}`,
+        level: "MANDATORY",
+        scheduleType: "RECURRING",
+        firstDueDate: dueDate,
+        recurrenceEndDate: dueDate,
+        intervalUnit: "DAY",
+        intervalValue: 1,
+        evidenceRequirements: {}
+      }))
+    });
+    await prisma.taskStateEntry.createMany({
+      data: Array.from({ length: obligationCount }, (_, index) => ({
+        taskInstanceId: `obligation:dashboard-recurring-guard-completed-${index}:${dueDate}`,
+        status: "DONE",
+        completedAt: new Date(`${dueDate}T10:00:00.000Z`),
+        evidence: []
+      }))
+    });
+
+    const result = await dashboardSummaryTestInternals.loadOverdueObligationDisplayCandidates({
+      prisma,
+      accessScope: { projectIds: [project.id] },
+      obligationBaseWhere: {
+        isArchived: false,
+        legalDocument: {
+          projectId: project.id
+        }
+      },
+      today,
+      completionStart: addDays(today, -365),
+      limit: 10
+    });
+
+    assert.deepEqual(result.tasks, []);
+    assert.equal(result.diagnostics.rowsScanned, scanLimit);
+    assert.equal(result.diagnostics.guardReached, true);
+  });
+
   it("computes weekly recurring obligation aggregates and subtracts completed task states by window", async () => {
     await createRole("DASHBOARD_WEEKLY_RECURRENCE_COUNTS", [
       "dashboard.view",
@@ -1394,6 +1519,102 @@ describe("Dashboard summary API", () => {
       payload.overdueTasks.filter((task) => task.obligationId === "dashboard-once-then-counts").length,
       1
     );
+  });
+
+  it("excludes invalid ONCE_THEN_RECURRING initial occurrences from aggregates and display", async () => {
+    await createRole("DASHBOARD_INVALID_ONCE_THEN_RECURRING", [
+      "dashboard.view",
+      "tasks.view",
+      "obligations.view"
+    ]);
+    const user = await createUser({
+      email: "dashboard-invalid-once-then-recurring@example.com",
+      password: "ValidPassword1!",
+      role: "DASHBOARD_INVALID_ONCE_THEN_RECURRING"
+    });
+    const project = await seedProject("Invalid Once Then Project");
+    await prisma.projectAccess.create({
+      data: {
+        projectId: project.id,
+        userId: user.id,
+        accessRole: "PROJECT_VIEWER"
+      }
+    });
+    const legalDocument = await seedLegalDocument(project.id, "Invalid Once Then Legal Doc");
+    const today = todayDateOnlyInTimeZone(new Date(), "Europe/Vienna");
+    const overdueDate = addDays(today, -2);
+    const dueSoonDate = addDays(today, 5);
+
+    await prisma.obligation.createMany({
+      data: [
+        {
+          id: "dashboard-invalid-once-then-missing-unit",
+          legalDocId: legalDocument.id,
+          title: "Invalid Missing Unit Due Soon",
+          level: "MANDATORY",
+          scheduleType: "ONCE_THEN_RECURRING",
+          firstDueDate: dueSoonDate,
+          recurrenceEndDate: addDays(today, 30),
+          intervalValue: 1,
+          emailReminderEnabled: true,
+          emailReminderDaysBefore: 5,
+          evidenceRequirements: {}
+        },
+        {
+          id: "dashboard-invalid-once-then-zero-value",
+          legalDocId: legalDocument.id,
+          title: "Invalid Zero Value Overdue",
+          level: "MANDATORY",
+          scheduleType: "ONCE_THEN_RECURRING",
+          firstDueDate: overdueDate,
+          recurrenceEndDate: addDays(today, 30),
+          intervalUnit: "DAY",
+          intervalValue: 0,
+          evidenceRequirements: {}
+        },
+        {
+          id: "dashboard-valid-once-overdue",
+          legalDocId: legalDocument.id,
+          title: "Valid ONCE Overdue",
+          level: "MANDATORY",
+          scheduleType: "ONCE",
+          firstDueDate: overdueDate,
+          evidenceRequirements: {}
+        },
+        {
+          id: "dashboard-valid-once-due-soon",
+          legalDocId: legalDocument.id,
+          title: "Valid ONCE Due Soon",
+          level: "MANDATORY",
+          scheduleType: "ONCE",
+          firstDueDate: dueSoonDate,
+          emailReminderEnabled: true,
+          emailReminderDaysBefore: 5,
+          evidenceRequirements: {}
+        }
+      ]
+    });
+
+    const cookie = await login(user.email, "ValidPassword1!");
+    const response = await request("/dashboard/summary?limit=10", { cookie });
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as {
+      stats: {
+        openTasks: number;
+        overdueTasks: number;
+        tasksDueSoon: number;
+      };
+      overdueTasks: Array<{ title: string }>;
+      notifications: Array<{ title: string }>;
+    };
+
+    assert.equal(payload.stats.openTasks, 1);
+    assert.equal(payload.stats.overdueTasks, 1);
+    assert.equal(payload.stats.tasksDueSoon, 1);
+    assert.deepEqual(payload.overdueTasks.map((task) => task.title), ["Valid ONCE Overdue"]);
+    assert.ok(payload.notifications.some((notification) => notification.title === "Valid ONCE Due Soon"));
+    assert.doesNotMatch(JSON.stringify(payload), /Invalid Missing Unit/);
+    assert.doesNotMatch(JSON.stringify(payload), /Invalid Zero Value/);
   });
 
   it("includes ended ONCE_THEN_RECURRING initial overdues in display candidates", async () => {

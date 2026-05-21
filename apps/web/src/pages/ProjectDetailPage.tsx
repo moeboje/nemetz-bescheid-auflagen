@@ -22,9 +22,11 @@ import {
 } from "../api/legacyDecisions";
 import { uploadDocument } from "../api/documents";
 import {
+  getProjectHistoryDependencies,
   listProjectAccess,
   removeProjectAccess,
-  upsertProjectAccess
+  upsertProjectAccess,
+  type ProjectHistoryDependencies
 } from "../api/projects";
 import AuditTimeline from "../components/AuditTimeline";
 import DeadlineModal from "../components/DeadlineModal";
@@ -130,6 +132,16 @@ function formatObligationDeleteError(error?: string) {
     return t("obligations.delete.blocked");
   }
   return t("obligations.delete.error");
+}
+
+type ProjectHistoryDependencyLoadState = "idle" | "loading" | "loaded" | "error";
+
+function createEmptyProjectHistoryDependencies(): ProjectHistoryDependencies {
+  return {
+    legalDocIds: [],
+    obligationIds: [],
+    deadlineIds: []
+  };
 }
 
 function getIntervalUnitLabel(unit: "DAY" | "WEEK" | "MONTH" | "QUARTER" | "YEAR") {
@@ -389,6 +401,7 @@ export default function ProjectDetailPage() {
     projects,
     reloadProjects,
     ensureProject,
+    ensureProjectRelationLookups,
     getProjectDetailErrorStatus,
     updateProject,
     archiveProject,
@@ -408,7 +421,13 @@ export default function ProjectDetailPage() {
   const { getScopeLabel } = useScopes();
   const { authorities, contacts, getAuthorityName, getContactsForAuthority } = useAuthorities();
   const { users, getUser, getDisplayName } = useUsers();
-  const { legalDocs, archiveLegalDoc, loadLegalDocDetail, reloadLegalDocs } = useLegalDocs();
+  const {
+    legalDocs,
+    archiveLegalDoc,
+    ensureLegalDocLookups,
+    loadLegalDocDetail,
+    reloadLegalDocs
+  } = useLegalDocs();
   const { deadlines, archiveDeadline, getDeadlineStatus, reloadDeadlines } = useDeadlines();
   const { tasks } = useTasks();
   const { reloadTaskState } = useTaskState();
@@ -425,6 +444,14 @@ export default function ProjectDetailPage() {
   const [openingLegalDocEditId, setOpeningLegalDocEditId] = useState<string | null>(null);
   const [projectDetailError, setProjectDetailError] = useState("");
   const [projectDetailLoading, setProjectDetailLoading] = useState(false);
+  const [projectRelationLookupState, setProjectRelationLookupState] =
+    useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [legalDocRelationLookupState, setLegalDocRelationLookupState] =
+    useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [historyDependencyState, setHistoryDependencyState] =
+    useState<ProjectHistoryDependencyLoadState>("idle");
+  const [historyDependencies, setHistoryDependencies] =
+    useState<ProjectHistoryDependencies>(() => createEmptyProjectHistoryDependencies());
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
   const [deadlineModalOpen, setDeadlineModalOpen] = useState(false);
   const [editingDeadlineId, setEditingDeadlineId] = useState<string | null>(null);
@@ -456,6 +483,8 @@ export default function ProjectDetailPage() {
   const loadedTabDataKeysRef = React.useRef<Set<string>>(new Set());
   const accessLoadSeqRef = React.useRef(0);
   const legacyLoadSeqRef = React.useRef(0);
+  const historyDependencyLoadKeyRef = React.useRef<string | null>(null);
+  const historyDependencyLoadSeqRef = React.useRef(0);
 
   React.useEffect(() => {
     isMountedRef.current = true;
@@ -471,6 +500,8 @@ export default function ProjectDetailPage() {
   const canArchive = project ? ProjectPolicy.archive(actor, project) : false;
   const canViewObligationsTab =
     permissions.canViewProjects && permissions.canViewObligations && !actor.isExternal;
+  const canReadHistoryDeadlines =
+    permissions.canViewProjects && permissions.canViewDeadlines && !actor.isExternal;
   const canReadLegacyDecisions =
     !actor.isExternal &&
     (permissions.canViewLegalDocs ||
@@ -480,6 +511,12 @@ export default function ProjectDetailPage() {
   const canViewLegacyDecisionsTab = Boolean(project && canView && canReadLegacyDecisions);
   const canArchiveLegacyDecisions = canWriteProject && permissions.canArchiveLegalDocs;
   const canManageLegacyDecisionDocuments = canWriteProject && permissions.canEditLegalDocs;
+  const canReadRelationLegalDocs =
+    !actor.isExternal &&
+    (permissions.canViewLegalDocs ||
+      permissions.canEditLegalDocs ||
+      permissions.canArchiveLegalDocs ||
+      hasPermission("legalDocs.export"));
   const scopeLabel = project
     ? getScopeLabel(project.companyId, project.siteId, project.facilityId)
     : "";
@@ -549,7 +586,7 @@ export default function ProjectDetailPage() {
         const linkedProject = projects.find((item) => item.id === projectId);
         return {
           id: projectId,
-          title: linkedProject?.title ?? projectId,
+          title: linkedProject?.title ?? t("common.notAvailable"),
           missing: !linkedProject,
           isArchived: linkedProject ? isArchivedEntity(linkedProject) : false
         };
@@ -573,7 +610,7 @@ export default function ProjectDetailPage() {
         const linkedDoc = legalDocs.find((item) => item.id === legalDocId);
         return {
           id: legalDocId,
-          title: linkedDoc?.title ?? legalDocId,
+          title: linkedDoc?.title ?? t("common.notAvailable"),
           missing: !linkedDoc,
           isArchived: linkedDoc ? isArchivedEntity(linkedDoc) : false
         };
@@ -581,30 +618,137 @@ export default function ProjectDetailPage() {
     [legalDocs, project?.referenceLegalDocIds]
   );
 
+  const historyLegalDocIdSet = useMemo(() => {
+    const ids = new Set(historyDependencies.legalDocIds);
+    if (canReadRelationLegalDocs) {
+      projectDocs.forEach((doc) => ids.add(doc.id));
+    }
+    return ids;
+  }, [canReadRelationLegalDocs, historyDependencies.legalDocIds, projectDocs]);
+
+  const historyObligationIdSet = useMemo(() => {
+    const ids = new Set(historyDependencies.obligationIds);
+    if (canViewObligationsTab) {
+      projectObligations.forEach((obligation) => ids.add(obligation.id));
+    }
+    return ids;
+  }, [canViewObligationsTab, historyDependencies.obligationIds, projectObligations]);
+
+  const historyDeadlineIdSet = useMemo(() => {
+    const ids = new Set(historyDependencies.deadlineIds);
+    if (canReadHistoryDeadlines) {
+      projectDeadlines.forEach((deadline) => ids.add(deadline.id));
+    }
+    return ids;
+  }, [canReadHistoryDeadlines, historyDependencies.deadlineIds, projectDeadlines]);
+
   const historyEntries = useMemo(() => {
     if (!project) {
       return [];
     }
-    const legalDocIdSet = new Set(projectDocs.map((doc) => doc.id));
-    const obligationIdSet = new Set(projectObligations.map((obligation) => obligation.id));
-    const deadlineIdSet = new Set(projectDeadlines.map((deadline) => deadline.id));
 
     return entries.filter((entry) => {
       if (entry.entityType === "PROJECT" && entry.entityId === project.id) {
         return true;
       }
-      if (entry.entityType === "LEGAL_DOC" && legalDocIdSet.has(entry.entityId)) {
+      if (entry.entityType === "LEGAL_DOC" && historyLegalDocIdSet.has(entry.entityId)) {
         return true;
       }
-      if (entry.entityType === "OBLIGATION" && obligationIdSet.has(entry.entityId)) {
+      if (entry.entityType === "OBLIGATION" && historyObligationIdSet.has(entry.entityId)) {
         return true;
       }
-      if (entry.entityType === "DEADLINE" && deadlineIdSet.has(entry.entityId)) {
+      if (entry.entityType === "DEADLINE" && historyDeadlineIdSet.has(entry.entityId)) {
         return true;
       }
       return false;
     });
-  }, [entries, project, projectDeadlines, projectDocs, projectObligations]);
+  }, [entries, historyDeadlineIdSet, historyLegalDocIdSet, historyObligationIdSet, project]);
+
+  const relationDependencyKey = useMemo(
+    () => (project?.dependsOnProjectIds ?? []).join(","),
+    [project?.dependsOnProjectIds]
+  );
+  const relationLegalDocKey = useMemo(
+    () => (project?.referenceLegalDocIds ?? []).join(","),
+    [project?.referenceLegalDocIds]
+  );
+  const projectRelationsAreLoading =
+    projectRelationLookupState === "idle" || projectRelationLookupState === "loading";
+  const legalDocRelationsAreLoading =
+    legalDocRelationLookupState === "idle" || legalDocRelationLookupState === "loading";
+  const historyDependenciesAreLoading =
+    historyDependencyState === "idle" || historyDependencyState === "loading";
+  const historyIsLoading = historyDependenciesAreLoading || legalDocRelationsAreLoading;
+
+  React.useEffect(() => {
+    setProjectRelationLookupState("idle");
+    setLegalDocRelationLookupState("idle");
+    setHistoryDependencyState("idle");
+    setHistoryDependencies(createEmptyProjectHistoryDependencies());
+    historyDependencyLoadKeyRef.current = null;
+    historyDependencyLoadSeqRef.current += 1;
+  }, [project?.id]);
+
+  React.useEffect(() => {
+    if (!project || !canView) {
+      return;
+    }
+
+    let cancelled = false;
+    setProjectRelationLookupState("loading");
+    void ensureProjectRelationLookups(project.id)
+      .then(() => {
+        if (!cancelled && isMountedRef.current) {
+          setProjectRelationLookupState("loaded");
+        }
+      })
+      .catch(() => {
+        if (!cancelled && isMountedRef.current) {
+          setProjectRelationLookupState("error");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canView, ensureProjectRelationLookups, project?.id, relationDependencyKey]);
+
+  React.useEffect(() => {
+    if (!project || !canView) {
+      return;
+    }
+    if (!canReadRelationLegalDocs) {
+      setLegalDocRelationLookupState("loaded");
+      return;
+    }
+
+    let cancelled = false;
+    setLegalDocRelationLookupState("loading");
+    void ensureLegalDocLookups({
+      ids: project.referenceLegalDocIds,
+      projectId: project.id
+    })
+      .then(() => {
+        if (!cancelled && isMountedRef.current) {
+          setLegalDocRelationLookupState("loaded");
+        }
+      })
+      .catch(() => {
+        if (!cancelled && isMountedRef.current) {
+          setLegalDocRelationLookupState("error");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    canReadRelationLegalDocs,
+    canView,
+    ensureLegalDocLookups,
+    project?.id,
+    relationLegalDocKey
+  ]);
   React.useEffect(() => {
     if (!checklistTabEnabled && tab === "checklist") {
       setTab("overview");
@@ -729,6 +873,44 @@ export default function ProjectDetailPage() {
     reloadTaskState,
     tab
   ]);
+
+  React.useEffect(() => {
+    if (!project || !canView || tab !== "history") {
+      return;
+    }
+
+    const loadKey = `${project.id}:history`;
+    if (historyDependencyLoadKeyRef.current === loadKey) {
+      return;
+    }
+
+    const requestSeq = historyDependencyLoadSeqRef.current + 1;
+    historyDependencyLoadSeqRef.current = requestSeq;
+    historyDependencyLoadKeyRef.current = loadKey;
+    setHistoryDependencyState("loading");
+    setProjectDetailError("");
+
+    void getProjectHistoryDependencies(project.id)
+      .then((dependencies) => {
+        if (!isMountedRef.current || historyDependencyLoadSeqRef.current !== requestSeq) {
+          return;
+        }
+        setHistoryDependencies({
+          legalDocIds: Array.from(new Set(dependencies.legalDocIds)),
+          obligationIds: Array.from(new Set(dependencies.obligationIds)),
+          deadlineIds: Array.from(new Set(dependencies.deadlineIds))
+        });
+        setHistoryDependencyState("loaded");
+      })
+      .catch(() => {
+        if (!isMountedRef.current || historyDependencyLoadSeqRef.current !== requestSeq) {
+          return;
+        }
+        historyDependencyLoadKeyRef.current = null;
+        setHistoryDependencyState("error");
+        setProjectDetailError(t("projects.detailLoadError"));
+      });
+  }, [canView, project?.id, tab]);
 
   React.useEffect(() => {
     if (!project || !canManageProjectAccessUi || tab !== "access") {
@@ -1542,7 +1724,9 @@ export default function ProjectDetailPage() {
                     {predecessorProjects.map((row) => (
                       <div key={row.id} className="relationLinkItem">
                         {row.missing ? (
-                          <span className="relationSelectionLabel">{row.title}</span>
+                          <span className="relationSelectionLabel">
+                            {projectRelationsAreLoading ? t("documents.loading") : row.title}
+                          </span>
                         ) : (
                           <button
                             type="button"
@@ -1581,6 +1765,8 @@ export default function ProjectDetailPage() {
                       </div>
                     ))}
                   </div>
+                ) : projectRelationsAreLoading ? (
+                  <p className="placeholderText">{t("documents.loading")}</p>
                 ) : (
                   <p className="placeholderText">{t("projects.relations.empty.dependents")}</p>
                 )}
@@ -1592,7 +1778,9 @@ export default function ProjectDetailPage() {
                     {referenceLegalDocs.map((row) => (
                       <div key={row.id} className="relationLinkItem">
                         {row.missing ? (
-                          <span className="relationSelectionLabel">{row.title}</span>
+                          <span className="relationSelectionLabel">
+                            {legalDocRelationsAreLoading ? t("documents.loading") : row.title}
+                          </span>
                         ) : (
                           <button
                             type="button"
@@ -2078,7 +2266,13 @@ export default function ProjectDetailPage() {
       {tab === "history" ? (
         <Card>
           <h2 className="sectionTitle">{t("projects.detail.tabs.history")}</h2>
-          <AuditTimeline entries={historyEntries} />
+          {historyIsLoading ? (
+            <p className="placeholderText">{t("documents.loading")}</p>
+          ) : historyDependencyState === "error" ? (
+            <p className="placeholderText">{t("projects.detailLoadError")}</p>
+          ) : (
+            <AuditTimeline entries={historyEntries} />
+          )}
         </Card>
       ) : null}
 
