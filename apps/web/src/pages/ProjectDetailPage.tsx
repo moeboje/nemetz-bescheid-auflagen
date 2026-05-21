@@ -45,7 +45,7 @@ import {
   LEGACY_DECISION_STATUS_VALUES,
   type LegacyDecision
 } from "../data/legacyDecisions";
-import type { ExternalParticipant, ProjectAccessEntry, ProjectAccessRole } from "../data/projects";
+import type { ExternalParticipant, Project, ProjectAccessEntry, ProjectAccessRole } from "../data/projects";
 import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { ProjectPolicy } from "../policies/ProjectPolicy";
 import { useAuditLog } from "../state/AuditLogStore";
@@ -76,6 +76,7 @@ import {
   canCascadeArchiveProject,
   type ProjectArchiveChildLoadState
 } from "../utils/projectArchiveSummary";
+import { loadFreshProjectForEdit } from "../utils/projectEditFlow";
 
 function getExternalTypeLabel(type: ExternalParticipant["type"]) {
   if (type === "LAWYER") {
@@ -440,6 +441,7 @@ export default function ProjectDetailPage() {
     useState<ProjectArchiveChildLoadState>("idle");
   const [legalDocModalOpen, setLegalDocModalOpen] = useState(false);
   const [editProjectOpen, setEditProjectOpen] = useState(false);
+  const [editProjectTarget, setEditProjectTarget] = useState<Project | undefined>(undefined);
   const [isOpeningProjectEdit, setIsOpeningProjectEdit] = useState(false);
   const [openingLegalDocEditId, setOpeningLegalDocEditId] = useState<string | null>(null);
   const [projectDetailError, setProjectDetailError] = useState("");
@@ -802,6 +804,8 @@ export default function ProjectDetailPage() {
     setLegacyDecisions([]);
     setLegacyError("");
     setArchiveChildrenLoadState("idle");
+    setEditProjectOpen(false);
+    setEditProjectTarget(undefined);
   }, [project?.id]);
 
   React.useEffect(() => {
@@ -1237,12 +1241,13 @@ export default function ProjectDetailPage() {
   };
 
   const openProjectEditModal = async () => {
+    const projectId = project.id;
     setProjectDetailError("");
+    setEditProjectTarget(undefined);
     setIsOpeningProjectEdit(true);
     try {
       const [detail] = await Promise.all([
-        ensureProject(project.id),
-        reloadProjects(),
+        loadFreshProjectForEdit({ projectId, reloadProjects, ensureProject }),
         reloadLegalDocs(),
         hasLoadedProcedureMasterData ? Promise.resolve(null) : reloadProcedureMasterData()
       ]);
@@ -1250,18 +1255,19 @@ export default function ProjectDetailPage() {
         return;
       }
       if (!detail) {
-        const status = getProjectDetailErrorStatus(project.id);
+        const status = getProjectDetailErrorStatus(projectId);
         setProjectDetailError(
           status === 504 ? `${t("projects.detailLoadError")} (504 Gateway Timeout)` : t("projects.detailLoadError")
         );
         return;
       }
+      setEditProjectTarget(detail);
       setEditProjectOpen(true);
     } catch {
       if (!isMountedRef.current) {
         return;
       }
-      const status = getProjectDetailErrorStatus(project.id);
+      const status = getProjectDetailErrorStatus(projectId);
       setProjectDetailError(
         status === 504 ? `${t("projects.detailLoadError")} (504 Gateway Timeout)` : t("projects.detailLoadError")
       );
@@ -2341,7 +2347,14 @@ export default function ProjectDetailPage() {
         </div>
       </Modal>
 
-      <ProjectModal open={editProjectOpen} onClose={() => setEditProjectOpen(false)} project={project} />
+      <ProjectModal
+        open={editProjectOpen}
+        onClose={() => {
+          setEditProjectOpen(false);
+          setEditProjectTarget(undefined);
+        }}
+        project={editProjectTarget}
+      />
 
       <ExternalParticipantModal
         open={externalModalOpen}

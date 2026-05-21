@@ -1320,3 +1320,19 @@
 - Dashboard-Aggregates fuer initiale `ONCE_THEN_RECURRING`-Occurrences verwenden dieselbe Validierung wie Display-Candidates und Task-Generierung; Legacy-Reihen mit fehlender/ungueltiger Intervalleinheit oder `intervalValue <= 0` duerfen Counts nicht aufblasen.
 - Recurring-overdue Display-Candidates werden seitenweise ueber erledigte `DONE`-Occurrences hinweg gescannt, bis Anzeigekandidaten gefunden sind oder die bestehende Scan-Grenze erreicht ist.
 - Nicht-Ziele bleiben unveraendert: keine Static-Asset-/Nginx-/Vite-/Docker-/Azure-Aenderungen, keine Admin-Phase-4-Dateien, keine DocumentsStore-/UsersStore-Aenderungen, keine neuen Fachfeatures, keine RBAC-Lockerung, kein Commit und kein Push.
+
+## 13n. Finaler P2-Fix 2026-05-21 fuer ProjectDetail Edit Fresh Detail
+- Dies ist kein neuer Feature- oder Deployment-Lauf, sondern ausschliesslich die Behebung des finalen stale-detail Datenverlustpfads im ProjectDetail-Edit-Flow.
+- Vor dem Oeffnen des Projekt-Edit-Modals wird nach einem Listenrefresh zwingend ein frischer Projekt-Detaildatensatz per force Detail-Load geladen.
+- `ProjectsStore` trennt normale Detail-Dedupe und force Detail-Dedupe, bleibt auth-scoped und laesst neuere Detaildaten nicht durch alte Responses ueberschreiben.
+- Lean Project-Listenzeilen aus `/api/projects` duerfen Detailfelder wie `detailedDescription` nicht loeschen; neuere Listen-Metadaten markieren vorhandene Details nur stale, bis ein Full-Detail-Load abgeschlossen ist.
+- Das Edit-Modal wird im Projektdetail mit dem frischen Detaildatensatz geoeffnet und sendet fehlende Detailfelder aus lean Rows nicht als leere Strings; bewusstes Leeren nach Full-Detail-Load bleibt erlaubt.
+- Nicht-Ziele bleiben unveraendert: keine Backend-/Prisma-/Migration-/RBAC-/Azure-Aenderungen, kein globales `reloadAll`, keine Admin-/Dashboard-/DocumentsStore-/UsersStore-/RolesStore-/ExternalOrgsStore-Aenderungen, kein Commit und kein Push.
+
+## 13o. Finaler P2-Fix 2026-05-21 fuer ProjectModal detailedDescription Dirty-Payload
+- Dies ist kein neuer Feature- oder Deployment-Lauf, sondern ausschliesslich die Behebung des verbleibenden Save-Payload-Datenverlustpfads im Projekt-Edit-Modal.
+- `ProjectModal` merkt sich beim Oeffnen im Edit-Modus den initialen `detailedDescription`-Wert und nimmt das Feld beim Speichern nur in den PATCH-Payload auf, wenn der aktuelle Formularwert davon abweicht.
+- Unveraenderte Langtexte werden dadurch nicht mehr mitgesendet; eine zweite Session kann `detailedDescription` nach Modal-Oeffnung aktualisieren, ohne durch einen Save anderer Felder ueberschrieben zu werden.
+- Bewusstes Leeren bleibt moeglich, weil der Wechsel von einem initialen Text auf `""` weiterhin als Aenderung gesendet wird.
+- Create-Semantik bleibt unveraendert und darf `detailedDescription` weiterhin aus dem Formular senden.
+- Nicht-Ziele bleiben unveraendert: keine Backend-/Prisma-/Migration-/RBAC-/Azure-Aenderungen, kein globales `reloadAll`, keine Admin-/Dashboard-/DocumentsStore-/UsersStore-/RolesStore-/ExternalOrgsStore-Aenderungen, kein Commit und kein Push.

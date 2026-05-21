@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, Input, Modal, Select } from "@nemetz/ui";
 import { t } from "../i18n";
 import { useScopes } from "../state/ScopesStore";
@@ -18,6 +18,10 @@ import {
   getProjectSubmissionTypeFilterValue,
   getProjectSubmissionTypeOptions
 } from "../projectSubmissionType";
+import {
+  hasProjectDetailedDescription,
+  shouldSendProjectDetailedDescription
+} from "../utils/projectEditPayload";
 
 type ProjectFormStatus = Project["status"] | "";
 
@@ -90,6 +94,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
   const [legalRefSearch, setLegalRefSearch] = useState("");
   const [dependencyCandidateId, setDependencyCandidateId] = useState("");
   const [legalRefCandidateId, setLegalRefCandidateId] = useState("");
+  const initialDetailedDescriptionRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     if (!open) {
@@ -103,12 +108,16 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     setLegalRefCandidateId("");
 
     if (project) {
+      const detailedDescription = project.detailedDescription ?? "";
+      initialDetailedDescriptionRef.current = hasProjectDetailedDescription(project)
+        ? detailedDescription
+        : undefined;
       setForm({
         title: project.title,
         status: project.status ?? "",
         submissionTypeId: getProjectSubmissionTypeFilterValue(project),
         shortDescription: project.shortDescription ?? "",
-        detailedDescription: project.detailedDescription ?? "",
+        detailedDescription,
         companyId: project.companyId,
         siteId: project.siteId ?? "",
         facilityId: project.facilityId ?? "",
@@ -124,6 +133,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
       });
       return;
     }
+    initialDetailedDescriptionRef.current = undefined;
     setForm(emptyForm);
   }, [open, project]);
 
@@ -138,6 +148,7 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     setLegalRefSearch("");
     setDependencyCandidateId("");
     setLegalRefCandidateId("");
+    initialDetailedDescriptionRef.current = undefined;
   }, [open]);
 
   const activeCompanies = useMemo(
@@ -463,12 +474,11 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
     let saveSucceeded = false;
 
     if (project) {
-      saveSucceeded = await updateProject(project.id, {
+      const payload: Partial<Project> = {
         title: form.title,
         status: form.status || undefined,
         submissionTypeId: form.submissionTypeId || undefined,
         shortDescription: form.shortDescription,
-        detailedDescription: form.detailedDescription,
         companyId: form.companyId,
         siteId: form.siteId || undefined,
         facilityId: form.facilityId || undefined,
@@ -482,7 +492,18 @@ export default function ProjectModal({ open, onClose, project }: ProjectModalPro
         dependsOnProjectIds: form.dependsOnProjectIds,
         referenceLegalDocIds: form.referenceLegalDocIds,
         attachments: form.attachments
-      });
+      };
+      if (
+        shouldSendProjectDetailedDescription({
+          mode: "edit",
+          project,
+          initialDetailedDescription: initialDetailedDescriptionRef.current,
+          currentDetailedDescription: form.detailedDescription
+        })
+      ) {
+        payload.detailedDescription = form.detailedDescription;
+      }
+      saveSucceeded = await updateProject(project.id, payload);
     } else {
       saveSucceeded = await addProject({
         title: form.title,

@@ -42,6 +42,14 @@ import {
 } from "./authScopedRequest";
 import { getOrCreateInFlight } from "./inFlightDedupe";
 import { shouldAutoLoadDomainStore } from "./routeLoading";
+import {
+  canUseCachedProjectDetail,
+  getProjectDetailInFlightKey,
+  isIncomingProjectOlder,
+  mergeProject,
+  mergeProjectListRow,
+  type ProjectDetailLoadOptions
+} from "./projectDetailCache";
 
 type ProjectCreateInput = Omit<
   Project,
@@ -63,10 +71,6 @@ type ProjectCreateInput = Omit<
   participantUserIds?: string[];
   dependsOnProjectIds?: string[];
   referenceLegalDocIds?: string[];
-};
-
-type ProjectDetailLoadOptions = {
-  force?: boolean;
 };
 
 export type ProjectsContextValue = {
@@ -304,27 +308,6 @@ function isProjectArchived(project: Project) {
   return Boolean(project.archivedAt || project.isArchived);
 }
 
-function isIncomingProjectOlder(existing: Project | undefined, incoming: Project) {
-  if (!existing?.updatedAt || !incoming.updatedAt) {
-    return false;
-  }
-  return incoming.updatedAt < existing.updatedAt;
-}
-
-function mergeProject(existing: Project | undefined, incoming: Project) {
-  if (!existing) {
-    return incoming;
-  }
-  return {
-    ...existing,
-    ...incoming,
-    detailedDescription:
-      incoming.detailedDescription !== undefined
-        ? incoming.detailedDescription
-        : existing.detailedDescription
-  };
-}
-
 const normalizedInitialProjects = sanitizeProjectRelations(initialProjects).projects;
 
 export function ProjectsProvider({ children }: { children: React.ReactNode }) {
@@ -389,21 +372,14 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
     if (!isAuthRequestScopeCurrent(authScopeRef.current, requestScope)) {
       return [];
     }
-    setProjectsState((prev) => {
-      const previousById = new Map(prev.map((project) => [project.id, project] as const));
-      return sanitizeProjectRelations(
-        next.map((project) => ({
-          ...project,
-          detailedDescription:
-            project.detailedDescription !== undefined
-              ? project.detailedDescription
-              : previousById.get(project.id)?.updatedAt === project.updatedAt
-              ? previousById.get(project.id)?.detailedDescription
-              : undefined
-        }))
-      ).projects;
-    });
-    next.forEach((project) => {
+    const previousById = new Map(
+      projectsRef.current.map((project) => [project.id, project] as const)
+    );
+    const mergedProjects = sanitizeProjectRelations(
+      next.map((project) => mergeProjectListRow(previousById.get(project.id), project))
+    ).projects;
+    setProjectsState(mergedProjects);
+    mergedProjects.forEach((project) => {
       const loadedVersion = projectDetailVersionRef.current.get(project.id);
       if (loadedVersion && loadedVersion !== project.updatedAt) {
         projectDetailVersionRef.current.delete(project.id);
@@ -428,15 +404,11 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
       }
 
       const cached = projectsRef.current.find((project) => project.id === projectId);
-      if (
-        !options.force &&
-        cached &&
-        projectDetailVersionRef.current.get(projectId) === cached.updatedAt
-      ) {
-        return cached;
+      if (canUseCachedProjectDetail(cached, projectDetailVersionRef.current.get(projectId), options)) {
+        return cached ?? null;
       }
 
-      const inFlightKey = getAuthScopedRequestKey(requestScope, projectId);
+      const inFlightKey = getProjectDetailInFlightKey(requestScope, projectId, options);
       return getOrCreateInFlight(projectDetailInFlightRef.current, inFlightKey, async () => {
         const requestSeq = projectDetailRequestSeqRef.current + 1;
         projectDetailRequestSeqRef.current = requestSeq;
@@ -459,6 +431,14 @@ export function ProjectsProvider({ children }: { children: React.ReactNode }) {
 
           const existing = projectsRef.current.find((item) => item.id === project.id);
           if (isIncomingProjectOlder(existing, project)) {
+            if (
+              options.requireDetail &&
+              !canUseCachedProjectDetail(existing, projectDetailVersionRef.current.get(projectId), {
+                requireDetail: true
+              })
+            ) {
+              return null;
+            }
             return existing ?? project;
           }
 
