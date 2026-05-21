@@ -4,6 +4,7 @@ import {
   isAdminRoutePath,
   isDashboardRoutePath,
   isProjectDetailRoutePath,
+  shouldAutoLoadLookupStore,
   shouldAutoLoadDomainStore
 } from "./routeLoading";
 
@@ -72,7 +73,51 @@ describe("route loading guards", () => {
   });
 
   it("does not autoload domain stores on real admin routes", () => {
-    assert.equal(shouldAutoLoadDomainStore("/admin", "projects"), false);
-    assert.equal(shouldAutoLoadDomainStore("/compliance/admin/users", "users"), false);
+    const adminRoutes = [
+      "/admin",
+      "/admin/",
+      "/admin/users",
+      "/admin/roles",
+      "/admin/external-orgs",
+      "/admin/design",
+      "/compliance/admin",
+      "/compliance/admin/users"
+    ];
+    const stores = [
+      "projects",
+      "legalDocs",
+      "obligations",
+      "deadlines",
+      "taskState",
+      "procedureMasterData",
+      "users",
+      "authorities",
+      "scopes"
+    ] as const;
+
+    adminRoutes.forEach((route) => {
+      assert.equal(isAdminRoutePath(route), true);
+      assert.equal(shouldAutoLoadDomainStore(route), false);
+      stores.forEach((store) => {
+        assert.equal(shouldAutoLoadDomainStore(route, store), false);
+      });
+    });
+  });
+
+  it("does not suppress adjacent non-admin route names", () => {
+    assert.equal(isAdminRoutePath("/administrator"), false);
+    assert.equal(isAdminRoutePath("/compliance/administrator"), false);
+    assert.equal(shouldAutoLoadDomainStore("/administrator", "projects"), true);
+    assert.equal(shouldAutoLoadDomainStore("/compliance/administrator", "projects"), true);
+  });
+
+  it("suppresses eager lookup stores on admin routes only by exact admin segments", () => {
+    assert.equal(shouldAutoLoadLookupStore("/admin/users"), false);
+    assert.equal(shouldAutoLoadLookupStore("/admin/roles"), false);
+    assert.equal(shouldAutoLoadLookupStore("/admin/external-orgs"), false);
+    assert.equal(shouldAutoLoadLookupStore("/admin/design"), false);
+    assert.equal(shouldAutoLoadLookupStore("/compliance/admin/users"), false);
+    assert.equal(shouldAutoLoadLookupStore("/administrator"), true);
+    assert.equal(shouldAutoLoadLookupStore("/compliance/administrator"), true);
   });
 });

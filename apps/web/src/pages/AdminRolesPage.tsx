@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { Badge, Button, Card, DataTable, IconButton, Input, Modal, Select } from "@nemetz/ui";
 import { getAdminRoleCatalog, type PermissionCatalogEntry } from "../api/roles";
@@ -30,6 +30,7 @@ const emptyForm: RoleFormState = {
   descriptionDe: "",
   permissionKeys: []
 };
+const POST_MUTATION_REFRESH = { force: true, reason: "postMutation" } as const;
 
 function normalizeRoleKey(value: string) {
   return value
@@ -74,6 +75,8 @@ export default function AdminRolesPage() {
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const fetchRolesSeqRef = useRef(0);
+  const fetchCatalogSeqRef = useRef(0);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -113,17 +116,26 @@ export default function AdminRolesPage() {
     [archivedFilter, search]
   );
 
-  const fetchRoles = useCallback(async () => {
+  const fetchRoles = useCallback(async (options: { force?: boolean; reason?: string } = {}) => {
+    const requestSeq = fetchRolesSeqRef.current + 1;
+    fetchRolesSeqRef.current = requestSeq;
     setIsLoading(true);
     setLoadError("");
 
     try {
-      const payload = await loadRoles(query);
+      const payload = await loadRoles(query, options);
+      if (fetchRolesSeqRef.current !== requestSeq) {
+        return;
+      }
       setRows(payload.items);
     } catch {
-      setLoadError(t("admin.roles.error.load"));
+      if (fetchRolesSeqRef.current === requestSeq) {
+        setLoadError(t("admin.roles.error.load"));
+      }
     } finally {
-      setIsLoading(false);
+      if (fetchRolesSeqRef.current === requestSeq) {
+        setIsLoading(false);
+      }
     }
   }, [loadRoles, query]);
 
@@ -136,16 +148,25 @@ export default function AdminRolesPage() {
       return;
     }
 
+    const requestSeq = fetchCatalogSeqRef.current + 1;
+    fetchCatalogSeqRef.current = requestSeq;
     setIsCatalogLoading(true);
     void getAdminRoleCatalog()
       .then((payload) => {
+        if (fetchCatalogSeqRef.current !== requestSeq) {
+          return;
+        }
         setPermissionCatalog(payload.permissions);
       })
       .catch(() => {
-        setLoadError(t("admin.roles.error.catalog"));
+        if (fetchCatalogSeqRef.current === requestSeq) {
+          setLoadError(t("admin.roles.error.catalog"));
+        }
       })
       .finally(() => {
-        setIsCatalogLoading(false);
+        if (fetchCatalogSeqRef.current === requestSeq) {
+          setIsCatalogLoading(false);
+        }
       });
   }, [permissions.canViewRolesAdmin]);
 
@@ -251,7 +272,7 @@ export default function AdminRolesPage() {
         setSuccessMessage(t("admin.roles.success.created"));
       }
 
-      await fetchRoles();
+      await fetchRoles(POST_MUTATION_REFRESH);
       closeModal();
     } catch (error) {
       setFormError(extractApiErrorMessage(error, "admin.roles.error.save"));
@@ -278,7 +299,7 @@ export default function AdminRolesPage() {
         setSuccessMessage(t("admin.roles.success.restored"));
       }
 
-      await fetchRoles();
+      await fetchRoles(POST_MUTATION_REFRESH);
       setConfirmation(null);
     } catch (error) {
       setLoadError(extractApiErrorMessage(error, "admin.roles.error.action"));

@@ -102,6 +102,7 @@ export default function AdminDesignPage() {
   const [success, setSuccess] = useState("");
   const logoInputRef = useRef<HTMLInputElement | null>(null);
   const iconInputRef = useRef<HTMLInputElement | null>(null);
+  const loadSeqRef = useRef(0);
   const canManageDesign = permissions.canManageDesignAdmin;
 
   useEffect(() => {
@@ -109,19 +110,28 @@ export default function AdminDesignPage() {
       return;
     }
 
+    const requestSeq = loadSeqRef.current + 1;
+    loadSeqRef.current = requestSeq;
     setIsLoading(true);
     setError("");
 
     void getAdminDesignConfig()
       .then((payload) => {
+        if (loadSeqRef.current !== requestSeq) {
+          return;
+        }
         setDesign(payload);
         setBranding(toBrandingConfig(payload));
       })
       .catch((loadError) => {
-        setError(extractErrorMessage(loadError, t("admin.design.error.load")));
+        if (loadSeqRef.current === requestSeq) {
+          setError(extractErrorMessage(loadError, t("admin.design.error.load")));
+        }
       })
       .finally(() => {
-        setIsLoading(false);
+        if (loadSeqRef.current === requestSeq) {
+          setIsLoading(false);
+        }
       });
   }, [permissions.canViewDesignAdmin, setBranding]);
 

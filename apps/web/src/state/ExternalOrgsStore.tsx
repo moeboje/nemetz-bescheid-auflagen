@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import {
   archiveExternalOrganization,
@@ -15,11 +15,22 @@ import {
   canUserLookupExternalOrgs,
   shouldAutoLoadExternalOrgsLookup
 } from "./externalOrgsLookupGuards";
+import {
+  canApplyListRequest,
+  createListRequestState,
+  getOrStartListRequest,
+  invalidateListRequests,
+  resetListRequestState,
+  type ListRequestOptions
+} from "./listRequestGuard";
 
 type ExternalOrgsContextValue = {
   externalOrgs: ExternalOrganization[];
-  loadExternalOrgs: (query?: ExternalOrganizationsQuery) => Promise<{ items: ExternalOrganization[]; total: number }>;
-  reloadExternalOrgs: () => Promise<ExternalOrganization[]>;
+  loadExternalOrgs: (
+    query?: ExternalOrganizationsQuery,
+    options?: ListRequestOptions
+  ) => Promise<{ items: ExternalOrganization[]; total: number }>;
+  reloadExternalOrgs: (options?: ListRequestOptions) => Promise<ExternalOrganization[]>;
   createExternalOrg: (
     input: {
       name: string;
@@ -45,7 +56,8 @@ type ExternalOrgsContextValue = {
 };
 
 const ExternalOrgsContext = createContext<ExternalOrgsContextValue | undefined>(undefined);
-let externalOrgsLookupInFlight: Promise<ExternalOrganization[]> | null = null;
+const externalOrgsLookupRequests = createListRequestState<ExternalOrganization[]>();
+const externalOrgsListRequests = createListRequestState<{ items: ExternalOrganization[]; total: number }>();
 
 export {
   canUserLookupExternalOrgs,
@@ -57,35 +69,97 @@ function sortExternalOrgs(rows: ExternalOrganization[]) {
   return [...rows].sort((left, right) => left.name.localeCompare(right.name));
 }
 
+function getPermissionSignature(user: { effectivePermissions?: string[] } | null | undefined) {
+  return Array.isArray(user?.effectivePermissions)
+    ? [...user.effectivePermissions].sort().join(",")
+    : "";
+}
+
+function getExternalOrgsAuthContextKey(user: { id?: string; type?: string; role?: string; effectivePermissions?: string[] } | null | undefined) {
+  if (!user) {
+    return "anonymous";
+  }
+  return [user.id ?? "", user.type ?? "", user.role ?? "", getPermissionSignature(user)].join("|");
+}
+
+function getQueryKey(query: ExternalOrganizationsQuery = {}) {
+  return JSON.stringify({
+    archived: query.archived ?? "",
+    q: query.q?.trim() ?? ""
+  });
+}
+
 export function ExternalOrgsProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const location = useLocation();
   const [externalOrgs, setExternalOrgs] = useState<ExternalOrganization[]>([]);
   const shouldAutoLoadLookup = shouldAutoLoadExternalOrgsLookup(location.pathname);
   const canLookupExternalOrgs = canUserLookupExternalOrgs(user);
+  const authContextKey = getExternalOrgsAuthContextKey(user);
+  const latestAuthContextRef = useRef(authContextKey);
+  latestAuthContextRef.current = authContextKey;
 
-  const loadExternalOrgs = useCallback(async (query: ExternalOrganizationsQuery = {}) => {
-    return listExternalOrganizations(query);
+  const loadExternalOrgs = useCallback(async (
+    query: ExternalOrganizationsQuery = {},
+    options: ListRequestOptions = {}
+  ) => {
+    const requestAuthContextKey = authContextKey;
+    const inFlightKey = `${requestAuthContextKey}|${getQueryKey(query)}`;
+    const request = getOrStartListRequest(
+      externalOrgsListRequests,
+      inFlightKey,
+      () => listExternalOrganizations(query),
+      options
+    );
+
+    const result = await request.promise;
+    if (
+      latestAuthContextRef.current !== requestAuthContextKey ||
+      !canApplyListRequest(externalOrgsListRequests, request)
+    ) {
+      return { items: [], total: 0 };
+    }
+
+    return result;
+  }, [authContextKey]);
+
+  useEffect(() => {
+    resetListRequestState(externalOrgsLookupRequests);
+    resetListRequestState(externalOrgsListRequests);
+    setExternalOrgs([]);
+  }, [authContextKey]);
+
+  const invalidateExternalOrgListRequests = useCallback(() => {
+    invalidateListRequests(externalOrgsLookupRequests);
+    invalidateListRequests(externalOrgsListRequests);
   }, []);
 
-  const reloadExternalOrgs = useCallback(async () => {
+  const reloadExternalOrgs = useCallback(async (options: ListRequestOptions = {}) => {
+    const requestAuthContextKey = authContextKey;
+
     if (!user || !canLookupExternalOrgs) {
       setExternalOrgs([]);
       return [];
     }
 
-    if (!externalOrgsLookupInFlight) {
-      externalOrgsLookupInFlight = listExternalOrganizationsLookup()
-        .then((payload) => sortExternalOrgs(payload.items))
-        .finally(() => {
-          externalOrgsLookupInFlight = null;
-        });
+    const request = getOrStartListRequest(
+      externalOrgsLookupRequests,
+      requestAuthContextKey,
+      () => listExternalOrganizationsLookup().then((payload) => sortExternalOrgs(payload.items)),
+      options
+    );
+
+    const next = await request.promise;
+    if (
+      latestAuthContextRef.current !== requestAuthContextKey ||
+      !canApplyListRequest(externalOrgsLookupRequests, request)
+    ) {
+      return [];
     }
 
-    const next = await externalOrgsLookupInFlight;
     setExternalOrgs(next);
     return next;
-  }, [canLookupExternalOrgs, user]);
+  }, [authContextKey, canLookupExternalOrgs, user]);
 
   useEffect(() => {
     if (!user || !canLookupExternalOrgs) {
@@ -111,12 +185,13 @@ export function ExternalOrgsProvider({ children }: { children: React.ReactNode }
       address?: string;
     }) => {
       const created = await createExternalOrganization(input);
+      invalidateExternalOrgListRequests();
       if (!created.isArchived) {
         setExternalOrgs((prev) => sortExternalOrgs([created, ...prev.filter((row) => row.id !== created.id)]));
       }
       return created;
     },
-    []
+    [invalidateExternalOrgListRequests]
   );
 
   const updateExternalOrgEntry = useCallback(
@@ -131,6 +206,7 @@ export function ExternalOrgsProvider({ children }: { children: React.ReactNode }
       }>
     ) => {
       const updated = await updateExternalOrganization(id, input);
+      invalidateExternalOrgListRequests();
       setExternalOrgs((prev) =>
         updated.isArchived
           ? prev.filter((row) => row.id !== updated.id)
@@ -138,25 +214,27 @@ export function ExternalOrgsProvider({ children }: { children: React.ReactNode }
       );
       return updated;
     },
-    []
+    [invalidateExternalOrgListRequests]
   );
 
   const archiveExternalOrgEntry = useCallback(
     async (id: string) => {
       const updated = await archiveExternalOrganization(id);
+      invalidateExternalOrgListRequests();
       setExternalOrgs((prev) => prev.filter((row) => row.id !== updated.id));
       return updated;
     },
-    []
+    [invalidateExternalOrgListRequests]
   );
 
   const restoreExternalOrgEntry = useCallback(
     async (id: string) => {
       const updated = await restoreExternalOrganization(id);
+      invalidateExternalOrgListRequests();
       setExternalOrgs((prev) => sortExternalOrgs([updated, ...prev.filter((row) => row.id !== updated.id)]));
       return updated;
     },
-    []
+    [invalidateExternalOrgListRequests]
   );
 
   const getExternalOrgById = useCallback(

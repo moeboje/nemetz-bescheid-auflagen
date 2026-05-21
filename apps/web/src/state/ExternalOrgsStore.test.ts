@@ -13,8 +13,16 @@ describe("external org lookup route guards", () => {
     assert.equal(shouldAutoLoadExternalOrgsLookup("/dashboard"), false);
     assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance"), false);
     assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance/dashboard"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/admin"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/admin/users"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/admin/roles"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/admin/external-orgs"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/admin/design"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance/admin/users"), false);
     assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance/projects"), true);
     assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance/obligations"), true);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/administrator"), true);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance/administrator"), true);
   });
 
   it("keeps explicit lookup permission-gated by existing admin external-org permissions", () => {

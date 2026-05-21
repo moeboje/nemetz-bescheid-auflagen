@@ -1297,3 +1297,15 @@
 - DONE-TaskState-Rows fuer recurring obligations werden nur pro Chunk und nur im relevanten Summary-Fenster geladen und gegen die Recurrence-Regel validiert.
 - Deadline-Reminder normalisieren DateOnly-Werte in einer sicheren CASE/CTE-Schicht; ungueltige Legacy-/Import-Werte werden uebersprungen statt den Summary-Endpoint abbrechen zu koennen.
 - Nicht-Ziele bleiben unveraendert: keine Phase-4-Admin-Optimierung, keine Frontend-/Store-/Static-Asset-/Docker-/Azure-Aenderungen, keine RBAC-Lockerung, kein Commit und kein Push.
+
+## 13l. Phase 4 2026-05-20: Admin Load Stability und Admin Lookup Performance
+- Ziel ist ausschliesslich die Stabilisierung und Verschlankung des Admin-Bereichs auf Branch `perf/portal-load-stability`.
+- Admin-Routen duerfen keine fachlichen Domain-Stores fuer Projekte, Dokumente, Aufgaben, Fristen, Auflagen, Rechtsdokumente oder Task-State laden.
+- `/admin` und `/compliance/admin` fuehren zu einer konkreten Admin-Unterseite, ohne die Legacy-Admin-Root-Seite mit Bulk-Domain-Reloads zu mounten.
+- `RolesStore` und `ExternalOrgsStore` unterdruecken eager Lookups auf Admin-Routen; explizite Admin-Page- oder Modal-Lookups bleiben berechtigungsgeschuetzt moeglich.
+- Admin Users laedt initial nur Users und den fuer sichtbare Rollenlabels/-filter noetigen Rollen-Lookup; ExternalOrgs werden lazy fuer externe User-Formulare geladen.
+- Admin Roles laedt nur Rollenliste und Permission Catalog; Catalog und Listenrequests werden dedupliziert, ohne User- oder Fachdomain-Daten.
+- Admin ExternalOrgs und Admin Design laden nur ihre jeweils eigenen Daten; Mutationen aktualisieren gezielt betroffene Stores und loesen kein globales `reloadAll` aus.
+- Backend-Rollen-Endpunkte bleiben `admin.access` plus passende Rollen-Permission, externe User bleiben fail-closed, und der statische Permission Catalog darf pro Prozess gecacht werden.
+- `/api/authorities` bleibt intern/RBAC-geschuetzt, wird auf Admin-Routen nur fuer `/admin/authorities` explizit geladen und vermeidet unnoetige Includes oder breite Domain-Daten.
+- Nicht-Ziele: keine Dashboard-, ProjectDetail-, DocumentsStore-/ProjectsStore-Grundlogik-, Static-Asset-/Nginx-/Vite-/Docker-/Azure-, Prisma-Schema-/Migration-, Recovery-/Import-/Reset- oder neuen Fachfeature-Aenderungen.

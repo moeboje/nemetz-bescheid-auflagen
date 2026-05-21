@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import {
   archiveAdminRole,
@@ -11,12 +11,20 @@ import {
   type AdminRolesQuery
 } from "../api/roles";
 import { useAuth } from "./AuthStore";
-import { isDashboardRoutePath, isProjectDetailRoutePath } from "./routeLoading";
+import {
+  canApplyListRequest,
+  createListRequestState,
+  getOrStartListRequest,
+  invalidateListRequests,
+  resetListRequestState,
+  type ListRequestOptions
+} from "./listRequestGuard";
+import { shouldAutoLoadLookupStore } from "./routeLoading";
 
 type RolesContextValue = {
   roles: AdminRole[];
-  loadRoles: (query?: AdminRolesQuery) => Promise<{ items: AdminRole[]; total: number }>;
-  reloadRoles: () => Promise<AdminRole[]>;
+  loadRoles: (query?: AdminRolesQuery, options?: ListRequestOptions) => Promise<{ items: AdminRole[]; total: number }>;
+  reloadRoles: (options?: ListRequestOptions) => Promise<AdminRole[]>;
   createRole: (input: { key: string; labelDe: string; descriptionDe?: string; permissionKeys?: string[] }) => Promise<AdminRole>;
   updateRole: (
     id: string,
@@ -34,18 +42,38 @@ type RolesContextValue = {
 };
 
 const RolesContext = createContext<RolesContextValue | undefined>(undefined);
-let rolesLookupInFlight: Promise<AdminRole[]> | null = null;
+const rolesLookupRequests = createListRequestState<AdminRole[]>();
+const adminRolesListRequests = createListRequestState<{ items: AdminRole[]; total: number }>();
 
 function sortRoles(rows: AdminRole[]) {
   return [...rows].sort((left, right) => left.labelDe.localeCompare(right.labelDe));
+}
+
+function getPermissionSignature(user: { effectivePermissions?: string[] } | null | undefined) {
+  return Array.isArray(user?.effectivePermissions)
+    ? [...user.effectivePermissions].sort().join(",")
+    : "";
+}
+
+function getRolesAuthContextKey(user: { id?: string; type?: string; role?: string; effectivePermissions?: string[] } | null | undefined) {
+  if (!user) {
+    return "anonymous";
+  }
+  return [user.id ?? "", user.type ?? "", user.role ?? "", getPermissionSignature(user)].join("|");
+}
+
+function getQueryKey(query: AdminRolesQuery = {}) {
+  return JSON.stringify({
+    archived: query.archived ?? "",
+    q: query.q?.trim() ?? ""
+  });
 }
 
 export function RolesProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const location = useLocation();
   const [roles, setRoles] = useState<AdminRole[]>([]);
-  const shouldAutoLoadLookup =
-    !isDashboardRoutePath(location.pathname) && !isProjectDetailRoutePath(location.pathname);
+  const shouldAutoLoadLookup = shouldAutoLoadLookupStore(location.pathname);
   const permissionKeys = Array.isArray(user?.effectivePermissions) ? user.effectivePermissions : [];
   const hasAdminAccess = permissionKeys.includes("admin.access");
   const canLookupRoles =
@@ -54,29 +82,69 @@ export function RolesProvider({ children }: { children: React.ReactNode }) {
       permissionKeys.includes("roles.manage") ||
       permissionKeys.includes("users.view") ||
       permissionKeys.includes("users.manage"));
+  const authContextKey = getRolesAuthContextKey(user);
+  const latestAuthContextRef = useRef(authContextKey);
+  latestAuthContextRef.current = authContextKey;
 
-  const loadRoles = useCallback(async (query: AdminRolesQuery = {}) => {
-    return listAdminRoles(query);
+  useEffect(() => {
+    resetListRequestState(rolesLookupRequests);
+    resetListRequestState(adminRolesListRequests);
+    setRoles([]);
+  }, [authContextKey]);
+
+  const invalidateRoleListRequests = useCallback(() => {
+    invalidateListRequests(rolesLookupRequests);
+    invalidateListRequests(adminRolesListRequests);
   }, []);
 
-  const reloadRoles = useCallback(async () => {
-    if (!user || !canLookupRoles || !shouldAutoLoadLookup) {
+  const loadRoles = useCallback(async (query: AdminRolesQuery = {}, options: ListRequestOptions = {}) => {
+    const requestAuthContextKey = authContextKey;
+    const inFlightKey = `${requestAuthContextKey}|${getQueryKey(query)}`;
+    const request = getOrStartListRequest(
+      adminRolesListRequests,
+      inFlightKey,
+      () => listAdminRoles(query),
+      options
+    );
+
+    const result = await request.promise;
+    if (
+      latestAuthContextRef.current !== requestAuthContextKey ||
+      !canApplyListRequest(adminRolesListRequests, request)
+    ) {
+      return { items: [], total: 0 };
+    }
+
+    return result;
+  }, [authContextKey]);
+
+  const reloadRoles = useCallback(async (options: ListRequestOptions = {}) => {
+    const requestAuthContextKey = authContextKey;
+
+    if (!user || !canLookupRoles) {
       setRoles([]);
       return [];
     }
 
-    if (!rolesLookupInFlight) {
-      rolesLookupInFlight = listAdminRolesLookup()
-        .then((payload) => sortRoles(payload.items))
-        .finally(() => {
-          rolesLookupInFlight = null;
-        });
+    if (!options.force && !shouldAutoLoadLookup) {
+      return [];
     }
 
-    const next = await rolesLookupInFlight;
+    const request = getOrStartListRequest(
+      rolesLookupRequests,
+      requestAuthContextKey,
+      () => listAdminRolesLookup().then((payload) => sortRoles(payload.items)),
+      options
+    );
+
+    const next = await request.promise;
+    if (latestAuthContextRef.current !== requestAuthContextKey || !canApplyListRequest(rolesLookupRequests, request)) {
+      return [];
+    }
+
     setRoles(next);
     return next;
-  }, [canLookupRoles, shouldAutoLoadLookup, user]);
+  }, [authContextKey, canLookupRoles, shouldAutoLoadLookup, user]);
 
   useEffect(() => {
     if (!user || !canLookupRoles || !shouldAutoLoadLookup) {
@@ -92,10 +160,11 @@ export function RolesProvider({ children }: { children: React.ReactNode }) {
   const createRoleEntry = useCallback(
     async (input: { key: string; labelDe: string; descriptionDe?: string; permissionKeys?: string[] }) => {
       const created = await createAdminRole(input);
+      invalidateRoleListRequests();
       setRoles((prev) => sortRoles([created, ...prev.filter((row) => row.id !== created.id)]));
       return created;
     },
-    []
+    [invalidateRoleListRequests]
   );
 
   const updateRoleEntry = useCallback(
@@ -109,28 +178,31 @@ export function RolesProvider({ children }: { children: React.ReactNode }) {
       }>
     ) => {
       const updated = await updateAdminRole(id, input);
+      invalidateRoleListRequests();
       setRoles((prev) => sortRoles([updated, ...prev.filter((row) => row.id !== updated.id)]));
       return updated;
     },
-    []
+    [invalidateRoleListRequests]
   );
 
   const archiveRoleEntry = useCallback(
     async (id: string) => {
       const updated = await archiveAdminRole(id);
+      invalidateRoleListRequests();
       setRoles((prev) => sortRoles([updated, ...prev.filter((row) => row.id !== updated.id)]));
       return updated;
     },
-    []
+    [invalidateRoleListRequests]
   );
 
   const restoreRoleEntry = useCallback(
     async (id: string) => {
       const updated = await restoreAdminRole(id);
+      invalidateRoleListRequests();
       setRoles((prev) => sortRoles([updated, ...prev.filter((row) => row.id !== updated.id)]));
       return updated;
     },
-    []
+    [invalidateRoleListRequests]
   );
 
   const getRoleByKey = useCallback(

@@ -29,6 +29,9 @@ export type PermissionCatalogEntry = {
   requiresAdminAccess: boolean;
 };
 
+let roleCatalogCache: { permissions: PermissionCatalogEntry[] } | null = null;
+let roleCatalogInFlight: Promise<{ permissions: PermissionCatalogEntry[] }> | null = null;
+
 function toQueryString(query: AdminRolesQuery = {}) {
   const params = new URLSearchParams();
 
@@ -57,9 +60,24 @@ export async function listAdminRolesLookup() {
 }
 
 export async function getAdminRoleCatalog() {
-  return apiRequest<{ permissions: PermissionCatalogEntry[] }>("/admin/roles/catalog", {
-    method: "GET"
-  });
+  if (roleCatalogCache) {
+    return roleCatalogCache;
+  }
+
+  if (!roleCatalogInFlight) {
+    roleCatalogInFlight = apiRequest<{ permissions: PermissionCatalogEntry[] }>("/admin/roles/catalog", {
+      method: "GET"
+    })
+      .then((payload) => {
+        roleCatalogCache = payload;
+        return payload;
+      })
+      .finally(() => {
+        roleCatalogInFlight = null;
+      });
+  }
+
+  return roleCatalogInFlight;
 }
 
 export async function createAdminRole(input: {

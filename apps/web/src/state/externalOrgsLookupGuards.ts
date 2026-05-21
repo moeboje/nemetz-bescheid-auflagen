@@ -1,11 +1,11 @@
-import { isDashboardRoutePath, isProjectDetailRoutePath } from "./routeLoading";
+import { shouldAutoLoadLookupStore } from "./routeLoading";
 
 export type ExternalOrgsLookupUser = {
   effectivePermissions?: string[];
 } | null | undefined;
 
 export function shouldAutoLoadExternalOrgsLookup(pathname: string) {
-  return !isDashboardRoutePath(pathname) && !isProjectDetailRoutePath(pathname);
+  return shouldAutoLoadLookupStore(pathname);
 }
 
 export function canUserLookupExternalOrgs(user: ExternalOrgsLookupUser) {

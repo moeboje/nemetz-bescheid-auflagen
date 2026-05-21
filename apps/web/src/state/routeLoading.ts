@@ -61,6 +61,10 @@ export function isProjectDetailRoutePath(pathname: string) {
   );
 }
 
+export function shouldAutoLoadLookupStore(pathname: string) {
+  return !isAdminRoutePath(pathname) && !isDashboardRoutePath(pathname) && !isProjectDetailRoutePath(pathname);
+}
+
 export function shouldAutoLoadDomainStore(pathname: string, store?: DomainStoreKey) {
   if (isAdminRoutePath(pathname)) {
     return false;
