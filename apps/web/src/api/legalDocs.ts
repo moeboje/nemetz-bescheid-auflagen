@@ -21,6 +21,16 @@ type LegalDocInput = {
   isArchived?: boolean;
 };
 
+export type LegalDocLookup = Omit<
+  LegalDoc,
+  "attachments" | "aiExtraction" | "detailedDescription" | "contentSummary"
+> & {
+  attachments?: LegalDoc["attachments"];
+  aiExtraction?: LegalDoc["aiExtraction"];
+  detailedDescription?: string;
+  contentSummary?: string;
+};
+
 export async function listLegalDocs() {
   return apiRequest<LegalDoc[]>("/legal-docs");
 }
@@ -32,6 +42,22 @@ export async function listLegalDocProjectOptions() {
 export async function getLegalDoc(id: string) {
   const payload = await apiRequest<{ ok: boolean; legalDoc: LegalDoc }>(`/legal-docs/${id}`);
   return payload.legalDoc;
+}
+
+export async function lookupLegalDocs(input: { ids?: string[]; projectId?: string }) {
+  const params = new URLSearchParams();
+  const ids = Array.from(new Set((input.ids ?? []).map((id) => id.trim()).filter(Boolean)));
+  if (ids.length > 0) {
+    params.set("ids", ids.join(","));
+  }
+  if (input.projectId?.trim()) {
+    params.set("projectId", input.projectId.trim());
+  }
+  const query = params.toString();
+  const payload = await apiRequest<{ ok: boolean; legalDocs: LegalDocLookup[] }>(
+    `/legal-docs/lookup${query ? `?${query}` : ""}`
+  );
+  return payload.legalDocs;
 }
 
 export async function createLegalDoc(input: LegalDocInput) {

@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import {
   authorities as initialAuthorities,
@@ -7,6 +7,14 @@ import {
   type AuthorityContact
 } from "../data/authorities";
 import { useAuth } from "./AuthStore";
+import {
+  canApplyListRequest,
+  createListRequestState,
+  getOrStartListRequest,
+  invalidateListRequests,
+  resetListRequestState,
+  type ListRequestOptions
+} from "./listRequestGuard";
 import { clearPersistedValue, makeStorageKey } from "./persistence";
 import { shouldAutoLoadDomainStore } from "./routeLoading";
 import {
@@ -74,12 +82,13 @@ export type AuthoritiesContextValue = {
   restoreContact: (id: string) => Promise<AuthorityContact | null>;
   replaceAuthorities: (value: AuthoritiesSnapshot) => Promise<void>;
   resetAuthorities: () => Promise<void>;
-  reloadAuthorities: () => Promise<AuthoritiesSnapshot>;
+  reloadAuthorities: (options?: ListRequestOptions) => Promise<AuthoritiesSnapshot>;
   getAuthorityName: (authorityId?: string) => string;
   getContactsForAuthority: (authorityId?: string) => AuthorityContact[];
 };
 
 const AuthoritiesContext = createContext<AuthoritiesContextValue | undefined>(undefined);
+const authoritiesReloadRequests = createListRequestState<AuthoritiesSnapshot>();
 
 export const AUTHORITIES_STORAGE_KEY = makeStorageKey("authorities");
 
@@ -192,6 +201,19 @@ function mergeContact(existing: AuthorityContact, incoming: AuthorityContact) {
   };
 }
 
+function getPermissionSignature(user: { effectivePermissions?: string[] } | null | undefined) {
+  return Array.isArray(user?.effectivePermissions)
+    ? [...user.effectivePermissions].sort().join(",")
+    : "";
+}
+
+function getAuthoritiesAuthContextKey(user: { id?: string; type?: string; role?: string; effectivePermissions?: string[] } | null | undefined) {
+  if (!user) {
+    return "anonymous";
+  }
+  return [user.id ?? "", user.type ?? "", user.role ?? "", getPermissionSignature(user)].join("|");
+}
+
 export function AuthoritiesProvider({ children }: { children: React.ReactNode }) {
   const { user: authUser } = useAuth();
   const location = useLocation();
@@ -201,9 +223,23 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
   });
 
   const { authorities, contacts } = authorityData;
-  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname, "authorities");
+  const authContextKey = getAuthoritiesAuthContextKey(authUser);
+  const latestAuthContextRef = useRef(authContextKey);
+  latestAuthContextRef.current = authContextKey;
 
-  const reloadAuthorities = useCallback(async () => {
+  useEffect(() => {
+    resetListRequestState(authoritiesReloadRequests);
+    setAuthorityData({ authorities: [], contacts: [] });
+  }, [authContextKey]);
+
+  const invalidateAuthorityListRequests = useCallback(() => {
+    invalidateListRequests(authoritiesReloadRequests);
+  }, []);
+
+  const reloadAuthorities = useCallback(async (options: ListRequestOptions = {}) => {
+    const requestAuthContextKey = authContextKey;
+
     if (!authUser || authUser.type === "EXTERNAL") {
       const empty = { authorities: [], contacts: [] } satisfies AuthoritiesSnapshot;
       setAuthorityData(empty);
@@ -211,11 +247,25 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       return empty;
     }
 
-    const next = normalizeAuthorities(await listAuthorities());
+    const request = getOrStartListRequest(
+      authoritiesReloadRequests,
+      requestAuthContextKey,
+      () => listAuthorities().then((payload) => normalizeAuthorities(payload)),
+      options
+    );
+
+    const next = await request.promise;
+    if (
+      latestAuthContextRef.current !== requestAuthContextKey ||
+      !canApplyListRequest(authoritiesReloadRequests, request)
+    ) {
+      return { authorities: [], contacts: [] };
+    }
+
     setAuthorityData(next);
     clearPersistedValue(AUTHORITIES_STORAGE_KEY);
     return next;
-  }, [authUser]);
+  }, [authContextKey, authUser]);
 
   useEffect(() => {
     if (!authUser || authUser.type === "EXTERNAL") {
@@ -263,13 +313,14 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       shortName: input.shortName?.trim() || undefined
     });
 
+    invalidateAuthorityListRequests();
     setAuthorityData((prev) => ({
       ...prev,
       authorities: [...prev.authorities, createdAuthority]
     }));
     clearPersistedValue(AUTHORITIES_STORAGE_KEY);
     return createdAuthority;
-  }, []);
+  }, [invalidateAuthorityListRequests]);
 
   const updateAuthority = useCallback(
     async (id: string, input: { name: string; shortName?: string }) => {
@@ -283,6 +334,7 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
         shortName: input.shortName?.trim() || undefined
       });
 
+      invalidateAuthorityListRequests();
       setAuthorityData((prev) => ({
         ...prev,
         authorities: prev.authorities.map((authority) =>
@@ -292,7 +344,7 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       clearPersistedValue(AUTHORITIES_STORAGE_KEY);
       return updatedAuthority;
     },
-    [authorities]
+    [authorities, invalidateAuthorityListRequests]
   );
 
   const archiveAuthority = useCallback(
@@ -303,6 +355,7 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       }
 
       const updatedAuthority = await apiArchiveAuthority(id);
+      invalidateAuthorityListRequests();
       setAuthorityData((prev) => ({
         ...prev,
         authorities: prev.authorities.map((authority) =>
@@ -312,7 +365,7 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       clearPersistedValue(AUTHORITIES_STORAGE_KEY);
       return updatedAuthority;
     },
-    [authorities]
+    [authorities, invalidateAuthorityListRequests]
   );
 
   const restoreAuthority = useCallback(
@@ -323,6 +376,7 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       }
 
       const updatedAuthority = await apiRestoreAuthority(id);
+      invalidateAuthorityListRequests();
       setAuthorityData((prev) => ({
         ...prev,
         authorities: prev.authorities.map((authority) =>
@@ -332,7 +386,7 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       clearPersistedValue(AUTHORITIES_STORAGE_KEY);
       return updatedAuthority;
     },
-    [authorities]
+    [authorities, invalidateAuthorityListRequests]
   );
 
   const addContact = useCallback(
@@ -365,6 +419,7 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
         isPrimary: input.isPrimary
       });
 
+      invalidateAuthorityListRequests();
       setAuthorityData((prev) => ({
         ...prev,
         contacts: [...prev.contacts, createdContact]
@@ -372,7 +427,7 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       clearPersistedValue(AUTHORITIES_STORAGE_KEY);
       return createdContact;
     },
-    []
+    [invalidateAuthorityListRequests]
   );
 
   const updateContact = useCallback(
@@ -411,6 +466,7 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
         isPrimary: input.isPrimary
       });
 
+      invalidateAuthorityListRequests();
       setAuthorityData((prev) => ({
         ...prev,
         contacts: prev.contacts.map((contact) =>
@@ -420,7 +476,7 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       clearPersistedValue(AUTHORITIES_STORAGE_KEY);
       return updatedContact;
     },
-    [contacts]
+    [contacts, invalidateAuthorityListRequests]
   );
 
   const archiveContact = useCallback(
@@ -431,6 +487,7 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       }
 
       const updatedContact = await apiArchiveAuthorityContact(id);
+      invalidateAuthorityListRequests();
       setAuthorityData((prev) => ({
         ...prev,
         contacts: prev.contacts.map((contact) =>
@@ -440,7 +497,7 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       clearPersistedValue(AUTHORITIES_STORAGE_KEY);
       return updatedContact;
     },
-    [contacts]
+    [contacts, invalidateAuthorityListRequests]
   );
 
   const restoreContact = useCallback(
@@ -451,6 +508,7 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       }
 
       const updatedContact = await apiRestoreAuthorityContact(id);
+      invalidateAuthorityListRequests();
       setAuthorityData((prev) => ({
         ...prev,
         contacts: prev.contacts.map((contact) =>
@@ -460,21 +518,23 @@ export function AuthoritiesProvider({ children }: { children: React.ReactNode })
       clearPersistedValue(AUTHORITIES_STORAGE_KEY);
       return updatedContact;
     },
-    [contacts]
+    [contacts, invalidateAuthorityListRequests]
   );
 
   const replaceAuthorities = useCallback(async (value: AuthoritiesSnapshot) => {
     const replaced = normalizeAuthorities(await bulkReplaceAuthorities(value));
+    invalidateAuthorityListRequests();
     setAuthorityData(replaced);
     clearPersistedValue(AUTHORITIES_STORAGE_KEY);
-  }, []);
+  }, [invalidateAuthorityListRequests]);
 
   const resetAuthorities = useCallback(async () => {
     const seed = createSeedAuthorities();
     const replaced = normalizeAuthorities(await bulkReplaceAuthorities(seed));
+    invalidateAuthorityListRequests();
     setAuthorityData(replaced);
     clearPersistedValue(AUTHORITIES_STORAGE_KEY);
-  }, []);
+  }, [invalidateAuthorityListRequests]);
 
   const getAuthorityName = useCallback(
     (authorityId?: string) => {

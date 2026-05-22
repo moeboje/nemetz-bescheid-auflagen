@@ -425,8 +425,8 @@ export default function EvidenceUploader({
         document={serverPreviewDocument}
         onClose={() => setServerPreviewDocument(undefined)}
         onDownload={(document) => void handleServerDocumentDownload(document)}
-        onFileMissing={markServerDocumentMissing}
-        onDocumentNotFound={markServerDocumentNotFound}
+        onPreviewFileMissing={markServerDocumentMissing}
+        onPreviewDocumentNotFound={markServerDocumentNotFound}
       />
     </div>
   );

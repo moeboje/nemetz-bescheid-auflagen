@@ -24,7 +24,6 @@ import HelpPage from "./pages/HelpPage";
 import LoginPage from "./pages/LoginPage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
-import AdminPage from "./pages/AdminPage";
 import AdminUsersPage from "./pages/AdminUsersPage";
 import AdminRolesPage from "./pages/AdminRolesPage";
 import AdminExternalOrgsPage from "./pages/AdminExternalOrgsPage";
@@ -53,6 +52,7 @@ import { ProjectsProvider } from "./state/ProjectsStore";
 import { AuthoritiesProvider } from "./state/AuthoritiesStore";
 import { UsersProvider, useUsers } from "./state/UsersStore";
 import { LegalDocsProvider } from "./state/LegalDocsStore";
+import { DocumentsProvider } from "./state/DocumentsStore";
 import { ObligationsProvider } from "./state/ObligationsStore";
 import { DeadlinesProvider } from "./state/DeadlinesStore";
 import { TasksProvider } from "./state/TasksStore";
@@ -186,7 +186,7 @@ function AppLayout() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const { currentUser } = useUsers();
-  const { hasPermission, permissions } = useAuthorization();
+  const { permissions } = useAuthorization();
   const { activeCount } = useNotifications();
   const runtimeConfig = useRuntimeConfig();
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState<boolean>(() =>
@@ -204,24 +204,6 @@ function AppLayout() {
   const notificationsEnabled = runtimeConfig.features.enableNotifications;
   const canAccessReports = reportsEnabled && permissions.canViewReports && permissions.canViewTasks;
   const currentAccountUser = user ?? currentUser;
-  const canAccessLegacyAdmin =
-    hasPermission("admin.access") &&
-    permissions.canManageUsersAdmin &&
-    permissions.canManageRolesAdmin &&
-    permissions.canManageExternalOrgsAdmin &&
-    permissions.canManageAuthoritiesAdmin &&
-    permissions.canManageSecurityAdmin &&
-    hasPermission("masterData.manage") &&
-    hasPermission("projects.edit") &&
-    hasPermission("projects.archive") &&
-    hasPermission("legalDocs.edit") &&
-    hasPermission("legalDocs.archive") &&
-    hasPermission("obligations.edit") &&
-    hasPermission("obligations.archive") &&
-    hasPermission("deadlines.edit") &&
-    hasPermission("deadlines.archive") &&
-    hasPermission("tasks.edit") &&
-    hasPermission("tasks.complete");
   const restrictedFallback = `${MODULE_BASE_PATH}/dashboard`;
   const accountPath = `${MODULE_BASE_PATH}/account`;
   const personalSecurityPath = `${MODULE_BASE_PATH}/account/security`;
@@ -700,7 +682,7 @@ function AppLayout() {
           path="/admin"
           element={
             permissions.canViewAdmin ? (
-              canAccessLegacyAdmin ? <AdminPage /> : <Navigate to={defaultAdminPath} replace />
+              <Navigate to={defaultAdminPath} replace />
             ) : (
               <Navigate to={restrictedFallback} replace />
             )
@@ -820,19 +802,21 @@ export default function App() {
                       <AuditLogProvider>
                         <ProcedureMasterDataProvider>
                           <ProjectsProvider>
-                            <LegalDocsProvider>
-                              <ObligationsProvider>
-                                <DeadlinesProvider>
-                                  <TaskStateProvider>
-                                    <TasksProvider>
-                                      <NotificationsProvider>
-                                        <AppRouter />
-                                      </NotificationsProvider>
-                                    </TasksProvider>
-                                  </TaskStateProvider>
-                                </DeadlinesProvider>
-                              </ObligationsProvider>
-                            </LegalDocsProvider>
+                            <DocumentsProvider>
+                              <LegalDocsProvider>
+                                <ObligationsProvider>
+                                  <DeadlinesProvider>
+                                    <TaskStateProvider>
+                                      <TasksProvider>
+                                        <NotificationsProvider>
+                                          <AppRouter />
+                                        </NotificationsProvider>
+                                      </TasksProvider>
+                                    </TaskStateProvider>
+                                  </DeadlinesProvider>
+                                </ObligationsProvider>
+                              </LegalDocsProvider>
+                            </DocumentsProvider>
                           </ProjectsProvider>
                         </ProcedureMasterDataProvider>
                       </AuditLogProvider>

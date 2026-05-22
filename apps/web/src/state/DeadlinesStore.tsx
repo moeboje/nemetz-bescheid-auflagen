@@ -279,7 +279,7 @@ export function DeadlinesProvider({ children }: { children: React.ReactNode }) {
   const { currentUser, getUserLabel } = useUsers();
   const [deadlines, setDeadlines] = useState<Deadline[]>([]);
   const [writableProjectOptions, setWritableProjectOptions] = useState<DomainProjectOption[]>([]);
-  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname, "deadlines");
 
   const reloadDeadlines = useCallback(async () => {
     if (!authUser || authUser.type === "EXTERNAL") {

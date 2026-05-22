@@ -1,0 +1,49 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import {
+  canUserLookupExternalOrgs,
+  shouldAutoLoadExternalOrgsLookup
+} from "./externalOrgsLookupGuards";
+
+describe("external org lookup route guards", () => {
+  it("suppresses eager lookup on project detail and dashboard routes", () => {
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance/projects/project-1"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/projects/project-1"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/dashboard"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance/dashboard"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/admin"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/admin/users"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/admin/roles"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/admin/external-orgs"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/admin/design"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance/admin/users"), false);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance/projects"), true);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance/obligations"), true);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/administrator"), true);
+    assert.equal(shouldAutoLoadExternalOrgsLookup("/compliance/administrator"), true);
+  });
+
+  it("keeps explicit lookup permission-gated by existing admin external-org permissions", () => {
+    assert.equal(
+      canUserLookupExternalOrgs({
+        effectivePermissions: ["admin.access", "externalOrgs.view"]
+      }),
+      true
+    );
+    assert.equal(
+      canUserLookupExternalOrgs({
+        effectivePermissions: ["admin.access", "users.manage"]
+      }),
+      true
+    );
+    assert.equal(
+      canUserLookupExternalOrgs({
+        effectivePermissions: ["externalOrgs.view"]
+      }),
+      false
+    );
+    assert.equal(canUserLookupExternalOrgs(null), false);
+  });
+});

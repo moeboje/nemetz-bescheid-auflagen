@@ -20,6 +20,14 @@ import {
   type UserPasswordResetResult
 } from "../api/users";
 import { useAuth } from "./AuthStore";
+import {
+  canApplyListRequest,
+  createListRequestState,
+  getOrStartListRequest,
+  invalidateListRequests,
+  resetListRequestState,
+  type ListRequestOptions
+} from "./listRequestGuard";
 import { isLegacyAdminRootPath, shouldAutoLoadDomainStore } from "./routeLoading";
 
 type UserSelectionFilter = {
@@ -73,21 +81,22 @@ export type UsersContextValue = {
   setMfaEnforced: (id: string, enforced: boolean) => Promise<User | null>;
   resetMfa: (id: string) => Promise<User | null>;
   requestReset: (id: string, input?: UserPasswordResetInput) => Promise<UserPasswordResetResult>;
-  loadAdminUsers: (query?: AdminUsersQuery) => Promise<AdminUsersListResult>;
+  loadAdminUsers: (query?: AdminUsersQuery, options?: ListRequestOptions) => Promise<AdminUsersListResult>;
   getUser: (userId?: string | null) => User | undefined;
   getDisplayName: (userId?: string | null) => string;
   listActiveUsers: (filters?: UserSelectionFilter) => User[];
   searchUsers: (query: string, filters?: UserSearchFilter) => User[];
   replaceUsers: (value: User[]) => void;
   resetUsers: () => void;
-  reloadUsers: () => Promise<User[]>;
-  reloadUsersForLegacyAdmin: () => Promise<User[]>;
+  reloadUsers: (options?: ListRequestOptions) => Promise<User[]>;
+  reloadUsersForLegacyAdmin: (options?: ListRequestOptions) => Promise<User[]>;
   getUserById: (userId?: string) => User | undefined;
   getUserLabel: (userId?: string) => string;
 };
 
 const UsersContext = createContext<UsersContextValue | undefined>(undefined);
-const usersLookupInFlight = new Map<string, Promise<User[]>>();
+const usersLookupRequests = createListRequestState<User[]>();
+const adminUsersListRequests = createListRequestState<AdminUsersListResult>();
 
 type UserLookupMode = "full-list" | "legacy-admin-full" | "restricted-lookup";
 
@@ -173,6 +182,19 @@ function getUsersInFlightKey(input: {
   ].join("|");
 }
 
+function getAdminUsersQueryKey(query: AdminUsersQuery = {}) {
+  return JSON.stringify({
+    archived: query.archived ?? "",
+    dir: query.dir ?? "",
+    page: query.page ?? "",
+    pageSize: query.pageSize ?? "",
+    q: query.q?.trim() ?? "",
+    role: query.role ?? "",
+    sort: query.sort ?? "",
+    type: query.type ?? ""
+  });
+}
+
 function canUseUserLookup(authUser: User) {
   if (authUser.type === "EXTERNAL") {
     return false;
@@ -197,7 +219,7 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
   const { user: authUser } = useAuth();
   const location = useLocation();
   const [users, setUsers] = useState<User[]>([]);
-  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname, "users");
   const isLegacyAdminRoot = isLegacyAdminRootPath(location.pathname);
   const permissionKeys = Array.isArray(authUser?.effectivePermissions) ? authUser.effectivePermissions : [];
   const canManageUsers = Boolean(
@@ -210,7 +232,8 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
   latestAuthContextRef.current = authContextKey;
 
   useEffect(() => {
-    usersLookupInFlight.clear();
+    resetListRequestState(usersLookupRequests);
+    resetListRequestState(adminUsersListRequests);
     if (!authUser) {
       setUsers([]);
       return;
@@ -219,7 +242,12 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
     setUsers(sortUsers([authUser]));
   }, [authContextKey]);
 
-  const loadUsersByMode = useCallback(async (mode: UserLookupMode) => {
+  const invalidateUserListRequests = useCallback(() => {
+    invalidateListRequests(usersLookupRequests);
+    invalidateListRequests(adminUsersListRequests);
+  }, []);
+
+  const loadUsersByMode = useCallback(async (mode: UserLookupMode, options: ListRequestOptions = {}) => {
     const requestAuthContextKey = authContextKey;
 
     if (!authUser) {
@@ -243,22 +271,18 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
       mode: safeMode,
       includeArchived
     });
-    let inFlight = usersLookupInFlight.get(inFlightKey);
+    const request = getOrStartListRequest(
+      usersLookupRequests,
+      inFlightKey,
+      () =>
+        safeMode === "full-list" || safeMode === "legacy-admin-full"
+          ? listUsers({ includeArchived })
+          : listUserLookup({ includeArchived }),
+      options
+    );
 
-    if (!inFlight) {
-      inFlight = (safeMode === "full-list" || safeMode === "legacy-admin-full"
-        ? listUsers({ includeArchived })
-        : listUserLookup({ includeArchived })
-      ).finally(() => {
-        if (usersLookupInFlight.get(inFlightKey) === inFlight) {
-          usersLookupInFlight.delete(inFlightKey);
-        }
-      });
-      usersLookupInFlight.set(inFlightKey, inFlight);
-    }
-
-    const nextUsers = await inFlight;
-    if (latestAuthContextRef.current !== requestAuthContextKey) {
+    const nextUsers = await request.promise;
+    if (latestAuthContextRef.current !== requestAuthContextKey || !canApplyListRequest(usersLookupRequests, request)) {
       return [];
     }
 
@@ -267,12 +291,12 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
     return sorted;
   }, [authContextKey, authUser, canManageUsers]);
 
-  const reloadUsers = useCallback(async () => {
-    return loadUsersByMode(canManageUsers && !isLegacyAdminRoot ? "full-list" : "restricted-lookup");
+  const reloadUsers = useCallback(async (options: ListRequestOptions = {}) => {
+    return loadUsersByMode(canManageUsers && !isLegacyAdminRoot ? "full-list" : "restricted-lookup", options);
   }, [canManageUsers, isLegacyAdminRoot, loadUsersByMode]);
 
-  const reloadUsersForLegacyAdmin = useCallback(async () => {
-    return loadUsersByMode("legacy-admin-full");
+  const reloadUsersForLegacyAdmin = useCallback(async (options: ListRequestOptions = {}) => {
+    return loadUsersByMode("legacy-admin-full", options);
   }, [loadUsersByMode]);
 
   useEffect(() => {
@@ -373,13 +397,15 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
           passwordMode: input.passwordMode
         });
 
+    invalidateUserListRequests();
+
     setUsers((prev) => {
       const withoutCurrent = prev.filter((user) => user.id !== created.user.id);
       return sortUsers([created.user, ...withoutCurrent]);
     });
 
     return created;
-  }, []);
+  }, [invalidateUserListRequests]);
 
   const updateUser = useCallback(
     async (id: string, patch: UserUpdatePatch) => {
@@ -432,6 +458,8 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
         mustChangePassword: patch.mustChangePassword
       });
 
+      invalidateUserListRequests();
+
       if (latestAuthContextRef.current === requestAuthContextKey) {
         setUsers((prev) => {
           const hasUser = prev.some((user) => user.id === id);
@@ -443,51 +471,74 @@ export function UsersProvider({ children }: { children: React.ReactNode }) {
       }
       return updated;
     },
-    [authContextKey, users]
+    [authContextKey, invalidateUserListRequests, users]
   );
 
   const archiveUser = useCallback(async (id: string) => {
     const updated = await apiArchiveUser(id);
+    invalidateUserListRequests();
     setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updated) : user))));
     return updated;
-  }, []);
+  }, [invalidateUserListRequests]);
 
   const restoreUser = useCallback(async (id: string) => {
     const updated = await apiRestoreUser(id);
+    invalidateUserListRequests();
     setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updated) : user))));
     return updated;
-  }, []);
+  }, [invalidateUserListRequests]);
 
   const unlockUser = useCallback(async (id: string) => {
     const updated = await apiUnlockUser(id);
+    invalidateUserListRequests();
     setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updated) : user))));
     return updated;
-  }, []);
+  }, [invalidateUserListRequests]);
 
   const setMfaEnforced = useCallback(async (id: string, enforced: boolean) => {
     const updated = await apiSetUserMfaEnforced(id, enforced);
+    invalidateUserListRequests();
     setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updated) : user))));
     return updated;
-  }, []);
+  }, [invalidateUserListRequests]);
 
   const resetMfa = useCallback(async (id: string) => {
     const updated = await apiResetUserMfa(id);
+    invalidateUserListRequests();
     setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updated) : user))));
     return updated;
-  }, []);
+  }, [invalidateUserListRequests]);
 
   const requestReset = useCallback(async (id: string, input?: UserPasswordResetInput) => {
     const result = await requestUserPasswordReset(id, input);
+    invalidateUserListRequests();
     const updatedUser = result.user;
     if (updatedUser) {
       setUsers((prev) => sortUsers(prev.map((user) => (user.id === id ? mergeUser(user, updatedUser) : user))));
     }
     return result;
-  }, []);
+  }, [invalidateUserListRequests]);
 
-  const loadAdminUsers = useCallback(async (query: AdminUsersQuery = {}) => {
-    return apiListAdminUsers(query);
-  }, []);
+  const loadAdminUsers = useCallback(async (query: AdminUsersQuery = {}, options: ListRequestOptions = {}) => {
+    const requestAuthContextKey = authContextKey;
+    const inFlightKey = `${requestAuthContextKey}|${getAdminUsersQueryKey(query)}`;
+    const request = getOrStartListRequest(
+      adminUsersListRequests,
+      inFlightKey,
+      () => apiListAdminUsers(query),
+      options
+    );
+
+    const result = await request.promise;
+    if (
+      latestAuthContextRef.current !== requestAuthContextKey ||
+      !canApplyListRequest(adminUsersListRequests, request)
+    ) {
+      return { items: [], total: 0, page: query.page ?? 1, pageSize: query.pageSize ?? 20 };
+    }
+
+    return result;
+  }, [authContextKey]);
 
   const listActiveUsers = useCallback(
     (filters?: UserSelectionFilter) =>

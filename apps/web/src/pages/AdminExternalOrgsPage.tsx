@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { Badge, Button, Card, DataTable, IconButton, Input, Modal, Select } from "@nemetz/ui";
 import { ApiError } from "../api/client";
@@ -25,6 +25,7 @@ type ConfirmationState = {
 };
 
 const DEFAULT_EXTERNAL_ORG_TYPE = "Firma";
+const POST_MUTATION_REFRESH = { force: true, reason: "postMutation" } as const;
 
 const emptyForm: FormState = {
   name: "",
@@ -66,6 +67,7 @@ export default function AdminExternalOrgsPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const fetchExternalOrgsSeqRef = useRef(0);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -84,17 +86,26 @@ export default function AdminExternalOrgsPage() {
     [archivedFilter, search]
   );
 
-  const fetchExternalOrgs = useCallback(async () => {
+  const fetchExternalOrgs = useCallback(async (options: { force?: boolean; reason?: string } = {}) => {
+    const requestSeq = fetchExternalOrgsSeqRef.current + 1;
+    fetchExternalOrgsSeqRef.current = requestSeq;
     setIsLoading(true);
     setLoadError("");
 
     try {
-      const payload = await loadExternalOrgs(query);
+      const payload = await loadExternalOrgs(query, options);
+      if (fetchExternalOrgsSeqRef.current !== requestSeq) {
+        return;
+      }
       setRows(payload.items);
     } catch {
-      setLoadError(t("admin.externalOrgs.error.load"));
+      if (fetchExternalOrgsSeqRef.current === requestSeq) {
+        setLoadError(t("admin.externalOrgs.error.load"));
+      }
     } finally {
-      setIsLoading(false);
+      if (fetchExternalOrgsSeqRef.current === requestSeq) {
+        setIsLoading(false);
+      }
     }
   }, [loadExternalOrgs, query]);
 
@@ -191,7 +202,7 @@ export default function AdminExternalOrgsPage() {
         setSuccessMessage(t("admin.externalOrgs.success.created"));
       }
 
-      await fetchExternalOrgs();
+      await fetchExternalOrgs(POST_MUTATION_REFRESH);
       closeModal();
     } catch (error) {
       setFormError(
@@ -226,7 +237,7 @@ export default function AdminExternalOrgsPage() {
         setSuccessMessage(t("admin.externalOrgs.success.restored"));
       }
 
-      await fetchExternalOrgs();
+      await fetchExternalOrgs(POST_MUTATION_REFRESH);
       setConfirmation(null);
     } catch (error) {
       setLoadError(extractApiErrorMessage(error, "admin.externalOrgs.error.action"));

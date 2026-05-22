@@ -166,6 +166,8 @@ describe("Admin Users API", () => {
     await prisma.mfaPending.deleteMany();
     await prisma.mfaChallenge.deleteMany();
     await prisma.auditLog.deleteMany();
+    await prisma.authorityContact.deleteMany();
+    await prisma.authority.deleteMany();
     await prisma.user.deleteMany();
     await prisma.externalOrganization.deleteMany();
     await prisma.role.deleteMany();
@@ -1020,6 +1022,172 @@ describe("Admin Users API", () => {
     });
 
     assert.equal(response.status, 403);
+  });
+
+  it("admin roles list and catalog are admin-only and payload-arm", async () => {
+    const admin = await createUser({
+      email: "admin-roles-list@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const user = await createUser({
+      email: "roles-list-user@example.com",
+      password: "ValidPassword1!",
+      role: "USER"
+    });
+    const org = await prisma.externalOrganization.create({
+      data: {
+        name: "Roles External Org",
+        type: "Firma"
+      }
+    });
+    const externalUser = await createUser({
+      email: "roles-list-external@example.com",
+      password: "ValidPassword1!",
+      role: "EXTERNAL",
+      type: "EXTERNAL",
+      externalOrgId: org.id
+    });
+
+    const adminCookie = await login(admin.email, "ValidPassword1!");
+    const userCookie = await login(user.email, "ValidPassword1!");
+    const externalCookie = await login(externalUser.email, "ValidPassword1!");
+
+    const catalogResponse = await request("/admin/roles/catalog", { cookie: adminCookie });
+    assert.equal(catalogResponse.status, 200);
+    const catalogPayload = (await catalogResponse.json()) as {
+      permissions: Array<Record<string, unknown>>;
+    };
+    assert.ok(catalogPayload.permissions.length > 0);
+    assert.deepEqual(Object.keys(catalogPayload.permissions[0] ?? {}).sort(), [
+      "group",
+      "key",
+      "label",
+      "requiresAdminAccess"
+    ]);
+
+    const listResponse = await request("/admin/roles?archived=false", { cookie: adminCookie });
+    assert.equal(listResponse.status, 200);
+    const listPayload = (await listResponse.json()) as {
+      items: Array<{ key: string; isArchived: boolean; permissionKeys?: string[]; users?: unknown }>;
+      total: number;
+    };
+    assert.ok(listPayload.total >= 1);
+    assert.equal(listPayload.items.some((row) => row.isArchived), false);
+    assert.equal("users" in (listPayload.items[0] ?? {}), false);
+    assert.ok(Array.isArray(listPayload.items[0]?.permissionKeys));
+
+    const userCatalogResponse = await request("/admin/roles/catalog", { cookie: userCookie });
+    assert.equal(userCatalogResponse.status, 403);
+    const userListResponse = await request("/admin/roles", { cookie: userCookie });
+    assert.equal(userListResponse.status, 403);
+    const externalCatalogResponse = await request("/admin/roles/catalog", { cookie: externalCookie });
+    assert.equal(externalCatalogResponse.status, 403);
+    const externalListResponse = await request("/admin/roles", { cookie: externalCookie });
+    assert.equal(externalListResponse.status, 403);
+  });
+
+  it("admin roles archived=false excludes archived roles before serialization", async () => {
+    const admin = await createUser({
+      email: "admin-roles-archived-filter@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    await prisma.role.create({
+      data: {
+        key: "ACTIVE_PHASE_FOUR_ROLE",
+        labelDe: "Aktive Phase Vier Rolle",
+        isSystem: false,
+        isArchived: false,
+        permissionsJson: ["dashboard.view"]
+      }
+    });
+    await prisma.role.create({
+      data: {
+        key: "ARCHIVED_PHASE_FOUR_ROLE",
+        labelDe: "Archivierte Phase Vier Rolle",
+        isSystem: false,
+        isArchived: true,
+        permissionsJson: ["dashboard.view"]
+      }
+    });
+
+    const cookie = await login(admin.email, "ValidPassword1!");
+    const response = await request("/admin/roles?archived=false&q=Phase%20Vier", { cookie });
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as {
+      items: Array<{ key: string; isArchived: boolean }>;
+      total: number;
+    };
+
+    assert.equal(payload.items.some((row) => row.key === "ACTIVE_PHASE_FOUR_ROLE"), true);
+    assert.equal(payload.items.some((row) => row.key === "ARCHIVED_PHASE_FOUR_ROLE"), false);
+    assert.equal(payload.items.some((row) => row.isArchived), false);
+  });
+
+  it("authorities endpoint remains internal-only and returns a minimal authorities snapshot", async () => {
+    const admin = await createUser({
+      email: "admin-authorities-minimal@example.com",
+      password: "ValidPassword1!",
+      role: "ADMIN"
+    });
+    const org = await prisma.externalOrganization.create({
+      data: {
+        name: "Authorities External Org",
+        type: "Firma"
+      }
+    });
+    const externalUser = await createUser({
+      email: "authorities-external-denied@example.com",
+      password: "ValidPassword1!",
+      role: "EXTERNAL",
+      type: "EXTERNAL",
+      externalOrgId: org.id
+    });
+    const authority = await prisma.authority.create({
+      data: {
+        id: "authority-phase-4",
+        name: "Phase 4 Behoerde",
+        shortName: "P4"
+      }
+    });
+    await prisma.authorityContact.create({
+      data: {
+        id: "authority-contact-phase-4",
+        authorityId: authority.id,
+        name: "Kontakt Phase 4",
+        email: "kontakt.phase4@example.com",
+        roleTitle: "Sachbearbeitung"
+      }
+    });
+
+    const adminCookie = await login(admin.email, "ValidPassword1!");
+    const response = await request("/authorities", { cookie: adminCookie });
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as {
+      authorities: Array<Record<string, unknown>>;
+      contacts: Array<Record<string, unknown>>;
+      projects?: unknown;
+      users?: unknown;
+      legalDocs?: unknown;
+      obligations?: unknown;
+      deadlines?: unknown;
+      taskState?: unknown;
+    };
+
+    assert.deepEqual(Object.keys(payload).sort(), ["authorities", "contacts"]);
+    assert.equal(payload.authorities.some((row) => row.id === authority.id), true);
+    assert.equal(payload.contacts.some((row) => row.id === "authority-contact-phase-4"), true);
+    assert.equal("projects" in payload, false);
+    assert.equal("users" in payload, false);
+    assert.equal("legalDocs" in payload, false);
+    assert.equal("obligations" in payload, false);
+    assert.equal("deadlines" in payload, false);
+    assert.equal("taskState" in payload, false);
+
+    const externalCookie = await login(externalUser.email, "ValidPassword1!");
+    const externalResponse = await request("/authorities", { cookie: externalCookie });
+    assert.equal(externalResponse.status, 403);
   });
 
   it("admin can create, update, archive and restore custom roles", async () => {

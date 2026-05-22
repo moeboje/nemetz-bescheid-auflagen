@@ -8,6 +8,7 @@ import { Issuer } from "openid-client";
 import { loadConfig, type AppConfig } from "./config.js";
 import { prisma } from "./prisma.js";
 import { createAuthoritiesRouter } from "./routes/authorities.js";
+import { createDashboardRouter } from "./routes/dashboard.js";
 import { createDeadlinesRouter } from "./routes/deadlines.js";
 import { createLegalDocsRouter } from "./routes/legalDocs.js";
 import { createLegacyDecisionsRouter } from "./routes/legacyDecisions.js";
@@ -83,6 +84,7 @@ import {
 } from "./notificationSettings.js";
 import {
   canReadProjectDomain,
+  getProjectAccessFacts,
   hasDomainReadPermission,
   hasGlobalProjectReadAccess,
   requireProjectDomainWrite,
@@ -146,6 +148,7 @@ const BRANDING_ASSET_TYPES = {
 const BRANDING_LOGO_MAX_BYTES = 1024 * 1024;
 const BRANDING_ICON_MAX_BYTES = 256 * 1024;
 const BRANDING_MULTIPART_MAX_BYTES = BRANDING_LOGO_MAX_BYTES + 64 * 1024;
+const EDITABLE_PERMISSION_CATALOG = getEditablePermissionCatalog();
 const BRANDING_ASSET_CONFIG = {
   logo: {
     type: BRANDING_ASSET_TYPES.logo,
@@ -1133,6 +1136,64 @@ const documentDtoInclude = {
   }
 };
 
+const documentDtoSelect = {
+  id: true,
+  ownerType: true,
+  ownerId: true,
+  category: true,
+  fileVersion: true,
+  filename: true,
+  originalFilename: true,
+  mimeType: true,
+  sizeBytes: true,
+  createdAt: true,
+  createdByUserId: true,
+  createdByUser: {
+    select: {
+      firstName: true,
+      lastName: true
+    }
+  },
+  approvalRequests: {
+    orderBy: {
+      createdAt: "desc" as const
+    },
+    take: 10,
+    select: {
+      id: true,
+      documentId: true,
+      fileVersion: true,
+      status: true,
+      requestedByUserId: true,
+      requestedAt: true,
+      requestedComment: true,
+      approverUserId: true,
+      decidedByUserId: true,
+      decidedAt: true,
+      decisionComment: true,
+      updatedAt: true,
+      requestedByUser: {
+        select: {
+          firstName: true,
+          lastName: true
+        }
+      },
+      approverUser: {
+        select: {
+          firstName: true,
+          lastName: true
+        }
+      },
+      decidedByUser: {
+        select: {
+          firstName: true,
+          lastName: true
+        }
+      }
+    }
+  }
+} satisfies Prisma.DocumentSelect;
+
 type DocumentWithDtoRelations = Prisma.DocumentGetPayload<{ include: typeof documentDtoInclude }>;
 
 function getCurrentDocumentApprovalRequest(document: {
@@ -2039,6 +2100,22 @@ async function assertCanReadDocumentOwner(
     return false;
   }
 
+  if (ownerType.trim().toUpperCase() === "PROJECT") {
+    const facts = await getProjectAccessFacts(prisma, user, ownerId);
+    if (!facts.exists) {
+      res.status(404).json({ ok: false, message: "Document owner not found." });
+      return false;
+    }
+    if (facts.canRead) {
+      return true;
+    }
+    res.status(403).json({
+      ok: false,
+      message: "Forbidden."
+    });
+    return false;
+  }
+
   const context = await resolveDocumentOwnerProjectContext(prisma, ownerType, ownerId);
   if (!context.exists) {
     res.status(404).json({ ok: false, message: "Document owner not found." });
@@ -2799,6 +2876,7 @@ export function createApp(config: AppConfig = loadConfig()) {
   const router = express.Router();
   router.use(createLegacyRecoveryGuard(prisma, config));
   router.use(createAuthoritiesRouter(prisma));
+  router.use(createDashboardRouter(prisma, config));
   router.use(createDeadlinesRouter(prisma));
   router.use(createLegalDocsRouter(prisma));
   router.use(createLegacyDecisionsRouter(prisma));
@@ -3728,7 +3806,7 @@ export function createApp(config: AppConfig = loadConfig()) {
           orderBy: {
             createdAt: "desc"
           },
-          include: documentDtoInclude
+          select: documentDtoSelect
         })
       );
 
@@ -5683,7 +5761,7 @@ export function createApp(config: AppConfig = loadConfig()) {
     async (_req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         res.json({
-          permissions: getEditablePermissionCatalog()
+          permissions: EDITABLE_PERMISSION_CATALOG
         });
       } catch (error) {
         next(error);
@@ -5698,6 +5776,16 @@ export function createApp(config: AppConfig = loadConfig()) {
     async (_req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const roles = await prisma.role.findMany({
+          select: {
+            id: true,
+            key: true,
+            labelDe: true,
+            descriptionDe: true,
+            isSystem: true,
+            isArchived: true,
+            createdAt: true,
+            updatedAt: true
+          },
           orderBy: [
             {
               isSystem: "desc"
@@ -5725,13 +5813,46 @@ export function createApp(config: AppConfig = loadConfig()) {
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const perf = createPerfTimer(config, req, "admin.roles.list");
-        const search = toOptionalTrimmedString(req.query.q ?? req.query.search)?.toLowerCase();
+        const search = toOptionalTrimmedString(req.query.q ?? req.query.search);
         const archived = parseArchivedFilter(req.query.archived);
+        const where: Prisma.RoleWhereInput = {
+          isArchived: archived === "all" ? undefined : archived === "true",
+          OR: search
+            ? [
+                {
+                  key: {
+                    contains: search,
+                    mode: "insensitive"
+                  }
+                },
+                {
+                  labelDe: {
+                    contains: search,
+                    mode: "insensitive"
+                  }
+                },
+                {
+                  descriptionDe: {
+                    contains: search,
+                    mode: "insensitive"
+                  }
+                }
+              ]
+            : undefined
+        };
 
         const roles = await perf.measure("role query", async () =>
           prisma.role.findMany({
-            where: {
-              isArchived: archived === "all" ? undefined : archived === "true"
+            where,
+            select: {
+              id: true,
+              key: true,
+              labelDe: true,
+              descriptionDe: true,
+              isSystem: true,
+              isArchived: true,
+              createdAt: true,
+              updatedAt: true
             },
             orderBy: [
               {
@@ -5744,27 +5865,22 @@ export function createApp(config: AppConfig = loadConfig()) {
           })
         );
 
-        const filtered = search
-          ? roles.filter((row) =>
-              `${row.key} ${row.labelDe} ${row.descriptionDe ?? ""}`.toLowerCase().includes(search)
-            )
-          : roles;
         const permissionMap = await perf.measure("permission metadata query", async () =>
           getStoredRolePermissionMap(
             prisma,
-            filtered.map((row) => row.key)
+            roles.map((row) => row.key)
           )
         );
 
-        perf.mark("response", { total: filtered.length });
+        perf.mark("response", { total: roles.length });
         res.json({
-          items: filtered.map((row) =>
+          items: roles.map((row) =>
             toAdminRole({
               ...row,
               permissionsJson: permissionMap.get(row.key) ?? undefined
             })
           ),
-          total: filtered.length
+          total: roles.length
         });
       } catch (error) {
         next(error);
@@ -6657,6 +6773,17 @@ export function createApp(config: AppConfig = loadConfig()) {
           where: {
             isArchived: false
           },
+          select: {
+            id: true,
+            name: true,
+            type: true,
+            phone: true,
+            email: true,
+            address: true,
+            isArchived: true,
+            createdAt: true,
+            updatedAt: true
+          },
           orderBy: {
             name: "asc"
           }
@@ -6679,13 +6806,59 @@ export function createApp(config: AppConfig = loadConfig()) {
     async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
       try {
         const perf = createPerfTimer(config, req, "admin.external_orgs.list");
-        const search = toOptionalTrimmedString(req.query.q ?? req.query.search)?.toLowerCase();
+        const search = toOptionalTrimmedString(req.query.q ?? req.query.search);
         const archived = parseArchivedFilter(req.query.archived);
+        const where: Prisma.ExternalOrganizationWhereInput = {
+          isArchived: archived === "all" ? undefined : archived === "true",
+          OR: search
+            ? [
+                {
+                  name: {
+                    contains: search,
+                    mode: "insensitive"
+                  }
+                },
+                {
+                  type: {
+                    contains: search,
+                    mode: "insensitive"
+                  }
+                },
+                {
+                  email: {
+                    contains: search,
+                    mode: "insensitive"
+                  }
+                },
+                {
+                  phone: {
+                    contains: search,
+                    mode: "insensitive"
+                  }
+                },
+                {
+                  address: {
+                    contains: search,
+                    mode: "insensitive"
+                  }
+                }
+              ]
+            : undefined
+        };
 
         const organizations = await perf.measure("organization query", async () =>
           prisma.externalOrganization.findMany({
-            where: {
-              isArchived: archived === "all" ? undefined : archived === "true"
+            where,
+            select: {
+              id: true,
+              name: true,
+              type: true,
+              phone: true,
+              email: true,
+              address: true,
+              isArchived: true,
+              createdAt: true,
+              updatedAt: true
             },
             orderBy: {
               name: "asc"
@@ -6693,20 +6866,10 @@ export function createApp(config: AppConfig = loadConfig()) {
           })
         );
 
-        const filtered = await perf.measure("filter and serialization", async () =>
-          search
-            ? organizations.filter((row) =>
-                `${row.name} ${row.type} ${row.email ?? ""} ${row.phone ?? ""} ${row.address ?? ""}`
-                  .toLowerCase()
-                  .includes(search)
-              )
-            : organizations
-        );
-
-        perf.mark("response", { total: filtered.length });
+        perf.mark("response", { total: organizations.length });
         res.json({
-          items: filtered.map((row) => toExternalOrganization(row)),
-          total: filtered.length
+          items: organizations.map((row) => toExternalOrganization(row)),
+          total: organizations.length
         });
       } catch (error) {
         next(error);

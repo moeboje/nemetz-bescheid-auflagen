@@ -22,9 +22,11 @@ import {
 } from "../api/legacyDecisions";
 import { uploadDocument } from "../api/documents";
 import {
+  getProjectHistoryDependencies,
   listProjectAccess,
   removeProjectAccess,
-  upsertProjectAccess
+  upsertProjectAccess,
+  type ProjectHistoryDependencies
 } from "../api/projects";
 import AuditTimeline from "../components/AuditTimeline";
 import DeadlineModal from "../components/DeadlineModal";
@@ -43,7 +45,7 @@ import {
   LEGACY_DECISION_STATUS_VALUES,
   type LegacyDecision
 } from "../data/legacyDecisions";
-import type { ExternalParticipant, ProjectAccessEntry, ProjectAccessRole } from "../data/projects";
+import type { ExternalParticipant, Project, ProjectAccessEntry, ProjectAccessRole } from "../data/projects";
 import { HELP_CONTEXT_SLUGS, getHelpHref } from "../help/helpContent";
 import { ProjectPolicy } from "../policies/ProjectPolicy";
 import { useAuditLog } from "../state/AuditLogStore";
@@ -53,9 +55,11 @@ import { useDeadlines } from "../state/DeadlinesStore";
 import { useExternalOrgs } from "../state/ExternalOrgsStore";
 import { useLegalDocs } from "../state/LegalDocsStore";
 import { useObligations } from "../state/ObligationsStore";
+import { useProcedureMasterData } from "../state/ProcedureMasterDataStore";
 import { useProjects } from "../state/ProjectsStore";
 import { useScopes } from "../state/ScopesStore";
 import { useTasks } from "../state/TasksStore";
+import { useTaskState } from "../state/TaskStateStore";
 import { useUsers } from "../state/UsersStore";
 import UserMultiSelect from "../components/UserMultiSelect";
 import UserSelect from "../components/UserSelect";
@@ -68,6 +72,11 @@ import {
   getProjectSubmissionTypeLabel
 } from "../projectSubmissionType";
 import { todayDateOnlyLocal } from "../utils/dateOnly";
+import {
+  canCascadeArchiveProject,
+  type ProjectArchiveChildLoadState
+} from "../utils/projectArchiveSummary";
+import { loadFreshProjectForEdit } from "../utils/projectEditFlow";
 
 function getExternalTypeLabel(type: ExternalParticipant["type"]) {
   if (type === "LAWYER") {
@@ -124,6 +133,16 @@ function formatObligationDeleteError(error?: string) {
     return t("obligations.delete.blocked");
   }
   return t("obligations.delete.error");
+}
+
+type ProjectHistoryDependencyLoadState = "idle" | "loading" | "loaded" | "error";
+
+function createEmptyProjectHistoryDependencies(): ProjectHistoryDependencies {
+  return {
+    legalDocIds: [],
+    obligationIds: [],
+    deadlineIds: []
+  };
 }
 
 function getIntervalUnitLabel(unit: "DAY" | "WEEK" | "MONTH" | "QUARTER" | "YEAR") {
@@ -381,7 +400,10 @@ export default function ProjectDetailPage() {
   const { entries } = useAuditLog();
   const {
     projects,
-    loadProjectDetail,
+    reloadProjects,
+    ensureProject,
+    ensureProjectRelationLookups,
+    getProjectDetailErrorStatus,
     updateProject,
     archiveProject,
     restoreProject,
@@ -392,6 +414,7 @@ export default function ProjectDetailPage() {
   } = useProjects();
   const {
     obligations,
+    reloadObligations,
     archiveObligation,
     deleteObligation: removeObligation,
     clearMutationError
@@ -399,18 +422,38 @@ export default function ProjectDetailPage() {
   const { getScopeLabel } = useScopes();
   const { authorities, contacts, getAuthorityName, getContactsForAuthority } = useAuthorities();
   const { users, getUser, getDisplayName } = useUsers();
-  const { legalDocs, archiveLegalDoc, loadLegalDocDetail } = useLegalDocs();
-  const { deadlines, archiveDeadline, getDeadlineStatus } = useDeadlines();
+  const {
+    legalDocs,
+    archiveLegalDoc,
+    ensureLegalDocLookups,
+    loadLegalDocDetail,
+    reloadLegalDocs
+  } = useLegalDocs();
+  const { deadlines, archiveDeadline, getDeadlineStatus, reloadDeadlines } = useDeadlines();
   const { tasks } = useTasks();
-  const { getExternalOrgById } = useExternalOrgs();
+  const { reloadTaskState } = useTaskState();
+  const { getExternalOrgById, reloadExternalOrgs } = useExternalOrgs();
+  const { hasLoadedProcedureMasterData, reloadProcedureMasterData } = useProcedureMasterData();
 
   const [tab, setTab] = useState("overview");
   const [archiveModalOpen, setArchiveModalOpen] = useState(false);
+  const [archiveChildrenLoadState, setArchiveChildrenLoadState] =
+    useState<ProjectArchiveChildLoadState>("idle");
   const [legalDocModalOpen, setLegalDocModalOpen] = useState(false);
   const [editProjectOpen, setEditProjectOpen] = useState(false);
+  const [editProjectTarget, setEditProjectTarget] = useState<Project | undefined>(undefined);
   const [isOpeningProjectEdit, setIsOpeningProjectEdit] = useState(false);
   const [openingLegalDocEditId, setOpeningLegalDocEditId] = useState<string | null>(null);
   const [projectDetailError, setProjectDetailError] = useState("");
+  const [projectDetailLoading, setProjectDetailLoading] = useState(false);
+  const [projectRelationLookupState, setProjectRelationLookupState] =
+    useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [legalDocRelationLookupState, setLegalDocRelationLookupState] =
+    useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [historyDependencyState, setHistoryDependencyState] =
+    useState<ProjectHistoryDependencyLoadState>("idle");
+  const [historyDependencies, setHistoryDependencies] =
+    useState<ProjectHistoryDependencies>(() => createEmptyProjectHistoryDependencies());
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
   const [deadlineModalOpen, setDeadlineModalOpen] = useState(false);
   const [editingDeadlineId, setEditingDeadlineId] = useState<string | null>(null);
@@ -438,8 +481,15 @@ export default function ProjectDetailPage() {
   const [legacyDocumentsRefreshKey, setLegacyDocumentsRefreshKey] = useState(0);
   const checklistTabEnabled = runtimeConfig.features.enableProjectChecklists;
   const isMountedRef = React.useRef(true);
+  const projectDetailLoadSeqRef = React.useRef(0);
+  const loadedTabDataKeysRef = React.useRef<Set<string>>(new Set());
+  const accessLoadSeqRef = React.useRef(0);
+  const legacyLoadSeqRef = React.useRef(0);
+  const historyDependencyLoadKeyRef = React.useRef<string | null>(null);
+  const historyDependencyLoadSeqRef = React.useRef(0);
 
   React.useEffect(() => {
+    isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
     };
@@ -452,6 +502,8 @@ export default function ProjectDetailPage() {
   const canArchive = project ? ProjectPolicy.archive(actor, project) : false;
   const canViewObligationsTab =
     permissions.canViewProjects && permissions.canViewObligations && !actor.isExternal;
+  const canReadHistoryDeadlines =
+    permissions.canViewProjects && permissions.canViewDeadlines && !actor.isExternal;
   const canReadLegacyDecisions =
     !actor.isExternal &&
     (permissions.canViewLegalDocs ||
@@ -461,6 +513,12 @@ export default function ProjectDetailPage() {
   const canViewLegacyDecisionsTab = Boolean(project && canView && canReadLegacyDecisions);
   const canArchiveLegacyDecisions = canWriteProject && permissions.canArchiveLegalDocs;
   const canManageLegacyDecisionDocuments = canWriteProject && permissions.canEditLegalDocs;
+  const canReadRelationLegalDocs =
+    !actor.isExternal &&
+    (permissions.canViewLegalDocs ||
+      permissions.canEditLegalDocs ||
+      permissions.canArchiveLegalDocs ||
+      hasPermission("legalDocs.export"));
   const scopeLabel = project
     ? getScopeLabel(project.companyId, project.siteId, project.facilityId)
     : "";
@@ -530,7 +588,7 @@ export default function ProjectDetailPage() {
         const linkedProject = projects.find((item) => item.id === projectId);
         return {
           id: projectId,
-          title: linkedProject?.title ?? projectId,
+          title: linkedProject?.title ?? t("common.notAvailable"),
           missing: !linkedProject,
           isArchived: linkedProject ? isArchivedEntity(linkedProject) : false
         };
@@ -554,7 +612,7 @@ export default function ProjectDetailPage() {
         const linkedDoc = legalDocs.find((item) => item.id === legalDocId);
         return {
           id: legalDocId,
-          title: linkedDoc?.title ?? legalDocId,
+          title: linkedDoc?.title ?? t("common.notAvailable"),
           missing: !linkedDoc,
           isArchived: linkedDoc ? isArchivedEntity(linkedDoc) : false
         };
@@ -562,41 +620,194 @@ export default function ProjectDetailPage() {
     [legalDocs, project?.referenceLegalDocIds]
   );
 
+  const historyLegalDocIdSet = useMemo(() => {
+    const ids = new Set(historyDependencies.legalDocIds);
+    if (canReadRelationLegalDocs) {
+      projectDocs.forEach((doc) => ids.add(doc.id));
+    }
+    return ids;
+  }, [canReadRelationLegalDocs, historyDependencies.legalDocIds, projectDocs]);
+
+  const historyObligationIdSet = useMemo(() => {
+    const ids = new Set(historyDependencies.obligationIds);
+    if (canViewObligationsTab) {
+      projectObligations.forEach((obligation) => ids.add(obligation.id));
+    }
+    return ids;
+  }, [canViewObligationsTab, historyDependencies.obligationIds, projectObligations]);
+
+  const historyDeadlineIdSet = useMemo(() => {
+    const ids = new Set(historyDependencies.deadlineIds);
+    if (canReadHistoryDeadlines) {
+      projectDeadlines.forEach((deadline) => ids.add(deadline.id));
+    }
+    return ids;
+  }, [canReadHistoryDeadlines, historyDependencies.deadlineIds, projectDeadlines]);
+
   const historyEntries = useMemo(() => {
     if (!project) {
       return [];
     }
-    const legalDocIdSet = new Set(projectDocs.map((doc) => doc.id));
-    const obligationIdSet = new Set(projectObligations.map((obligation) => obligation.id));
-    const deadlineIdSet = new Set(projectDeadlines.map((deadline) => deadline.id));
 
     return entries.filter((entry) => {
       if (entry.entityType === "PROJECT" && entry.entityId === project.id) {
         return true;
       }
-      if (entry.entityType === "LEGAL_DOC" && legalDocIdSet.has(entry.entityId)) {
+      if (entry.entityType === "LEGAL_DOC" && historyLegalDocIdSet.has(entry.entityId)) {
         return true;
       }
-      if (entry.entityType === "OBLIGATION" && obligationIdSet.has(entry.entityId)) {
+      if (entry.entityType === "OBLIGATION" && historyObligationIdSet.has(entry.entityId)) {
         return true;
       }
-      if (entry.entityType === "DEADLINE" && deadlineIdSet.has(entry.entityId)) {
+      if (entry.entityType === "DEADLINE" && historyDeadlineIdSet.has(entry.entityId)) {
         return true;
       }
       return false;
     });
-  }, [entries, project, projectDeadlines, projectDocs, projectObligations]);
+  }, [entries, historyDeadlineIdSet, historyLegalDocIdSet, historyObligationIdSet, project]);
+
+  const relationDependencyKey = useMemo(
+    () => (project?.dependsOnProjectIds ?? []).join(","),
+    [project?.dependsOnProjectIds]
+  );
+  const relationLegalDocKey = useMemo(
+    () => (project?.referenceLegalDocIds ?? []).join(","),
+    [project?.referenceLegalDocIds]
+  );
+  const projectRelationsAreLoading =
+    projectRelationLookupState === "idle" || projectRelationLookupState === "loading";
+  const legalDocRelationsAreLoading =
+    legalDocRelationLookupState === "idle" || legalDocRelationLookupState === "loading";
+  const historyDependenciesAreLoading =
+    historyDependencyState === "idle" || historyDependencyState === "loading";
+  const historyIsLoading = historyDependenciesAreLoading || legalDocRelationsAreLoading;
+
+  React.useEffect(() => {
+    setProjectRelationLookupState("idle");
+    setLegalDocRelationLookupState("idle");
+    setHistoryDependencyState("idle");
+    setHistoryDependencies(createEmptyProjectHistoryDependencies());
+    historyDependencyLoadKeyRef.current = null;
+    historyDependencyLoadSeqRef.current += 1;
+  }, [project?.id]);
+
+  React.useEffect(() => {
+    if (!project || !canView) {
+      return;
+    }
+
+    let cancelled = false;
+    setProjectRelationLookupState("loading");
+    void ensureProjectRelationLookups(project.id)
+      .then(() => {
+        if (!cancelled && isMountedRef.current) {
+          setProjectRelationLookupState("loaded");
+        }
+      })
+      .catch(() => {
+        if (!cancelled && isMountedRef.current) {
+          setProjectRelationLookupState("error");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canView, ensureProjectRelationLookups, project?.id, relationDependencyKey]);
+
+  React.useEffect(() => {
+    if (!project || !canView) {
+      return;
+    }
+    if (!canReadRelationLegalDocs) {
+      setLegalDocRelationLookupState("loaded");
+      return;
+    }
+
+    let cancelled = false;
+    setLegalDocRelationLookupState("loading");
+    void ensureLegalDocLookups({
+      ids: project.referenceLegalDocIds,
+      projectId: project.id
+    })
+      .then(() => {
+        if (!cancelled && isMountedRef.current) {
+          setLegalDocRelationLookupState("loaded");
+        }
+      })
+      .catch(() => {
+        if (!cancelled && isMountedRef.current) {
+          setLegalDocRelationLookupState("error");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    canReadRelationLegalDocs,
+    canView,
+    ensureLegalDocLookups,
+    project?.id,
+    relationLegalDocKey
+  ]);
   React.useEffect(() => {
     if (!checklistTabEnabled && tab === "checklist") {
       setTab("overview");
     }
   }, [checklistTabEnabled, tab]);
+
   React.useEffect(() => {
     if (!id) {
+      setProjectDetailLoading(false);
       return;
     }
-    void loadProjectDetail(id);
-  }, [id, loadProjectDetail]);
+
+    const requestSeq = projectDetailLoadSeqRef.current + 1;
+    projectDetailLoadSeqRef.current = requestSeq;
+    setProjectDetailLoading(true);
+    setProjectDetailError("");
+
+    void ensureProject(id)
+      .then((detail) => {
+        if (!isMountedRef.current || projectDetailLoadSeqRef.current !== requestSeq) {
+          return;
+        }
+        if (!detail) {
+          const status = getProjectDetailErrorStatus(id);
+          setProjectDetailError(
+            status === 504 ? `${t("projects.detailLoadError")} (504 Gateway Timeout)` : t("projects.detailLoadError")
+          );
+        }
+      })
+      .catch(() => {
+        if (!isMountedRef.current || projectDetailLoadSeqRef.current !== requestSeq) {
+          return;
+        }
+        const status = getProjectDetailErrorStatus(id);
+        setProjectDetailError(
+          status === 504 ? `${t("projects.detailLoadError")} (504 Gateway Timeout)` : t("projects.detailLoadError")
+        );
+      })
+      .finally(() => {
+        if (!isMountedRef.current || projectDetailLoadSeqRef.current !== requestSeq) {
+          return;
+        }
+        setProjectDetailLoading(false);
+      });
+  }, [ensureProject, getProjectDetailErrorStatus, id]);
+
+  React.useEffect(() => {
+    loadedTabDataKeysRef.current.clear();
+    setAccessEntries([]);
+    setAccessError("");
+    setLegacyDecisions([]);
+    setLegacyError("");
+    setArchiveChildrenLoadState("idle");
+    setEditProjectOpen(false);
+    setEditProjectTarget(undefined);
+  }, [project?.id]);
+
   React.useEffect(() => {
     if (tab === "obligations" && !canViewObligationsTab) {
       setTab("overview");
@@ -619,38 +830,157 @@ export default function ProjectDetailPage() {
   }, [canManageProjectAccessUi, tab]);
 
   React.useEffect(() => {
+    if (!project || !canView) {
+      return;
+    }
+
+    const tabKey = `${project.id}:${tab}`;
+    if (loadedTabDataKeysRef.current.has(tabKey)) {
+      return;
+    }
+
+    let load: Promise<unknown> | null = null;
+    if (tab === "legalDocs") {
+      load = reloadLegalDocs();
+    } else if (tab === "deadlines") {
+      load = Promise.all([reloadLegalDocs(), reloadDeadlines()]);
+    } else if (tab === "obligations" && canViewObligationsTab) {
+      load = Promise.all([
+        reloadLegalDocs(),
+        reloadObligations(),
+        reloadTaskState(),
+        reloadExternalOrgs()
+      ]);
+    } else if (tab === "participants") {
+      load = reloadExternalOrgs();
+    }
+
+    if (!load) {
+      return;
+    }
+
+    loadedTabDataKeysRef.current.add(tabKey);
+    void load.catch(() => {
+      loadedTabDataKeysRef.current.delete(tabKey);
+      if (isMountedRef.current) {
+        setProjectDetailError(t("projects.detailLoadError"));
+      }
+    });
+  }, [
+    canView,
+    canViewObligationsTab,
+    project?.id,
+    reloadDeadlines,
+    reloadExternalOrgs,
+    reloadLegalDocs,
+    reloadObligations,
+    reloadTaskState,
+    tab
+  ]);
+
+  React.useEffect(() => {
+    if (!project || !canView || tab !== "history") {
+      return;
+    }
+
+    const loadKey = `${project.id}:history`;
+    if (historyDependencyLoadKeyRef.current === loadKey) {
+      return;
+    }
+
+    const requestSeq = historyDependencyLoadSeqRef.current + 1;
+    historyDependencyLoadSeqRef.current = requestSeq;
+    historyDependencyLoadKeyRef.current = loadKey;
+    setHistoryDependencyState("loading");
+    setProjectDetailError("");
+
+    void getProjectHistoryDependencies(project.id)
+      .then((dependencies) => {
+        if (!isMountedRef.current || historyDependencyLoadSeqRef.current !== requestSeq) {
+          return;
+        }
+        setHistoryDependencies({
+          legalDocIds: Array.from(new Set(dependencies.legalDocIds)),
+          obligationIds: Array.from(new Set(dependencies.obligationIds)),
+          deadlineIds: Array.from(new Set(dependencies.deadlineIds))
+        });
+        setHistoryDependencyState("loaded");
+      })
+      .catch(() => {
+        if (!isMountedRef.current || historyDependencyLoadSeqRef.current !== requestSeq) {
+          return;
+        }
+        historyDependencyLoadKeyRef.current = null;
+        setHistoryDependencyState("error");
+        setProjectDetailError(t("projects.detailLoadError"));
+      });
+  }, [canView, project?.id, tab]);
+
+  React.useEffect(() => {
     if (!project || !canManageProjectAccessUi || tab !== "access") {
       return;
     }
+    const tabKey = `${project.id}:access`;
+    if (loadedTabDataKeysRef.current.has(tabKey)) {
+      return;
+    }
+    const requestSeq = accessLoadSeqRef.current + 1;
+    accessLoadSeqRef.current = requestSeq;
+    loadedTabDataKeysRef.current.add(tabKey);
     void listProjectAccess(project.id)
       .then((items) => {
+        if (!isMountedRef.current || accessLoadSeqRef.current !== requestSeq) {
+          return;
+        }
         setAccessEntries(items);
         setAccessError("");
       })
       .catch(() => {
+        loadedTabDataKeysRef.current.delete(tabKey);
+        if (!isMountedRef.current || accessLoadSeqRef.current !== requestSeq) {
+          return;
+        }
         setAccessError(t("projects.access.loadError"));
       });
-  }, [canManageProjectAccessUi, project, tab]);
+  }, [canManageProjectAccessUi, project?.id, tab]);
 
   React.useEffect(() => {
     if (!project || tab !== "legacyDecisions" || !canViewLegacyDecisionsTab) {
       return;
     }
+    const tabKey = `${project.id}:legacyDecisions`;
+    if (loadedTabDataKeysRef.current.has(tabKey)) {
+      return;
+    }
+    const requestSeq = legacyLoadSeqRef.current + 1;
+    legacyLoadSeqRef.current = requestSeq;
+    loadedTabDataKeysRef.current.add(tabKey);
     void listProjectLegacyDecisions(project.id)
       .then((items) => {
+        if (!isMountedRef.current || legacyLoadSeqRef.current !== requestSeq) {
+          return;
+        }
         setLegacyDecisions(items);
         setLegacyError("");
       })
       .catch(() => {
+        loadedTabDataKeysRef.current.delete(tabKey);
+        if (!isMountedRef.current || legacyLoadSeqRef.current !== requestSeq) {
+          return;
+        }
         setLegacyError(t("legacyDecisions.loadError"));
       });
-  }, [canViewLegacyDecisionsTab, project, tab]);
+  }, [canViewLegacyDecisionsTab, project?.id, tab]);
 
   if (!project) {
     return (
       <div className="page">
         <Card>
-          <p className="placeholderText">{t("projects.detail.notFound")}</p>
+          <p className={projectDetailError ? "validationText" : "placeholderText"}>
+            {projectDetailLoading
+              ? t("documents.loading")
+              : projectDetailError || t("projects.detail.notFound")}
+          </p>
         </Card>
       </div>
     );
@@ -686,8 +1016,19 @@ export default function ProjectDetailPage() {
     obligations: projectObligations.length,
     deadlines: projectDeadlines.length
   };
-  const hasChildrenForArchive =
-    childCountSummary.legalDocs + childCountSummary.obligations + childCountSummary.deadlines > 0;
+  const hasChildrenForArchive = canCascadeArchiveProject(childCountSummary, archiveChildrenLoadState);
+  const archiveChildrenAreLoaded = archiveChildrenLoadState === "loaded";
+  const archiveChildrenAreLoading =
+    archiveChildrenLoadState === "idle" || archiveChildrenLoadState === "loading";
+  const formatArchiveChildCount = (count: number) => {
+    if (archiveChildrenAreLoaded) {
+      return String(count);
+    }
+    if (archiveChildrenLoadState === "error") {
+      return t("common.notAvailable");
+    }
+    return t("documents.loading");
+  };
 
   const docColumns = [
     {
@@ -861,7 +1202,33 @@ export default function ProjectDetailPage() {
     }
   ];
 
+  const loadArchiveChildren = async () => {
+    setProjectDetailError("");
+    setArchiveChildrenLoadState("loading");
+    try {
+      await Promise.all([reloadLegalDocs(), reloadObligations(), reloadDeadlines()]);
+      if (isMountedRef.current) {
+        setArchiveChildrenLoadState("loaded");
+      }
+      return true;
+    } catch {
+      if (isMountedRef.current) {
+        setArchiveChildrenLoadState("error");
+        setProjectDetailError(t("projects.detailLoadError"));
+      }
+      return false;
+    }
+  };
+
+  const openArchiveDialog = () => {
+    setArchiveModalOpen(true);
+    void loadArchiveChildren();
+  };
+
   const handleArchive = async (cascadeChildren: boolean) => {
+    if (cascadeChildren && archiveChildrenLoadState !== "loaded") {
+      return;
+    }
     if (cascadeChildren) {
       await Promise.all(projectDocs.map((doc) => archiveLegalDoc(doc.id)));
       await Promise.all(projectObligations.map((obligation) => archiveObligation(obligation.id)));
@@ -874,18 +1241,41 @@ export default function ProjectDetailPage() {
   };
 
   const openProjectEditModal = async () => {
+    const projectId = project.id;
     setProjectDetailError("");
+    setEditProjectTarget(undefined);
     setIsOpeningProjectEdit(true);
-    const detail = await loadProjectDetail(project.id);
-    if (!isMountedRef.current) {
-      return;
+    try {
+      const [detail] = await Promise.all([
+        loadFreshProjectForEdit({ projectId, reloadProjects, ensureProject }),
+        reloadLegalDocs(),
+        hasLoadedProcedureMasterData ? Promise.resolve(null) : reloadProcedureMasterData()
+      ]);
+      if (!isMountedRef.current) {
+        return;
+      }
+      if (!detail) {
+        const status = getProjectDetailErrorStatus(projectId);
+        setProjectDetailError(
+          status === 504 ? `${t("projects.detailLoadError")} (504 Gateway Timeout)` : t("projects.detailLoadError")
+        );
+        return;
+      }
+      setEditProjectTarget(detail);
+      setEditProjectOpen(true);
+    } catch {
+      if (!isMountedRef.current) {
+        return;
+      }
+      const status = getProjectDetailErrorStatus(projectId);
+      setProjectDetailError(
+        status === 504 ? `${t("projects.detailLoadError")} (504 Gateway Timeout)` : t("projects.detailLoadError")
+      );
+    } finally {
+      if (isMountedRef.current) {
+        setIsOpeningProjectEdit(false);
+      }
     }
-    setIsOpeningProjectEdit(false);
-    if (!detail) {
-      setProjectDetailError(t("projects.detailLoadError"));
-      return;
-    }
-    setEditProjectOpen(true);
   };
 
   const openLegalDocEditModal = async (docId: string) => {
@@ -1148,7 +1538,7 @@ export default function ProjectDetailPage() {
             {t("projects.action.edit")}
           </Button>
           {!project.isArchived ? (
-            <Button variant="secondary" disabled={!canArchive} onClick={() => setArchiveModalOpen(true)}>
+            <Button variant="secondary" disabled={!canArchive} onClick={openArchiveDialog}>
               {t("common.archive")}
             </Button>
           ) : (
@@ -1340,7 +1730,9 @@ export default function ProjectDetailPage() {
                     {predecessorProjects.map((row) => (
                       <div key={row.id} className="relationLinkItem">
                         {row.missing ? (
-                          <span className="relationSelectionLabel">{row.title}</span>
+                          <span className="relationSelectionLabel">
+                            {projectRelationsAreLoading ? t("documents.loading") : row.title}
+                          </span>
                         ) : (
                           <button
                             type="button"
@@ -1379,6 +1771,8 @@ export default function ProjectDetailPage() {
                       </div>
                     ))}
                   </div>
+                ) : projectRelationsAreLoading ? (
+                  <p className="placeholderText">{t("documents.loading")}</p>
                 ) : (
                   <p className="placeholderText">{t("projects.relations.empty.dependents")}</p>
                 )}
@@ -1390,7 +1784,9 @@ export default function ProjectDetailPage() {
                     {referenceLegalDocs.map((row) => (
                       <div key={row.id} className="relationLinkItem">
                         {row.missing ? (
-                          <span className="relationSelectionLabel">{row.title}</span>
+                          <span className="relationSelectionLabel">
+                            {legalDocRelationsAreLoading ? t("documents.loading") : row.title}
+                          </span>
                         ) : (
                           <button
                             type="button"
@@ -1876,7 +2272,13 @@ export default function ProjectDetailPage() {
       {tab === "history" ? (
         <Card>
           <h2 className="sectionTitle">{t("projects.detail.tabs.history")}</h2>
-          <AuditTimeline entries={historyEntries} />
+          {historyIsLoading ? (
+            <p className="placeholderText">{t("documents.loading")}</p>
+          ) : historyDependencyState === "error" ? (
+            <p className="placeholderText">{t("projects.detailLoadError")}</p>
+          ) : (
+            <AuditTimeline entries={historyEntries} />
+          )}
         </Card>
       ) : null}
 
@@ -1945,7 +2347,14 @@ export default function ProjectDetailPage() {
         </div>
       </Modal>
 
-      <ProjectModal open={editProjectOpen} onClose={() => setEditProjectOpen(false)} project={project} />
+      <ProjectModal
+        open={editProjectOpen}
+        onClose={() => {
+          setEditProjectOpen(false);
+          setEditProjectTarget(undefined);
+        }}
+        project={editProjectTarget}
+      />
 
       <ExternalParticipantModal
         open={externalModalOpen}
@@ -2014,18 +2423,24 @@ export default function ProjectDetailPage() {
       >
         <div className="modalForm">
           <p className="placeholderText">{t("projects.archive.warning")}</p>
+          {archiveChildrenAreLoading ? (
+            <p className="placeholderText">{t("documents.loading")}</p>
+          ) : null}
+          {archiveChildrenLoadState === "error" ? (
+            <p className="validationText">{t("projects.detailLoadError")}</p>
+          ) : null}
           <div className="detailGrid">
             <div>
               <div className="metaLabel">{t("projects.archive.children.legalDocs")}</div>
-              <div className="metaValue">{childCountSummary.legalDocs}</div>
+              <div className="metaValue">{formatArchiveChildCount(childCountSummary.legalDocs)}</div>
             </div>
             <div>
               <div className="metaLabel">{t("projects.archive.children.obligations")}</div>
-              <div className="metaValue">{childCountSummary.obligations}</div>
+              <div className="metaValue">{formatArchiveChildCount(childCountSummary.obligations)}</div>
             </div>
             <div>
               <div className="metaLabel">{t("projects.archive.children.deadlines")}</div>
-              <div className="metaValue">{childCountSummary.deadlines}</div>
+              <div className="metaValue">{formatArchiveChildCount(childCountSummary.deadlines)}</div>
             </div>
           </div>
         </div>

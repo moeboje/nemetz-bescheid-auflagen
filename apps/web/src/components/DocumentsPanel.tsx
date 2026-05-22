@@ -4,7 +4,6 @@ import {
   deleteDocument,
   fetchDocumentBlob,
   getDocumentApiErrorCode,
-  listDocuments,
   replaceDocumentFile,
   updateDocumentApproval,
   updateDocumentMetadata,
@@ -18,7 +17,9 @@ import {
 import { ApiError } from "../api/client";
 import { t, type I18nKey } from "../i18n";
 import { getPendingDocumentUploads, uploadDocumentsSequentially } from "../services/documentUploadBatch";
+import { useDocuments } from "../state/DocumentsStore";
 import { useUsers } from "../state/UsersStore";
+import type { DocumentsMutationScope } from "../state/DocumentsStore";
 import type { Attachment } from "../types/models";
 import {
   getDocumentFileTypeFilter,
@@ -169,14 +170,30 @@ export default function DocumentsPanel({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const replaceInputRef = useRef<HTMLInputElement | null>(null);
   const { currentUser } = useUsers();
-  const [items, setItems] = useState<DocumentDto[]>([]);
-  const [loading, setLoading] = useState(false);
+  const {
+    getDocuments,
+    ensureDocuments,
+    refreshDocuments,
+    captureDocumentsMutationScope,
+    canApplyDocumentsMutationScope,
+    invalidateDocuments,
+    upsertDocument,
+    upsertDocuments,
+    removeDocument,
+    isDocumentsLoaded,
+    isDocumentsLoading,
+    hasDocumentsError,
+    getDocumentsErrorStatus
+  } = useDocuments();
+  const items = getDocuments(ownerType, ownerId);
+  const loading = isDocumentsLoading(ownerType, ownerId);
+  const error = hasDocumentsError(ownerType, ownerId);
+  const errorStatus = getDocumentsErrorStatus(ownerType, ownerId);
   const [uploading, setUploading] = useState(false);
   const [replacing, setReplacing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [savingMetadata, setSavingMetadata] = useState(false);
   const [savingApproval, setSavingApproval] = useState(false);
-  const [error, setError] = useState(false);
   const [actionError, setActionError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [brokenIds, setBrokenIds] = useState<Set<string>>(() => new Set());
@@ -208,31 +225,23 @@ export default function DocumentsPanel({
     label: t(CATEGORY_LABEL_KEYS[category])
   }));
 
-  const loadDocuments = React.useCallback(async () => {
+  React.useEffect(() => {
     if (!ownerId) {
-      setItems([]);
       return;
     }
-
-    setLoading(true);
-    setError(false);
-    try {
-      const next = await listDocuments(ownerType, ownerId);
-      setItems(next);
-      setBrokenIds((previous) => {
-        const nextIds = new Set(next.map((item) => item.id));
-        return new Set([...previous].filter((id) => nextIds.has(id)));
-      });
-    } catch {
-      setError(true);
-    } finally {
-      setLoading(false);
+    if (refreshKey === undefined) {
+      void ensureDocuments(ownerType, ownerId);
+      return;
     }
-  }, [ownerId, ownerType]);
+    void refreshDocuments(ownerType, ownerId);
+  }, [ensureDocuments, ownerId, ownerType, refreshDocuments, refreshKey]);
 
   React.useEffect(() => {
-    void loadDocuments();
-  }, [loadDocuments, refreshKey]);
+    setBrokenIds((previous) => {
+      const nextIds = new Set(items.map((item) => item.id));
+      return new Set([...previous].filter((id) => nextIds.has(id)));
+    });
+  }, [items]);
 
   React.useEffect(() => {
     setUploadedFileKeysAfterPartialFailure(new Set());
@@ -285,13 +294,23 @@ export default function DocumentsPanel({
 
   const groupedItems = useMemo(() => groupItems(filteredItems, groupMode), [filteredItems, groupMode]);
 
+  const refreshOwnerAfterPartialMutation = (wasOwnerLoaded: boolean) => {
+    if (!wasOwnerLoaded && ownerId) {
+      void refreshDocuments(ownerType, ownerId).catch(() => undefined);
+    }
+  };
+
   const handleUpload = async (files: File[]) => {
     if (!files.length || !ownerId) {
       return;
     }
 
+    const mutationScope = captureDocumentsMutationScope(ownerType, ownerId);
+    if (!mutationScope) {
+      return;
+    }
+
     setUploading(true);
-    setError(false);
     setActionError("");
     setActionMessage("");
     try {
@@ -310,10 +329,17 @@ export default function DocumentsPanel({
           approverUserId: canRequestDocumentApproval && uploadApprovalRequired ? uploadApproverUserId : null
         })
       );
+      if (!canApplyDocumentsMutationScope(mutationScope)) {
+        return;
+      }
       const uploadedFileKeys = pendingUploads.slice(0, result.uploaded.length).map((entry) => entry.fileKey);
       if (result.uploaded.length) {
-        await loadDocuments();
-        onChanged?.();
+        const wasOwnerLoaded = isDocumentsLoaded(ownerType, ownerId);
+        const applied = upsertDocuments(result.uploaded, mutationScope);
+        if (applied) {
+          refreshOwnerAfterPartialMutation(wasOwnerLoaded);
+          onChanged?.();
+        }
       }
       if (!result.completed) {
         if (uploadedFileKeys.length) {
@@ -335,23 +361,41 @@ export default function DocumentsPanel({
     }
   };
 
-  const markFileMissing = React.useCallback((document: DocumentDto) => {
+  const capturePreviewMutationScope = React.useCallback((document: DocumentDto) => (
+    captureDocumentsMutationScope(document.ownerType, document.ownerId)
+  ), [captureDocumentsMutationScope]);
+
+  const markFileMissing = React.useCallback((document: DocumentDto, mutationScope: DocumentsMutationScope) => {
+    if (!canApplyDocumentsMutationScope(mutationScope)) {
+      return;
+    }
     setBrokenIds((previous) => new Set(previous).add(document.id));
     setActionError(t("documents.fileMissingDetails"));
-  }, []);
+  }, [canApplyDocumentsMutationScope]);
 
-  const markDocumentNotFound = React.useCallback((document: DocumentDto) => {
-    setItems((previous) => previous.filter((item) => item.id !== document.id));
+  const markDocumentNotFound = React.useCallback((document: DocumentDto, mutationScope: DocumentsMutationScope) => {
+    if (!canApplyDocumentsMutationScope(mutationScope)) {
+      return;
+    }
+    const removed = removeDocument(ownerType, ownerId, document.id, mutationScope);
+    const invalidated = invalidateDocuments(ownerType, ownerId, mutationScope);
+    if (!removed && !invalidated) {
+      return;
+    }
     setBrokenIds((previous) => {
       const next = new Set(previous);
       next.delete(document.id);
       return next;
     });
     setActionError(t("documents.notFoundRefresh"));
-    void loadDocuments();
-  }, [loadDocuments]);
+  }, [canApplyDocumentsMutationScope, invalidateDocuments, ownerId, ownerType, removeDocument]);
 
   const handleDownload = async (document: DocumentDto) => {
+    const mutationScope = captureDocumentsMutationScope(ownerType, ownerId);
+    if (!mutationScope) {
+      return;
+    }
+
     setActionError("");
     setActionMessage("");
     try {
@@ -363,13 +407,16 @@ export default function DocumentsPanel({
       link.click();
       URL.revokeObjectURL(objectUrl);
     } catch (downloadError) {
+      if (!canApplyDocumentsMutationScope(mutationScope)) {
+        return;
+      }
       const errorCode = getDocumentApiErrorCode(downloadError);
       if (errorCode === "FILE_MISSING") {
-        markFileMissing(document);
+        markFileMissing(document, mutationScope);
         return;
       }
       if (errorCode === "DOCUMENT_NOT_FOUND") {
-        markDocumentNotFound(document);
+        markDocumentNotFound(document, mutationScope);
         return;
       }
       setActionError(getActionErrorMessage(downloadError, "documents.error"));
@@ -377,16 +424,30 @@ export default function DocumentsPanel({
   };
 
   const handleCategoryChange = async (document: DocumentDto, category: DocumentCategory) => {
+    const mutationScope = captureDocumentsMutationScope(ownerType, ownerId);
+    if (!mutationScope) {
+      return;
+    }
+
     setSavingMetadata(true);
     setActionError("");
     setActionMessage("");
     try {
       const updated = await updateDocumentMetadata(document.id, { category });
-      setItems((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
-      setActionMessage(t("documents.metadataSaved"));
-      onChanged?.();
+      if (!canApplyDocumentsMutationScope(mutationScope)) {
+        return;
+      }
+      const wasOwnerLoaded = isDocumentsLoaded(ownerType, ownerId);
+      const applied = upsertDocument(updated, mutationScope);
+      if (applied) {
+        refreshOwnerAfterPartialMutation(wasOwnerLoaded);
+        setActionMessage(t("documents.metadataSaved"));
+        onChanged?.();
+      }
     } catch (metadataError) {
-      setActionError(getActionErrorMessage(metadataError, "documents.metadataError"));
+      if (canApplyDocumentsMutationScope(mutationScope)) {
+        setActionError(getActionErrorMessage(metadataError, "documents.metadataError"));
+      }
     } finally {
       setSavingMetadata(false);
     }
@@ -404,6 +465,11 @@ export default function DocumentsPanel({
     if (!approvalModal) {
       return;
     }
+    const mutationScope = captureDocumentsMutationScope(ownerType, ownerId);
+    if (!mutationScope) {
+      return;
+    }
+
     setSavingApproval(true);
     setActionError("");
     setActionMessage("");
@@ -413,12 +479,21 @@ export default function DocumentsPanel({
         comment: approvalComment,
         approverUserId: approvalModal.action === "request" ? approvalApproverUserId : undefined
       });
-      setItems((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
-      setApprovalModal(undefined);
-      setActionMessage(t("documents.approval.saved"));
-      onChanged?.();
+      if (!canApplyDocumentsMutationScope(mutationScope)) {
+        return;
+      }
+      const wasOwnerLoaded = isDocumentsLoaded(ownerType, ownerId);
+      const applied = upsertDocument(updated, mutationScope);
+      if (applied) {
+        refreshOwnerAfterPartialMutation(wasOwnerLoaded);
+        setApprovalModal(undefined);
+        setActionMessage(t("documents.approval.saved"));
+        onChanged?.();
+      }
     } catch (approvalError) {
-      setActionError(getActionErrorMessage(approvalError, "documents.approval.error"));
+      if (canApplyDocumentsMutationScope(mutationScope)) {
+        setActionError(getActionErrorMessage(approvalError, "documents.approval.error"));
+      }
     } finally {
       setSavingApproval(false);
     }
@@ -436,21 +511,35 @@ export default function DocumentsPanel({
       return;
     }
 
+    const mutationScope = captureDocumentsMutationScope(ownerType, ownerId);
+    if (!mutationScope) {
+      return;
+    }
+
     setReplacing(true);
     setActionError("");
     setActionMessage("");
     try {
       const updated = await replaceDocumentFile(replaceTarget.id, file);
-      setItems((previous) => previous.map((item) => (item.id === updated.id ? updated : item)));
-      setBrokenIds((previous) => {
-        const next = new Set(previous);
-        next.delete(updated.id);
-        return next;
-      });
-      setActionMessage(t("documents.replaceSuccess"));
-      onChanged?.();
+      if (!canApplyDocumentsMutationScope(mutationScope)) {
+        return;
+      }
+      const wasOwnerLoaded = isDocumentsLoaded(ownerType, ownerId);
+      const applied = upsertDocument(updated, mutationScope);
+      if (applied) {
+        refreshOwnerAfterPartialMutation(wasOwnerLoaded);
+        setBrokenIds((previous) => {
+          const next = new Set(previous);
+          next.delete(updated.id);
+          return next;
+        });
+        setActionMessage(t("documents.replaceSuccess"));
+        onChanged?.();
+      }
     } catch (replaceError) {
-      setActionError(getActionErrorMessage(replaceError, "documents.replaceError"));
+      if (canApplyDocumentsMutationScope(mutationScope)) {
+        setActionError(getActionErrorMessage(replaceError, "documents.replaceError"));
+      }
     } finally {
       setReplacing(false);
       setReplaceTarget(undefined);
@@ -462,22 +551,36 @@ export default function DocumentsPanel({
       return;
     }
 
+    const mutationScope = captureDocumentsMutationScope(ownerType, ownerId);
+    if (!mutationScope) {
+      return;
+    }
+
     setDeleting(true);
     setActionError("");
     setActionMessage("");
     try {
       await deleteDocument(deleteTarget.id);
-      setItems((previous) => previous.filter((item) => item.id !== deleteTarget.id));
-      setBrokenIds((previous) => {
-        const next = new Set(previous);
-        next.delete(deleteTarget.id);
-        return next;
-      });
-      setDeleteTarget(undefined);
-      setActionMessage(t("documents.removeSuccess"));
-      onChanged?.();
+      if (!canApplyDocumentsMutationScope(mutationScope)) {
+        return;
+      }
+      const wasOwnerLoaded = isDocumentsLoaded(ownerType, ownerId);
+      const removed = removeDocument(ownerType, ownerId, deleteTarget.id, mutationScope);
+      if (removed) {
+        refreshOwnerAfterPartialMutation(wasOwnerLoaded);
+        setBrokenIds((previous) => {
+          const next = new Set(previous);
+          next.delete(deleteTarget.id);
+          return next;
+        });
+        setDeleteTarget(undefined);
+        setActionMessage(t("documents.removeSuccess"));
+        onChanged?.();
+      }
     } catch (deleteError) {
-      setActionError(getActionErrorMessage(deleteError, "documents.removeError"));
+      if (canApplyDocumentsMutationScope(mutationScope)) {
+        setActionError(getActionErrorMessage(deleteError, "documents.removeError"));
+      }
     } finally {
       setDeleting(false);
     }
@@ -636,155 +739,157 @@ export default function DocumentsPanel({
       ) : null}
 
       {loading ? <p className="placeholderText">{t("documents.loading")}</p> : null}
-      {error ? <p className="validationText">{t("documents.error")}</p> : null}
+      {error ? (
+        <p className="validationText">
+          {errorStatus === 504 ? `${t("documents.error")} (504 Gateway Timeout)` : t("documents.error")}
+        </p>
+      ) : null}
       {actionError ? <p className="validationText">{actionError}</p> : null}
       {actionMessage ? <p className="placeholderText">{actionMessage}</p> : null}
 
-      {!loading ? (
-        filteredItems.length ? (
-          <div className="documentsGroupedList">
-            {groupedItems.map((group) => (
-              <div key={group.label || "all"} className="documentsGroup">
-                {group.label ? (
-                  <div className="documentsGroupHeader">
-                    <span className="documentsGroupHeaderLabel">{group.label}</span>
-                    <Badge variant="neutral" size="sm">{group.items.length}</Badge>
-                  </div>
-                ) : null}
-                <div className="fileList">
-                  {group.items.map((item) => {
-                    const isBroken = brokenIds.has(item.id);
-                    const canPreviewDocument = !isBroken && Boolean(previewableById.get(item.id));
-                    const canDownloadDocument = !isBroken;
-                    const canShowManageActions = canManageDocuments && (
-                      showManageActions ||
-                      isBroken ||
-                      item.approvalStatus === "REJECTED" ||
-                      item.approvalStatus === "CHANGES_REQUESTED"
-                    );
-                    const canShowReplaceAction = canManageDocuments && (
-                      showManageActions ||
-                      isBroken ||
-                      item.approvalStatus === "APPROVED" ||
-                      item.approvalStatus === "REJECTED" ||
-                      item.approvalStatus === "CHANGES_REQUESTED"
-                    );
-                    const canDecideApproval = supportsApproval && item.approvalStatus === "PENDING" && (
-                      canManageDocuments || item.approverUserId === currentUser?.id
-                    );
-                    const canRequestApproval = canRequestDocumentApproval && item.approvalStatus !== "PENDING";
-                    return (
-                      <div key={item.id} className="documentsItem">
-                        <div className="documentsItemMeta">
-                          <div className="documentsItemTitle">
-                            <span>{item.originalFilename || item.filename}</span>
-                            <Badge variant="neutral">{getDocumentTypeLabel(item)}</Badge>
-                          </div>
-                          <div className="inlineMeta">
-                            {canManageDocuments ? (
-                              <Select
-                                className="documentsInlineSelect"
-                                options={categoryOptions}
-                                value={item.category}
-                                disabled={savingMetadata}
-                                aria-label={t("documents.category")}
-                                onChange={(event) => void handleCategoryChange(item, event.target.value as DocumentCategory)}
-                              />
-                            ) : (
-                              <Badge variant="neutral">{t(CATEGORY_LABEL_KEYS[item.category] ?? CATEGORY_LABEL_KEYS.OTHER)}</Badge>
-                            )}
-                            <Badge variant={getApprovalVariant(item.approvalStatus)}>
-                              {t(APPROVAL_LABEL_KEYS[item.approvalStatus] ?? APPROVAL_LABEL_KEYS.NOT_REQUIRED)}
-                            </Badge>
-                            {isBroken ? <Badge variant="warning">{t("documents.fileMissing")}</Badge> : null}
-                            <span>{formatSize(item.sizeBytes)}</span>
-                          </div>
-                          <div className="inlineMeta">
-                            <span>{t("documents.uploadedAt")}: {formatDateTime(item.createdAt)}</span>
-                            <span>{t("documents.uploadedBy")}: {item.createdByLabel || t("common.notAvailable")}</span>
-                          </div>
-                          {item.approvalRequestedAt ? (
-                            <div className="inlineMeta">
-                              <span>{t("documents.approval.requestedBy")}: {item.approvalRequestedByLabel || t("common.notAvailable")}</span>
-                              <span>{formatDateTime(item.approvalRequestedAt)}</span>
-                              {item.approverLabel ? <span>{t("documents.approver")}: {item.approverLabel}</span> : null}
-                            </div>
-                          ) : null}
-                          {item.approvalDecidedAt ? (
-                            <div className="inlineMeta">
-                              <span>{t("documents.approval.decidedBy")}: {item.approvalDecidedByLabel || t("common.notAvailable")}</span>
-                              <span>{formatDateTime(item.approvalDecidedAt)}</span>
-                            </div>
-                          ) : null}
-                          {item.approvalRequestedComment ? (
-                            <p className="placeholderText">{item.approvalRequestedComment}</p>
-                          ) : null}
-                          {item.approvalDecisionComment ? (
-                            <p className="placeholderText">{item.approvalDecisionComment}</p>
-                          ) : null}
-                          {isBroken ? <p className="placeholderText">{t("documents.fileMissingDetails")}</p> : null}
-                        </div>
-                        <div className="documentsItemActions">
-                          {canPreviewDocument ? (
-                            <Button size="sm" variant="secondary" onClick={() => setPreviewDocument(item)}>
-                              {t("documents.preview")}
-                            </Button>
-                          ) : null}
-                          {canDownloadDocument ? (
-                            <Button size="sm" variant="secondary" onClick={() => void handleDownload(item)}>
-                              {t("documents.download")}
-                            </Button>
-                          ) : null}
-                          {canRequestApproval ? (
-                            <Button size="sm" variant="secondary" onClick={() => openApprovalModal(item, "request")}>
-                              {t("documents.approval.request")}
-                            </Button>
-                          ) : null}
-                          {canDecideApproval ? (
-                            <>
-                              <Button size="sm" variant="secondary" disabled={savingApproval} onClick={() => openApprovalModal(item, "approve")}>
-                                {t("documents.approval.approve")}
-                              </Button>
-                              <Button size="sm" variant="secondary" disabled={savingApproval} onClick={() => openApprovalModal(item, "reject")}>
-                                {t("documents.approval.reject")}
-                              </Button>
-                              <Button size="sm" variant="secondary" disabled={savingApproval} onClick={() => openApprovalModal(item, "changesRequested")}>
-                                {t("documents.approval.changesRequestedAction")}
-                              </Button>
-                            </>
-                          ) : null}
-                          {canShowReplaceAction ? (
-                            <Button size="sm" variant="secondary" disabled={replacing} onClick={() => openReplacePicker(item)}>
-                              {t("documents.replaceFile")}
-                            </Button>
-                          ) : null}
-                          {canShowManageActions ? (
-                            <>
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                disabled={deleting}
-                                onClick={() => {
-                                  setActionError("");
-                                  setActionMessage("");
-                                  setDeleteTarget(item);
-                                }}
-                              >
-                                {t("documents.removeEntry")}
-                              </Button>
-                            </>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })}
+      {filteredItems.length ? (
+        <div className="documentsGroupedList">
+          {groupedItems.map((group) => (
+            <div key={group.label || "all"} className="documentsGroup">
+              {group.label ? (
+                <div className="documentsGroupHeader">
+                  <span className="documentsGroupHeaderLabel">{group.label}</span>
+                  <Badge variant="neutral" size="sm">{group.items.length}</Badge>
                 </div>
+              ) : null}
+              <div className="fileList">
+                {group.items.map((item) => {
+                  const isBroken = brokenIds.has(item.id);
+                  const canPreviewDocument = !isBroken && Boolean(previewableById.get(item.id));
+                  const canDownloadDocument = !isBroken;
+                  const canShowManageActions = canManageDocuments && (
+                    showManageActions ||
+                    isBroken ||
+                    item.approvalStatus === "REJECTED" ||
+                    item.approvalStatus === "CHANGES_REQUESTED"
+                  );
+                  const canShowReplaceAction = canManageDocuments && (
+                    showManageActions ||
+                    isBroken ||
+                    item.approvalStatus === "APPROVED" ||
+                    item.approvalStatus === "REJECTED" ||
+                    item.approvalStatus === "CHANGES_REQUESTED"
+                  );
+                  const canDecideApproval = supportsApproval && item.approvalStatus === "PENDING" && (
+                    canManageDocuments || item.approverUserId === currentUser?.id
+                  );
+                  const canRequestApproval = canRequestDocumentApproval && item.approvalStatus !== "PENDING";
+                  return (
+                    <div key={item.id} className="documentsItem">
+                      <div className="documentsItemMeta">
+                        <div className="documentsItemTitle">
+                          <span>{item.originalFilename || item.filename}</span>
+                          <Badge variant="neutral">{getDocumentTypeLabel(item)}</Badge>
+                        </div>
+                        <div className="inlineMeta">
+                          {canManageDocuments ? (
+                            <Select
+                              className="documentsInlineSelect"
+                              options={categoryOptions}
+                              value={item.category}
+                              disabled={savingMetadata}
+                              aria-label={t("documents.category")}
+                              onChange={(event) => void handleCategoryChange(item, event.target.value as DocumentCategory)}
+                            />
+                          ) : (
+                            <Badge variant="neutral">{t(CATEGORY_LABEL_KEYS[item.category] ?? CATEGORY_LABEL_KEYS.OTHER)}</Badge>
+                          )}
+                          <Badge variant={getApprovalVariant(item.approvalStatus)}>
+                            {t(APPROVAL_LABEL_KEYS[item.approvalStatus] ?? APPROVAL_LABEL_KEYS.NOT_REQUIRED)}
+                          </Badge>
+                          {isBroken ? <Badge variant="warning">{t("documents.fileMissing")}</Badge> : null}
+                          <span>{formatSize(item.sizeBytes)}</span>
+                        </div>
+                        <div className="inlineMeta">
+                          <span>{t("documents.uploadedAt")}: {formatDateTime(item.createdAt)}</span>
+                          <span>{t("documents.uploadedBy")}: {item.createdByLabel || t("common.notAvailable")}</span>
+                        </div>
+                        {item.approvalRequestedAt ? (
+                          <div className="inlineMeta">
+                            <span>{t("documents.approval.requestedBy")}: {item.approvalRequestedByLabel || t("common.notAvailable")}</span>
+                            <span>{formatDateTime(item.approvalRequestedAt)}</span>
+                            {item.approverLabel ? <span>{t("documents.approver")}: {item.approverLabel}</span> : null}
+                          </div>
+                        ) : null}
+                        {item.approvalDecidedAt ? (
+                          <div className="inlineMeta">
+                            <span>{t("documents.approval.decidedBy")}: {item.approvalDecidedByLabel || t("common.notAvailable")}</span>
+                            <span>{formatDateTime(item.approvalDecidedAt)}</span>
+                          </div>
+                        ) : null}
+                        {item.approvalRequestedComment ? (
+                          <p className="placeholderText">{item.approvalRequestedComment}</p>
+                        ) : null}
+                        {item.approvalDecisionComment ? (
+                          <p className="placeholderText">{item.approvalDecisionComment}</p>
+                        ) : null}
+                        {isBroken ? <p className="placeholderText">{t("documents.fileMissingDetails")}</p> : null}
+                      </div>
+                      <div className="documentsItemActions">
+                        {canPreviewDocument ? (
+                          <Button size="sm" variant="secondary" onClick={() => setPreviewDocument(item)}>
+                            {t("documents.preview")}
+                          </Button>
+                        ) : null}
+                        {canDownloadDocument ? (
+                          <Button size="sm" variant="secondary" onClick={() => void handleDownload(item)}>
+                            {t("documents.download")}
+                          </Button>
+                        ) : null}
+                        {canRequestApproval ? (
+                          <Button size="sm" variant="secondary" onClick={() => openApprovalModal(item, "request")}>
+                            {t("documents.approval.request")}
+                          </Button>
+                        ) : null}
+                        {canDecideApproval ? (
+                          <>
+                            <Button size="sm" variant="secondary" disabled={savingApproval} onClick={() => openApprovalModal(item, "approve")}>
+                              {t("documents.approval.approve")}
+                            </Button>
+                            <Button size="sm" variant="secondary" disabled={savingApproval} onClick={() => openApprovalModal(item, "reject")}>
+                              {t("documents.approval.reject")}
+                            </Button>
+                            <Button size="sm" variant="secondary" disabled={savingApproval} onClick={() => openApprovalModal(item, "changesRequested")}>
+                              {t("documents.approval.changesRequestedAction")}
+                            </Button>
+                          </>
+                        ) : null}
+                        {canShowReplaceAction ? (
+                          <Button size="sm" variant="secondary" disabled={replacing} onClick={() => openReplacePicker(item)}>
+                            {t("documents.replaceFile")}
+                          </Button>
+                        ) : null}
+                        {canShowManageActions ? (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              disabled={deleting}
+                              onClick={() => {
+                                setActionError("");
+                                setActionMessage("");
+                                setDeleteTarget(item);
+                              }}
+                            >
+                              {t("documents.removeEntry")}
+                            </Button>
+                          </>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
-          </div>
-        ) : (
-          <p className="placeholderText">{items.length ? t("documents.noFilteredResults") : t("documents.empty")}</p>
-        )
+            </div>
+          ))}
+        </div>
+      ) : !loading ? (
+        <p className="placeholderText">{items.length ? t("documents.noFilteredResults") : t("documents.empty")}</p>
       ) : null}
 
       {legacyItems?.length ? (
@@ -812,6 +917,7 @@ export default function DocumentsPanel({
         document={previewDocument}
         onClose={() => setPreviewDocument(undefined)}
         onDownload={(document) => void handleDownload(document)}
+        captureMutationScope={capturePreviewMutationScope}
         onFileMissing={markFileMissing}
         onDocumentNotFound={markDocumentNotFound}
       />

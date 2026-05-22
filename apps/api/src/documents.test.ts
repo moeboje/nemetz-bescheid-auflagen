@@ -1546,6 +1546,40 @@ describe("Documents API", () => {
     assert.equal(payload.errorCode, "FILE_MISSING");
   });
 
+  it("lists project documents without eager file existence checks or storage fields", async () => {
+    const user = await createUser("docs-list-missing-file@example.com", "ValidPassword1!");
+    const project = await seedProject(user.id);
+    const cookie = await login(user.email, "ValidPassword1!");
+
+    const document = await prisma.document.create({
+      data: {
+        ownerType: "PROJECT",
+        ownerId: project.id,
+        filename: "missing-list-file.pdf",
+        originalFilename: "missing-list-file.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 12,
+        storagePath: "documents/2026/05/missing-list-file.pdf",
+        sha256: "missing-list-file"
+      }
+    });
+
+    const response = await request(`/documents?ownerType=PROJECT&ownerId=${encodeURIComponent(project.id)}`, {
+      cookie
+    });
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as {
+      items: Array<{ id: string; filename: string; storagePath?: string; sha256?: string }>;
+    };
+    assert.deepEqual(
+      payload.items.map((item) => item.id),
+      [document.id]
+    );
+    assert.equal(payload.items[0]?.filename, "missing-list-file.pdf");
+    assert.equal(payload.items[0]?.storagePath, undefined);
+    assert.equal(payload.items[0]?.sha256, undefined);
+  });
+
   it("deletes missing-file metadata without requiring the physical file", async () => {
     const user = await createUser("docs-delete-missing-file@example.com", "ValidPassword1!");
     const project = await seedProject(user.id);

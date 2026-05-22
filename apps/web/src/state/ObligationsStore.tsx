@@ -208,7 +208,7 @@ export function ObligationsProvider({ children }: { children: React.ReactNode })
   const { logEvent } = useAuditLog();
   const [obligations, setObligations] = useState<Obligation[]>([]);
   const [mutationError, setMutationError] = useState<string | undefined>();
-  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname, "obligations");
 
   const clearMutationError = useCallback(() => {
     setMutationError(undefined);

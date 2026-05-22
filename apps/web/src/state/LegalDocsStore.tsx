@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import {
   LegalDoc,
@@ -20,9 +20,12 @@ import {
   getLegalDoc as apiGetLegalDoc,
   listLegalDocProjectOptions,
   listLegalDocs,
+  lookupLegalDocs,
   restoreLegalDoc as apiRestoreLegalDoc,
-  updateLegalDoc as apiUpdateLegalDoc
+  updateLegalDoc as apiUpdateLegalDoc,
+  type LegalDocLookup
 } from "../api/legalDocs";
+import { getOrCreateInFlight } from "./inFlightDedupe";
 import type { DomainProjectOption } from "../data/projects";
 import { shouldAutoLoadDomainStore } from "./routeLoading";
 
@@ -61,6 +64,7 @@ export type LegalDocsContextValue = {
   replaceLegalDocs: (value: LegalDoc[]) => Promise<void>;
   resetLegalDocs: () => Promise<void>;
   reloadLegalDocs: () => Promise<LegalDoc[]>;
+  ensureLegalDocLookups: (input: { ids?: string[]; projectId?: string }) => Promise<LegalDoc[]>;
   loadLegalDocDetail: (id: string) => Promise<LegalDoc | null>;
 };
 
@@ -169,9 +173,109 @@ function normalizeLegalDocs(value: unknown): LegalDoc[] {
     .filter((doc): doc is LegalDoc => Boolean(doc));
 }
 
+type LegalDocLookupState = Pick<
+  LegalDoc,
+  "id" | "projectId" | "type" | "title" | "isArchived" | "createdAt" | "updatedAt"
+> &
+  Partial<Omit<LegalDoc, "id" | "projectId" | "type" | "title" | "isArchived" | "createdAt" | "updatedAt">>;
+
+function normalizeLegalDocLookup(value: Partial<LegalDocLookup>, index: number): LegalDocLookupState | null {
+  if (
+    typeof value.id !== "string" ||
+    !value.id.trim() ||
+    typeof value.projectId !== "string" ||
+    !value.projectId.trim() ||
+    typeof value.title !== "string" ||
+    !value.title.trim() ||
+    typeof value.type !== "string" ||
+    !value.type.trim()
+  ) {
+    return null;
+  }
+
+  const createdAt =
+    typeof value.createdAt === "string" && value.createdAt.trim() ? value.createdAt : nowStamp();
+  const updatedAt =
+    typeof value.updatedAt === "string" && value.updatedAt.trim()
+      ? value.updatedAt
+      : createdAt;
+  const scopeOverride =
+    value.scopeOverride && typeof value.scopeOverride.companyId === "string"
+      ? {
+          companyId: value.scopeOverride.companyId,
+          siteId: value.scopeOverride.siteId ?? undefined,
+          facilityId: value.scopeOverride.facilityId ?? undefined
+        }
+      : undefined;
+
+  return {
+    id: value.id,
+    projectId: value.projectId,
+    type: value.type,
+    title: value.title,
+    shortDescription: value.shortDescription ?? "",
+    reference: value.reference ?? "",
+    issuedAt: value.issuedAt ?? "",
+    authorityId: typeof value.authorityId === "string" ? value.authorityId : undefined,
+    authorityContactId:
+      typeof value.authorityContactId === "string" ? value.authorityContactId : undefined,
+    attachments: Array.isArray(value.attachments)
+      ? value.attachments.map((attachment, attachmentIndex) =>
+          normalizeAttachment(attachment, `lda-lookup-${value.id}-${index}-${attachmentIndex}`)
+        )
+      : undefined,
+    aiExtraction: value.aiExtraction ? normalizeAiExtraction(value.aiExtraction) : undefined,
+    detailedDescription:
+      typeof value.detailedDescription === "string" ? value.detailedDescription : undefined,
+    contentSummary: typeof value.contentSummary === "string" ? value.contentSummary : undefined,
+    scopeOverride,
+    projectTitle: value.projectTitle ?? undefined,
+    currentUserCanWriteProject: value.currentUserCanWriteProject,
+    archivedAt: value.archivedAt ?? undefined,
+    isArchived: Boolean(value.isArchived || value.archivedAt),
+    createdAt,
+    updatedAt
+  };
+}
+
+function normalizeLegalDocLookups(value: unknown): LegalDocLookupState[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((doc, index) => normalizeLegalDocLookup(doc as Partial<LegalDocLookup>, index))
+    .filter((doc): doc is LegalDocLookupState => Boolean(doc));
+}
+
+function legalDocLookupToStateDoc(value: LegalDocLookupState): LegalDoc {
+  return {
+    id: value.id,
+    projectId: value.projectId,
+    type: value.type,
+    title: value.title,
+    shortDescription: value.shortDescription ?? "",
+    detailedDescription: value.detailedDescription,
+    contentSummary: value.contentSummary,
+    reference: value.reference ?? "",
+    issuedAt: value.issuedAt ?? "",
+    authorityId: value.authorityId,
+    authorityContactId: value.authorityContactId,
+    attachments: value.attachments ?? [],
+    aiExtraction: value.aiExtraction,
+    scopeOverride: value.scopeOverride,
+    projectTitle: value.projectTitle,
+    currentUserCanWriteProject: Boolean(value.currentUserCanWriteProject),
+    archivedAt: value.archivedAt,
+    isArchived: value.isArchived,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt
+  };
+}
+
 const normalizedInitialLegalDocs = normalizeLegalDocs(initialLegalDocs);
 
-function mergeLegalDoc(existing: LegalDoc, incoming: LegalDoc) {
+function mergeLegalDoc(existing: LegalDoc, incoming: LegalDocLookupState) {
   return {
     ...existing,
     ...incoming,
@@ -201,7 +305,16 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
   const { getScopeLabel } = useScopes();
   const [legalDocs, setLegalDocs] = useState<LegalDoc[]>([]);
   const [writableProjectOptions, setWritableProjectOptions] = useState<DomainProjectOption[]>([]);
-  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname);
+  const authUserRef = useRef(authUser);
+  const legalDocLookupInFlightRef = useRef<Map<string, Promise<LegalDoc[]>>>(new Map());
+  const shouldAutoLoad = shouldAutoLoadDomainStore(location.pathname, "legalDocs");
+
+  useEffect(() => {
+    authUserRef.current = authUser;
+    if (!authUser || authUser.type === "EXTERNAL") {
+      legalDocLookupInFlightRef.current.clear();
+    }
+  }, [authUser]);
 
   const reloadLegalDocs = useCallback(async () => {
     if (!authUser || authUser.type === "EXTERNAL") {
@@ -259,6 +372,48 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
       } catch {
         return null;
       }
+    },
+    [authUser]
+  );
+
+  const ensureLegalDocLookups = useCallback(
+    async (input: { ids?: string[]; projectId?: string }) => {
+      if (!authUser || authUser.type === "EXTERNAL") {
+        return [];
+      }
+      const requestUserId = authUser.id;
+      const ids = Array.from(new Set((input.ids ?? []).map((id) => id.trim()).filter(Boolean)));
+      const projectId = input.projectId?.trim();
+      if (ids.length === 0 && !projectId) {
+        return [];
+      }
+      const key = `${requestUserId}:${projectId ?? ""}:${ids.sort().join(",")}`;
+
+      return getOrCreateInFlight(legalDocLookupInFlightRef.current, key, async () => {
+        try {
+          const next = normalizeLegalDocLookups(await lookupLegalDocs({ ids, projectId }));
+          if (authUserRef.current?.id !== requestUserId) {
+            return [];
+          }
+
+          setLegalDocs((prev) => {
+            const previousById = new Map(prev.map((doc) => [doc.id, doc] as const));
+            const nextById = new Map(prev.map((doc) => [doc.id, doc] as const));
+            next.forEach((doc) => {
+              const existing = previousById.get(doc.id);
+              nextById.set(
+                doc.id,
+                existing ? mergeLegalDoc(existing, doc) : legalDocLookupToStateDoc(doc)
+              );
+            });
+            return Array.from(nextById.values());
+          });
+          clearPersistedValue(LEGAL_DOCS_STORAGE_KEY);
+          return next.map((doc) => legalDocLookupToStateDoc(doc));
+        } catch {
+          return [];
+        }
+      });
     },
     [authUser]
   );
@@ -570,6 +725,7 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
       replaceLegalDocs,
       resetLegalDocs,
       reloadLegalDocs,
+      ensureLegalDocLookups,
       loadLegalDocDetail
     }),
     [
@@ -584,6 +740,7 @@ export function LegalDocsProvider({ children }: { children: React.ReactNode }) {
       getEffectiveScope,
       getEffectiveScopeLabel,
       getLegalDocsForProject,
+      ensureLegalDocLookups,
       loadLegalDocDetail,
       replaceLegalDocs,
       resetLegalDocs,

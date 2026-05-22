@@ -77,26 +77,43 @@ const ITEMS: AdminSubnavItem[] = [
   }
 ];
 
+function normalizePath(pathname: string) {
+  const trimmed = pathname.trim() || "/";
+  return trimmed.length > 1 ? trimmed.replace(/\/+$/, "") : trimmed;
+}
+
+function matchesAdminSection(pathname: string, section: string) {
+  const normalized = normalizePath(pathname);
+  const adminPath = `/admin/${section}`;
+  const moduleAdminPath = `/compliance${adminPath}`;
+  return (
+    normalized === adminPath ||
+    normalized.startsWith(`${adminPath}/`) ||
+    normalized === moduleAdminPath ||
+    normalized.startsWith(`${moduleAdminPath}/`)
+  );
+}
+
 function getActiveKey(pathname: string): AdminSubnavItem["key"] {
-  if (pathname.includes("/admin/roles")) {
+  if (matchesAdminSection(pathname, "roles")) {
     return "roles";
   }
-  if (pathname.includes("/admin/external-orgs")) {
+  if (matchesAdminSection(pathname, "external-orgs")) {
     return "externalOrgs";
   }
-  if (pathname.includes("/admin/authorities")) {
+  if (matchesAdminSection(pathname, "authorities")) {
     return "authorities";
   }
-  if (pathname.includes("/admin/procedure-master-data")) {
+  if (matchesAdminSection(pathname, "procedure-master-data")) {
     return "procedureMasterData";
   }
-  if (pathname.includes("/admin/security")) {
+  if (matchesAdminSection(pathname, "security")) {
     return "security";
   }
-  if (pathname.includes("/admin/design")) {
+  if (matchesAdminSection(pathname, "design")) {
     return "design";
   }
-  if (pathname.includes("/admin/notifications")) {
+  if (matchesAdminSection(pathname, "notifications")) {
     return "notifications";
   }
   return "users";

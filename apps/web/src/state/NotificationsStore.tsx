@@ -1,9 +1,11 @@
 import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { t } from "../i18n";
 import { useAuditLog } from "./AuditLogStore";
 import { useDeadlines } from "./DeadlinesStore";
 import { useObligations } from "./ObligationsStore";
 import { loadJSON, saveJSON, STORAGE_KEYS } from "./persistence";
+import { shouldAutoLoadDomainStore } from "./routeLoading";
 import { useTasks } from "./TasksStore";
 import { useUsers } from "./UsersStore";
 
@@ -119,11 +121,13 @@ function isActiveNotification(notification: Notification, today: string) {
 }
 
 export function NotificationsProvider({ children }: { children: React.ReactNode }) {
+  const location = useLocation();
   const { tasks } = useTasks();
   const { obligations } = useObligations();
   const { deadlines } = useDeadlines();
   const { currentUser, getUserLabel } = useUsers();
   const { logEvent } = useAuditLog();
+  const canRunDailyTick = shouldAutoLoadDomainStore(location.pathname, "taskState");
 
   const [notifications, setNotifications] = useState<Notification[]>(() =>
     loadJSON<Notification[]>(STORAGE_KEYS.notifications, {
@@ -260,10 +264,13 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   );
 
   React.useEffect(() => {
+    if (!canRunDailyTick) {
+      return;
+    }
     if (!lastTickAt || lastTickAt !== todayISO()) {
       runDailyTick();
     }
-  }, [lastTickAt, runDailyTick]);
+  }, [canRunDailyTick, lastTickAt, runDailyTick]);
 
   const dismissNotification = useCallback(
     (id: string) => {

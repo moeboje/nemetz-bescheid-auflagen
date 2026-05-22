@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { Badge, Button, Card, DataTable, IconButton, Input, Modal, Select } from "@nemetz/ui";
 import { ApiError } from "../api/client";
@@ -61,6 +61,7 @@ type ExternalOrgQuickForm = {
 };
 
 const DEFAULT_EXTERNAL_ORG_TYPE = "Firma";
+const POST_MUTATION_REFRESH = { force: true, reason: "postMutation" } as const;
 
 const emptyForm: UserFormState = {
   firstName: "",
@@ -244,8 +245,8 @@ export default function AdminUsersPage() {
     requestReset,
     unlockUser
   } = useUsers();
-  const { roles } = useRoles();
-  const { externalOrgs, createExternalOrg } = useExternalOrgs();
+  const { roles, reloadRoles } = useRoles();
+  const { externalOrgs, createExternalOrg, reloadExternalOrgs } = useExternalOrgs();
 
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<string | "ALL">("ALL");
@@ -262,6 +263,7 @@ export default function AdminUsersPage() {
   const [loadError, setLoadError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [passwordPolicy, setPasswordPolicy] = useState<PasswordPolicy | null>(null);
+  const fetchUsersSeqRef = useRef(0);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -283,6 +285,7 @@ export default function AdminUsersPage() {
   const [externalOrgQuickForm, setExternalOrgQuickForm] = useState<ExternalOrgQuickForm>(emptyExternalOrgQuickForm);
   const [externalOrgQuickError, setExternalOrgQuickError] = useState("");
   const [isExternalOrgQuickSubmitting, setIsExternalOrgQuickSubmitting] = useState(false);
+  const [isExternalOrgsLoading, setIsExternalOrgsLoading] = useState(false);
 
   const totalPages = Math.max(1, Math.ceil(total / Math.max(pageSize, 1)));
   const passwordPolicyHint = useMemo(() => formatPasswordPolicyHint(passwordPolicy), [passwordPolicy]);
@@ -389,12 +392,30 @@ export default function AdminUsersPage() {
     [archivedFilter, dir, page, pageSize, roleFilter, search, sort, typeFilter]
   );
 
-  const fetchUsers = useCallback(async () => {
+  const ensureExternalOrgs = useCallback(async () => {
+    if (!permissions.canViewUsersAdmin || !canManageUsers) {
+      return [];
+    }
+
+    setIsExternalOrgsLoading(true);
+    try {
+      return await reloadExternalOrgs();
+    } finally {
+      setIsExternalOrgsLoading(false);
+    }
+  }, [canManageUsers, permissions.canViewUsersAdmin, reloadExternalOrgs]);
+
+  const fetchUsers = useCallback(async (options: { force?: boolean; reason?: string } = {}) => {
+    const requestSeq = fetchUsersSeqRef.current + 1;
+    fetchUsersSeqRef.current = requestSeq;
     setIsLoading(true);
     setLoadError("");
 
     try {
-      const response = await loadAdminUsers(query);
+      const response = await loadAdminUsers(query, options);
+      if (fetchUsersSeqRef.current !== requestSeq) {
+        return;
+      }
       setRows(response.items);
       setTotal(response.total);
 
@@ -403,15 +424,29 @@ export default function AdminUsersPage() {
         setPage(maxPages);
       }
     } catch {
-      setLoadError(t("admin.users.error.load"));
+      if (fetchUsersSeqRef.current === requestSeq) {
+        setLoadError(t("admin.users.error.load"));
+      }
     } finally {
-      setIsLoading(false);
+      if (fetchUsersSeqRef.current === requestSeq) {
+        setIsLoading(false);
+      }
     }
   }, [loadAdminUsers, query]);
 
   useEffect(() => {
     void fetchUsers();
   }, [fetchUsers]);
+
+  useEffect(() => {
+    if (!permissions.canViewUsersAdmin) {
+      return;
+    }
+
+    void reloadRoles({ force: true }).catch(() => {
+      // The page keeps fallback role labels if the lookup is unavailable.
+    });
+  }, [permissions.canViewUsersAdmin, reloadRoles]);
 
   useEffect(() => {
     if (!canManageUsers) {
@@ -436,6 +471,14 @@ export default function AdminUsersPage() {
       active = false;
     };
   }, [canManageUsers]);
+
+  useEffect(() => {
+    if (!modalOpen || form.type !== "EXTERNAL") {
+      return;
+    }
+
+    void ensureExternalOrgs();
+  }, [ensureExternalOrgs, form.type, modalOpen]);
 
   if (!permissions.canViewUsersAdmin) {
     return <Navigate to="/compliance/dashboard" replace />;
@@ -487,6 +530,9 @@ export default function AdminUsersPage() {
     setModalOpen(true);
     clearTransientMessages();
     setResetError("");
+    if (user.type === "EXTERNAL") {
+      void ensureExternalOrgs();
+    }
   };
 
   const closeModal = () => {
@@ -585,7 +631,7 @@ export default function AdminUsersPage() {
         );
       }
 
-      await fetchUsers();
+      await fetchUsers(POST_MUTATION_REFRESH);
       closeModal();
     } catch (error) {
       setFormError(
@@ -616,7 +662,7 @@ export default function AdminUsersPage() {
         setSuccessMessage(t("admin.users.success.restored"));
       }
 
-      await fetchUsers();
+      await fetchUsers(POST_MUTATION_REFRESH);
       setConfirmation(null);
     } catch (error) {
       setLoadError(extractUserAdminErrorMessage(error, "admin.users.error.action"));
@@ -725,7 +771,7 @@ export default function AdminUsersPage() {
 
       if (resetState.passwordMode === "direct") {
         setSuccessMessage(t("admin.users.reset.success"));
-        await fetchUsers();
+        await fetchUsers(POST_MUTATION_REFRESH);
         closeResetModal();
         return;
       }
@@ -740,7 +786,7 @@ export default function AdminUsersPage() {
             : t("admin.users.reset.success")
       );
 
-      await fetchUsers();
+      await fetchUsers(POST_MUTATION_REFRESH);
     } catch (error) {
       setResetError(extractUserAdminErrorMessage(error, "admin.users.reset.error"));
     } finally {
@@ -755,7 +801,7 @@ export default function AdminUsersPage() {
     try {
       await unlockUser(userId);
       setSuccessMessage(t("admin.users.success.unlocked"));
-      await fetchUsers();
+      await fetchUsers(POST_MUTATION_REFRESH);
     } catch (error) {
       setLoadError(extractUserAdminErrorMessage(error, "admin.users.error.action"));
     }
@@ -768,7 +814,7 @@ export default function AdminUsersPage() {
     try {
       await setMfaEnforced(userId, enforced);
       setSuccessMessage(enforced ? t("admin.users.mfa.enforcedOn") : t("admin.users.mfa.enforcedOff"));
-      await fetchUsers();
+      await fetchUsers(POST_MUTATION_REFRESH);
     } catch (error) {
       setLoadError(extractUserAdminErrorMessage(error, "admin.users.error.action"));
     }
@@ -781,7 +827,7 @@ export default function AdminUsersPage() {
     try {
       await resetMfa(userId);
       setSuccessMessage(t("admin.users.mfa.resetSuccess"));
-      await fetchUsers();
+      await fetchUsers(POST_MUTATION_REFRESH);
     } catch (error) {
       setLoadError(extractUserAdminErrorMessage(error, "admin.users.error.action"));
     }
@@ -804,6 +850,7 @@ export default function AdminUsersPage() {
     if (!canManageExternalOrgs) {
       return;
     }
+    void ensureExternalOrgs();
     setExternalOrgQuickError("");
     setExternalOrgQuickForm(emptyExternalOrgQuickForm);
     setExternalOrgQuickModalOpen(true);
@@ -1268,13 +1315,17 @@ export default function AdminUsersPage() {
                 { value: "EXTERNAL", label: t("users.type.external") }
               ]}
               value={form.type}
-              onChange={(event) =>
+              onChange={(event) => {
+                const nextType = event.target.value as UserType;
                 setForm((prev) => ({
                   ...prev,
-                  type: event.target.value as UserType,
-                  externalOrgId: event.target.value === "EXTERNAL" ? prev.externalOrgId : ""
-                }))
-              }
+                  type: nextType,
+                  externalOrgId: nextType === "EXTERNAL" ? prev.externalOrgId : ""
+                }));
+                if (nextType === "EXTERNAL") {
+                  void ensureExternalOrgs();
+                }
+              }}
               disabled={isSubmitting}
             />
           </div>
@@ -1309,7 +1360,7 @@ export default function AdminUsersPage() {
                 options={externalOrgOptions}
                 value={form.externalOrgId}
                 onChange={(event) => setForm((prev) => ({ ...prev, externalOrgId: event.target.value }))}
-                disabled={isSubmitting}
+                disabled={isSubmitting || isExternalOrgsLoading}
               />
             </div>
           ) : null}

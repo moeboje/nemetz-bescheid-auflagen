@@ -23,9 +23,10 @@ import {
   getProjectAccessFacts,
   hasGlobalProjectReadAccess,
   isInternalUser,
-  requireProjectDomainRead,
+  requireProjectDomainReadPermission,
   requireProjectDomainWrite,
   toProjectAccessEntryDto,
+  type ProjectAccessFacts,
   type ProjectAccessSource
 } from "../projectAccess.js";
 import { hasPermission } from "../accessControl.js";
@@ -47,6 +48,7 @@ type ProjectStatus = (typeof PROJECT_STATUS_VALUES)[number];
 
 const DEFAULT_PROJECT_STATUS: ProjectStatus = "DRAFT";
 const INVALID_PROJECT_STATUS_MESSAGE = `Invalid project status. Allowed values: ${PROJECT_STATUS_VALUES.join(", ")}.`;
+const PROJECT_RELATION_LOOKUP_LIMIT = 100;
 
 type ProjectAttachmentDto = {
   id: string;
@@ -998,6 +1000,14 @@ async function annotateProjectForUser(
   project: ProjectDto
 ) {
   const facts = await getProjectAccessFacts(db, user, project.id);
+  return annotateProjectForUserWithFacts(user, project, facts);
+}
+
+function annotateProjectForUserWithFacts(
+  user: RouteUser,
+  project: ProjectDto,
+  facts: ProjectAccessFacts
+) {
   const canWriteProject = isInternalUser(user) && facts.canWrite;
   return {
     ...project,
@@ -1017,6 +1027,34 @@ async function annotateProjectsForUser(
   return Promise.all(projects.map((project) => annotateProjectForUser(db, user, project)));
 }
 
+async function listProjectDtosByIdsPreservingRelations(db: DbClient, projectIds: string[]) {
+  const uniqueProjectIds = Array.from(new Set(projectIds.filter(Boolean))).slice(
+    0,
+    PROJECT_RELATION_LOOKUP_LIMIT
+  );
+  if (uniqueProjectIds.length === 0) {
+    return [] satisfies ProjectDto[];
+  }
+
+  const rows = await db.project.findMany({
+    where: {
+      id: {
+        in: uniqueProjectIds
+      }
+    },
+    select: projectListSelect
+  });
+  const statusByProjectId = await readProjectStatusMap(db, rows.map((project) => project.id));
+  const rowById = new Map(rows.map((project) => [project.id, project] as const));
+
+  return uniqueProjectIds
+    .map((projectId) => {
+      const project = rowById.get(projectId);
+      return project ? toProjectDto(project, statusByProjectId.get(project.id)) : null;
+    })
+    .filter((project): project is ProjectDto => Boolean(project));
+}
+
 async function findProjectById(db: DbClient, id: string) {
   return db.project.findUnique({
     where: {
@@ -1034,6 +1072,114 @@ async function findProjectSnapshotById(db: DbClient, id: string) {
 
   const status = await readProjectStatus(db, id);
   return toProjectDto(project, status, { includeDetailedDescription: true });
+}
+
+async function listDependentProjectIdsForLookup(
+  db: DbClient,
+  projectId: string,
+  accessibleProjectIds: string[] | null
+) {
+  if (accessibleProjectIds !== null && accessibleProjectIds.length === 0) {
+    return [] satisfies string[];
+  }
+
+  const accessScopeSql =
+    accessibleProjectIds === null
+      ? Prisma.empty
+      : Prisma.sql`AND "id" IN (${Prisma.join(accessibleProjectIds)})`;
+  const rows = await db.$queryRaw<Array<{ id: string }>>`
+    SELECT "id"
+    FROM "Project"
+    WHERE "id" <> ${projectId}
+      ${accessScopeSql}
+      AND "dependsOnProjectIds" @> ${JSON.stringify([projectId])}::jsonb
+    ORDER BY "title" ASC, "id" ASC
+    LIMIT ${PROJECT_RELATION_LOOKUP_LIMIT}
+  `;
+
+  return rows.map((row) => row.id);
+}
+
+function projectScopeCanRead(readableProjectIds: string[] | null, projectId: string) {
+  return readableProjectIds === null || readableProjectIds.includes(projectId);
+}
+
+async function listProjectHistoryDependencyIds(
+  db: DbClient,
+  user: RouteUser,
+  projectId: string
+) {
+  const [legalDocProjectIds, obligationProjectIds, deadlineProjectIds] = await Promise.all([
+    getReadableProjectIdsForDomain(db, user, "legalDocs"),
+    getReadableProjectIdsForDomain(db, user, "obligations"),
+    getReadableProjectIdsForDomain(db, user, "deadlines")
+  ]);
+  const canReadLegalDocs = projectScopeCanRead(legalDocProjectIds, projectId);
+  const canReadObligations = projectScopeCanRead(obligationProjectIds, projectId);
+  const canReadDeadlines = projectScopeCanRead(deadlineProjectIds, projectId);
+
+  const [legalDocRows, obligationRows, deadlineRows] = await Promise.all([
+    canReadLegalDocs
+      ? db.legalDocument.findMany({
+          where: {
+            projectId,
+            archivedAt: null,
+            isArchived: false
+          },
+          select: {
+            id: true
+          },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }]
+        })
+      : Promise.resolve([]),
+    canReadObligations
+      ? db.obligation.findMany({
+          where: {
+            archivedAt: null,
+            isArchived: false,
+            legalDocument: {
+              projectId,
+              archivedAt: null,
+              isArchived: false
+            }
+          },
+          select: {
+            id: true
+          },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }]
+        })
+      : Promise.resolve([]),
+    canReadDeadlines
+      ? db.deadline.findMany({
+          where: {
+            archivedAt: null,
+            isArchived: false,
+            OR: [
+              {
+                projectId
+              },
+              {
+                legalDocument: {
+                  projectId,
+                  archivedAt: null,
+                  isArchived: false
+                }
+              }
+            ]
+          },
+          select: {
+            id: true
+          },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }]
+        })
+      : Promise.resolve([])
+  ]);
+
+  return {
+    legalDocIds: legalDocRows.map((row) => row.id),
+    obligationIds: obligationRows.map((row) => row.id),
+    deadlineIds: deadlineRows.map((row) => row.id)
+  };
 }
 
 async function listProjectIds(db: DbClient) {
@@ -1711,33 +1857,46 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
 
   router.get("/projects/:id", async (req: Request, res: Response, next: NextFunction) => {
     try {
+      const perf = createPerfTimer(config, req, "projects.detail");
       applyNoStoreHeaders(res);
 
-      const user = await requireAuthenticatedRouteUser(req, res, prisma);
+      const user = await perf.measure("auth", async () => requireAuthenticatedRouteUser(req, res, prisma));
       if (!user) {
         return;
       }
 
-      const canReadProject = await requireProjectDomainRead({
-        db: prisma,
+      if (!requireProjectDomainReadPermission({
         user,
-        projectId: req.params.id,
         domain: "projects",
         res
-      });
-      if (!canReadProject) {
+      })) {
         return;
       }
 
-      const project = await findProjectSnapshotById(prisma, req.params.id);
+      const accessFacts = await perf.measure("project access", async () =>
+        getProjectAccessFacts(prisma, user, req.params.id)
+      );
+      if (!accessFacts.exists) {
+        res.status(404).json({ ok: false, message: "Project not found." });
+        return;
+      }
+      if (!accessFacts.canRead) {
+        res.status(403).json({ ok: false, message: "Forbidden." });
+        return;
+      }
+
+      const project = await perf.measure("project query", async () =>
+        findProjectSnapshotById(prisma, req.params.id)
+      );
       if (!project) {
         res.status(404).json({ ok: false, message: "Project not found." });
         return;
       }
 
+      perf.mark("response");
       res.json({
         ok: true,
-        project: await annotateProjectForUser(prisma, user, project)
+        project: annotateProjectForUserWithFacts(user, project, accessFacts)
       });
     } catch (error) {
       if (
@@ -1749,6 +1908,101 @@ export function createProjectsRouter(prisma: PrismaClient, config: AppConfig) {
         res.status(400).json({ ok: false, message: error.message });
         return;
       }
+      next(error);
+    }
+  });
+
+  router.get("/projects/:id/relation-lookups", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      applyNoStoreHeaders(res);
+
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
+      if (!user) {
+        return;
+      }
+
+      if (!requireProjectDomainReadPermission({ user, domain: "projects", res })) {
+        return;
+      }
+
+      const currentAccessFacts = await getProjectAccessFacts(prisma, user, req.params.id);
+      if (!currentAccessFacts.exists) {
+        res.status(404).json({ ok: false, message: "Project not found." });
+        return;
+      }
+      if (!currentAccessFacts.canRead) {
+        res.status(403).json({ ok: false, message: "Forbidden." });
+        return;
+      }
+
+      const currentProject = await findProjectById(prisma, req.params.id);
+      if (!currentProject) {
+        res.status(404).json({ ok: false, message: "Project not found." });
+        return;
+      }
+
+      const accessibleProjectIds = await getReadableProjectIdsForDomain(prisma, user, "projects");
+      const accessibleProjectIdSet =
+        accessibleProjectIds === null ? null : new Set(accessibleProjectIds);
+      const predecessorIds = normalizeRelationIds(currentProject.dependsOnProjectIds)
+        .filter((projectId) => accessibleProjectIdSet === null || accessibleProjectIdSet.has(projectId))
+        .slice(0, PROJECT_RELATION_LOOKUP_LIMIT);
+      const dependentIds = await listDependentProjectIdsForLookup(
+        prisma,
+        req.params.id,
+        accessibleProjectIds
+      );
+      const projects = await listProjectDtosByIdsPreservingRelations(prisma, [
+        ...predecessorIds,
+        ...dependentIds
+      ]);
+
+      res.json({
+        ok: true,
+        projects: await annotateProjectsForUser(prisma, user, projects)
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        [INVALID_PROJECT_STATUS_MESSAGE, INVALID_PROJECT_SUBMISSION_TYPE_MESSAGE].includes(
+          error.message
+        )
+      ) {
+        res.status(400).json({ ok: false, message: error.message });
+        return;
+      }
+      next(error);
+    }
+  });
+
+  router.get("/projects/:id/history-dependencies", async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      applyNoStoreHeaders(res);
+
+      const user = await requireAuthenticatedRouteUser(req, res, prisma);
+      if (!user) {
+        return;
+      }
+
+      if (!requireProjectDomainReadPermission({ user, domain: "projects", res })) {
+        return;
+      }
+
+      const accessFacts = await getProjectAccessFacts(prisma, user, req.params.id);
+      if (!accessFacts.exists) {
+        res.status(404).json({ ok: false, message: "Project not found." });
+        return;
+      }
+      if (!accessFacts.canRead) {
+        res.status(403).json({ ok: false, message: "Forbidden." });
+        return;
+      }
+
+      res.json({
+        ok: true,
+        ...(await listProjectHistoryDependencyIds(prisma, user, req.params.id))
+      });
+    } catch (error) {
       next(error);
     }
   });

@@ -37,7 +37,7 @@ export default function ExternalParticipantModal({
   onSave
 }: ExternalParticipantModalProps) {
   const { permissions } = useAuthorization();
-  const { externalOrgs } = useExternalOrgs();
+  const { externalOrgs, reloadExternalOrgs } = useExternalOrgs();
   const { addUser, listActiveUsers, loadAdminUsers } = useUsers();
   const [form, setForm] = useState(emptyForm);
   const [saveError, setSaveError] = useState("");
@@ -46,6 +46,7 @@ export default function ExternalParticipantModal({
     if (!open) {
       return;
     }
+    void reloadExternalOrgs().catch(() => undefined);
     setSaveError("");
     if (participant) {
       setForm({
@@ -62,7 +63,7 @@ export default function ExternalParticipantModal({
       return;
     }
     setForm(emptyForm);
-  }, [open, participant]);
+  }, [open, participant, reloadExternalOrgs]);
 
   const externalUsers = listActiveUsers({ includeExternal: true, includeInternal: false });
   const externalOrgOptions = useMemo(
