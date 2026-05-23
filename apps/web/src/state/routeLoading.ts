@@ -5,6 +5,14 @@ const MODULE_DASHBOARD_ROOT_PATH = "/compliance";
 const MODULE_DASHBOARD_BASE_PATH = "/compliance/dashboard";
 const PROJECTS_BASE_PATH = "/projects";
 const MODULE_PROJECTS_BASE_PATH = "/compliance/projects";
+const STATIC_HELP_ROUTE_PATHS = new Set([
+  "/help",
+  "/help/quick-guide",
+  "/help/roadmap",
+  "/compliance/help",
+  "/compliance/help/quick-guide",
+  "/compliance/help/roadmap"
+]);
 
 export type DomainStoreKey =
   | "authorities"
@@ -61,8 +69,17 @@ export function isProjectDetailRoutePath(pathname: string) {
   );
 }
 
+export function isStaticHelpRoutePath(pathname: string) {
+  return STATIC_HELP_ROUTE_PATHS.has(normalizePath(pathname));
+}
+
 export function shouldAutoLoadLookupStore(pathname: string) {
-  return !isAdminRoutePath(pathname) && !isDashboardRoutePath(pathname) && !isProjectDetailRoutePath(pathname);
+  return (
+    !isAdminRoutePath(pathname) &&
+    !isDashboardRoutePath(pathname) &&
+    !isProjectDetailRoutePath(pathname) &&
+    !isStaticHelpRoutePath(pathname)
+  );
 }
 
 export function shouldAutoLoadDomainStore(pathname: string, store?: DomainStoreKey) {
@@ -71,6 +88,10 @@ export function shouldAutoLoadDomainStore(pathname: string, store?: DomainStoreK
   }
 
   if (isDashboardRoutePath(pathname)) {
+    return false;
+  }
+
+  if (isStaticHelpRoutePath(pathname)) {
     return false;
   }
 

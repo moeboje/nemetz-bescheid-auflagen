@@ -130,6 +130,55 @@
   gap: var(--space-2);
 }
 
+.roadmapLead {
+  margin-top: var(--space-2);
+  max-width: 72ch;
+}
+
+.roadmapSections {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.roadmapDisclaimer {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.roadmapSection {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.roadmapSectionHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.roadmapSectionTitle {
+  margin-top: var(--space-2);
+}
+
+.roadmapItemGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-4);
+}
+
+.roadmapItem {
+  border-left: 3px solid var(--color-border);
+  padding-left: var(--space-3);
+  display: grid;
+  gap: var(--space-1);
+}
+
+.roadmapItem h3 {
+  margin: 0;
+  font-size: var(--font-size-md);
+}
+
 .modalForm {
   display: grid;
   gap: var(--space-4);
