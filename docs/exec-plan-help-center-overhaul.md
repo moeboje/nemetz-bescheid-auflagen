@@ -141,6 +141,17 @@
 - Veraltete Inhalte werden ueber `status`, `lastReviewedAt` und Review-Rhythmus sichtbar gemacht; `deprecated`-Artikel bleiben nur als Bruecke mit klarer Weiterleitung auf aktuelle Inhalte.
 - Bestehende Hint-Dismiss-Logik pro Benutzer bleibt erhalten; bei groesseren Inhaltsaenderungen soll eine kontrollierte Hint-Reset-Strategie pro Slug/Hinweis vorgesehen werden, nicht global blind.
 
+## 17. Fortschreibung 2026-05-23: FAQ, Kurzanleitung und Roadmap
+- Dieser Lauf ist ein reines Frontend-/Content-Feature auf Branch `feature/help-faq-quick-guide-roadmap`.
+- Ziel ist die Aktualisierung der bestehenden FAQ-/Help-Inhalte, eine zweiseitige gebrandete Kurzanleitung fuer interne und externe Portalbenutzer und eine Roadmap-Seite fuer kuenftige Portal-Weiterentwicklungen.
+- Umsetzung bleibt dateibasiert im Web-Client: `helpContent.ts` fuer Help/FAQ, ergaenzende statische Content-Module fuer Kurzanleitung und Roadmap sowie neue React-Seiten/Routen.
+- Es wird keine Help-API, kein Help-CMS, keine Prisma-Aenderung, keine neue Dependency und keine Azure-Arbeit eingefuehrt.
+- Die Kurzanleitung wird als printbare HTML-Seite bereitgestellt, damit Benutzer sie ueber die Browser-Druckfunktion als PDF speichern koennen. Sie enthaelt kein Live-Datenexport, keine personenbezogenen Daten und keine Secrets.
+- Die Kurzanleitung ist auf zwei Seiten ausgelegt: Seite 1 fuer interne Portalbenutzer, Seite 2 fuer externe Portalbenutzer, jeweils mit maximal fuenf Schritten, Wichtig-Callout, Do-/Don't-Box und Support-Hinweis.
+- Es wird kein statisches PDF erzeugt, weil im Repository kein separater stabiler PDF-Workflow fuer diesen Inhalt benoetigt wird. Benutzer speichern bei Bedarf ueber die Browser-Druckfunktion als PDF.
+- Die Roadmap unterscheidet `Verfuegbar`, `Geplant / in Vorbereitung` und `In Pruefung / Ueberlegung`, ohne feste Liefertermine oder verbindliche Zusagen.
+- Checklisten-Vorlagen und 82b-nahe Themen stehen nur unter `In Pruefung / Ueberlegung`. Dashboard-/Reporting-Ausbau, bessere Benachrichtigungen und externe Self-Service-Prozesse duerfen nur als Ausblick erwaehnt werden und werden in diesem Lauf nicht als Fachfunktion umgesetzt.
+
 ## Annahmen und Defaults
 - Help bleibt insgesamt Teil der bestehenden Web-App; es wird keine separate Wissensplattform aufgebaut.
 - Fachliche Portalhilfe bleibt authentifiziert; allgemeine Auth-/Sicherheitsartikel werden zusaetzlich oeffentlich vor Login bereitgestellt.

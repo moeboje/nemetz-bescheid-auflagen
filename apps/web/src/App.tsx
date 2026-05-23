@@ -21,6 +21,8 @@ import ReportsPage from "./pages/ReportsPage";
 import TasksReportPrintPage from "./pages/TasksReportPrintPage";
 import AboutPage from "./pages/AboutPage";
 import HelpPage from "./pages/HelpPage";
+import QuickGuidePage from "./pages/QuickGuidePage";
+import RoadmapPage from "./pages/RoadmapPage";
 import LoginPage from "./pages/LoginPage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
@@ -95,6 +97,11 @@ function isAdminRoute(pathname: string) {
 function isTasksReportPrintRoute(pathname: string) {
   const normalizedPath = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
   return normalizedPath === `${MODULE_BASE_PATH}/reports/tasks` || normalizedPath === "/reports/tasks";
+}
+
+function isQuickGuidePrintRoute(pathname: string) {
+  const normalizedPath = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
+  return normalizedPath === `${MODULE_BASE_PATH}/help/quick-guide` || normalizedPath === "/help/quick-guide";
 }
 
 function getRoleLabel(companyRole: string, isExternal: boolean) {
@@ -391,6 +398,10 @@ function AppLayout() {
     return <TasksReportPrintPage />;
   }
 
+  if (isQuickGuidePrintRoute(location.pathname)) {
+    return <QuickGuidePage />;
+  }
+
   const sidebarNavCollapsed = isMobileNavigation ? false : sidebarCollapsed;
   const toggleSidebarLabel = isMobileNavigation
     ? mobileSidebarOpen
@@ -629,6 +640,8 @@ function AppLayout() {
             element={notificationsEnabled ? <NotificationsPage /> : <Navigate to={restrictedFallback} replace />}
           />
           <Route path="about" element={<AboutPage />} />
+          <Route path="help/quick-guide" element={<QuickGuidePage />} />
+          <Route path="help/roadmap" element={<RoadmapPage />} />
           <Route path="help" element={<HelpPage />} />
           <Route path="settings/security" element={<Navigate to={personalSecurityPath} replace />} />
         </Route>
@@ -732,6 +745,8 @@ function AppLayout() {
           element={notificationsEnabled ? <NotificationsPage /> : <Navigate to={restrictedFallback} replace />}
         />
         <Route path="/about" element={<AboutPage />} />
+        <Route path="/help/quick-guide" element={<QuickGuidePage />} />
+        <Route path="/help/roadmap" element={<RoadmapPage />} />
         <Route path="/help" element={<HelpPage />} />
         <Route path="/settings/security" element={<Navigate to={personalSecurityPath} replace />} />
         <Route path="*" element={<Navigate to={`${MODULE_BASE_PATH}/dashboard`} replace />} />

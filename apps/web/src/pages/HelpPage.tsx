@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { Breadcrumbs, Button, Card, Input, Modal } from "@nemetz/ui";
-import { t } from "../i18n";
+import { t, type I18nKey } from "../i18n";
 import {
   HELP_CATEGORIES,
   getHelpArticle,
@@ -13,6 +13,7 @@ import {
   matchesHelpArticle,
   matchesHelpFaqEntry,
   matchesHelpGlossaryEntry,
+  type HelpArticleType,
   type HelpScope
 } from "../help/helpContent";
 import { useAuthorization } from "../state/AuthorizationStore";
@@ -33,38 +34,29 @@ function normalizeSearch(value: string) {
 
 function getDefaultTitle(scope: HelpScope) {
   if (scope === "publicAuth") {
-    return "Hilfe zu Login, Passwort und MFA";
+    return t("help.publicAuth.title");
   }
   return t("help.title");
 }
 
 function getDefaultDescription(scope: HelpScope) {
   if (scope === "publicAuth") {
-    return "Schnelle Hilfe fuer Zugang, Passwort-Reset, Microsoft-Anmeldung und MFA, ohne vorher im Portal angemeldet zu sein.";
+    return t("help.publicAuth.description");
   }
-  return "Das Help Center verbindet Ueberblick, Schritt-fuer-Schritt-Anleitungen, Troubleshooting und FAQ in einer gemeinsamen Struktur.";
+  return t("help.description");
 }
 
-function getArticleTypeLabel(articleType: string) {
-  if (articleType === "overview") {
-    return "Ueberblick";
-  }
-  if (articleType === "workflow") {
-    return "Workflow";
-  }
-  if (articleType === "step_by_step") {
-    return "Schritt fuer Schritt";
-  }
-  if (articleType === "reference") {
-    return "Referenz";
-  }
-  if (articleType === "troubleshooting") {
-    return "Troubleshooting";
-  }
-  if (articleType === "submission_guidance") {
-    return "Einreichhilfe";
-  }
-  return articleType;
+const ARTICLE_TYPE_LABEL_KEYS: Record<HelpArticleType, I18nKey> = {
+  overview: "help.articleType.overview",
+  workflow: "help.articleType.workflow",
+  step_by_step: "help.articleType.stepByStep",
+  reference: "help.articleType.reference",
+  troubleshooting: "help.articleType.troubleshooting",
+  submission_guidance: "help.articleType.submissionGuidance"
+};
+
+function getArticleTypeLabel(articleType: HelpArticleType) {
+  return t(ARTICLE_TYPE_LABEL_KEYS[articleType]);
 }
 
 export default function HelpPage({
@@ -83,6 +75,7 @@ export default function HelpPage({
   const normalizedSearch = normalizeSearch(search);
   const allowAdminContent = scope === "portal" && permissions.canViewAdmin;
   const showResetControls = showHintControls ?? (scope === "portal" && !standalone);
+  const showPortalResources = scope === "portal";
   const pageTitle = title ?? getDefaultTitle(scope);
   const pageDescription = description ?? getDefaultDescription(scope);
 
@@ -173,7 +166,7 @@ export default function HelpPage({
             aria-label={t("help.search.ariaLabel")}
             placeholder={
               scope === "publicAuth"
-                ? "Login, Passwort, MFA oder Recovery-Code suchen"
+                ? t("help.search.publicAuthPlaceholder")
                 : t("help.search.placeholder")
             }
             value={search}
@@ -182,7 +175,7 @@ export default function HelpPage({
 
           {quickLinks.length > 0 ? (
             <div className={styles.block}>
-              <h2 className="sectionTitle">Schnelle Einstiege</h2>
+              <h2 className="sectionTitle">{t("help.quickLinks.title")}</h2>
               <div className={styles.quickLinks}>
                 {quickLinks.map((link) => (
                   <button
@@ -199,9 +192,33 @@ export default function HelpPage({
             </div>
           ) : null}
 
+          {showPortalResources ? (
+            <div className={styles.block}>
+              <h2 className="sectionTitle">{t("help.resources.title")}</h2>
+              <div className={styles.resourceLinks}>
+                <button
+                  type="button"
+                  className={styles.resourceLink}
+                  onClick={() => navigate("/help/quick-guide")}
+                >
+                  <span className={styles.quickLinkTitle}>{t("help.resources.quickGuide.title")}</span>
+                  <span className="placeholderText">{t("help.resources.quickGuide.description")}</span>
+                </button>
+                <button
+                  type="button"
+                  className={styles.resourceLink}
+                  onClick={() => navigate("/help/roadmap")}
+                >
+                  <span className={styles.quickLinkTitle}>{t("help.resources.roadmap.title")}</span>
+                  <span className="placeholderText">{t("help.resources.roadmap.description")}</span>
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           {articleGroups.length > 0 ? (
             <div className={styles.block}>
-              <h2 className="sectionTitle">Themenbereiche</h2>
+              <h2 className="sectionTitle">{t("help.categories.title")}</h2>
               <div className={styles.categoryLinks}>
                 {articleGroups.map(({ category }) => (
                   <a
@@ -280,7 +297,7 @@ export default function HelpPage({
 
                   {article.relatedArticleSlugs.length > 0 ? (
                     <div className={styles.relatedBlock}>
-                      <h4 className={styles.sectionHeading}>Verwandte Themen</h4>
+                      <h4 className={styles.sectionHeading}>{t("help.related.title")}</h4>
                       <div className={styles.relatedLinks}>
                         {article.relatedArticleSlugs
                           .filter((slug) => accessibleArticleSlugs.has(slug))
@@ -313,7 +330,7 @@ export default function HelpPage({
       {visibleFaqEntries.length > 0 ? (
         <Card>
           <div className={styles.block}>
-            <h2 className="sectionTitle">FAQ</h2>
+            <h2 className="sectionTitle">{t("help.faq.title")}</h2>
             <div className={styles.faqList}>
               {visibleFaqEntries.map((entry) => (
                 <section key={entry.id} id={entry.id} className={styles.faqItem}>
@@ -329,7 +346,7 @@ export default function HelpPage({
       {visibleGlossaryEntries.length > 0 ? (
         <Card>
           <div className={styles.block}>
-            <h2 className="sectionTitle">Glossar</h2>
+            <h2 className="sectionTitle">{t("help.glossary.title")}</h2>
             <div className={styles.glossaryList}>
               {visibleGlossaryEntries.map((entry) => (
                 <section key={entry.term} className={styles.glossaryItem}>
@@ -337,7 +354,7 @@ export default function HelpPage({
                   <p className="placeholderText">{entry.definition}</p>
                   {entry.synonyms?.length ? (
                     <p className={styles.synonyms}>
-                      Synonyme: {entry.synonyms.join(", ")}
+                      {t("help.glossary.synonyms")}: {entry.synonyms.join(", ")}
                     </p>
                   ) : null}
                 </section>

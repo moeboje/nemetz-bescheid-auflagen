@@ -4,9 +4,22 @@ import {
   isAdminRoutePath,
   isDashboardRoutePath,
   isProjectDetailRoutePath,
+  isStaticHelpRoutePath,
   shouldAutoLoadLookupStore,
   shouldAutoLoadDomainStore
 } from "./routeLoading";
+
+const allDomainStores = [
+  "projects",
+  "legalDocs",
+  "obligations",
+  "deadlines",
+  "taskState",
+  "procedureMasterData",
+  "users",
+  "authorities",
+  "scopes"
+] as const;
 
 describe("route loading guards", () => {
   it("does not treat administrator lookalikes as admin routes", () => {
@@ -32,20 +45,9 @@ describe("route loading guards", () => {
 
   it("suppresses domain autoloads on dashboard routes", () => {
     const routes = ["/", "/dashboard", "/compliance", "/compliance/dashboard"];
-    const stores = [
-      "projects",
-      "legalDocs",
-      "obligations",
-      "deadlines",
-      "taskState",
-      "procedureMasterData",
-      "users",
-      "authorities",
-      "scopes"
-    ] as const;
 
     routes.forEach((route) => {
-      stores.forEach((store) => {
+      allDomainStores.forEach((store) => {
         assert.equal(shouldAutoLoadDomainStore(route, store), false);
       });
       assert.equal(shouldAutoLoadDomainStore(route), false);
@@ -72,6 +74,53 @@ describe("route loading guards", () => {
     assert.equal(shouldAutoLoadDomainStore(route, "users"), true);
   });
 
+  it("suppresses domain and lookup autoloads on static help routes", () => {
+    const routes = [
+      "/help",
+      "/help/",
+      "/help/quick-guide",
+      "/help/roadmap",
+      "/compliance/help",
+      "/compliance/help/",
+      "/compliance/help/quick-guide",
+      "/compliance/help/roadmap"
+    ];
+
+    routes.forEach((route) => {
+      assert.equal(isStaticHelpRoutePath(route), true);
+      assert.equal(shouldAutoLoadDomainStore(route), false);
+      assert.equal(shouldAutoLoadLookupStore(route), false);
+      allDomainStores.forEach((store) => {
+        assert.equal(shouldAutoLoadDomainStore(route, store), false);
+      });
+    });
+  });
+
+  it("does not suppress adjacent non-help route names", () => {
+    assert.equal(isStaticHelpRoutePath("/helpdesk"), false);
+    assert.equal(isStaticHelpRoutePath("/compliance/helpdesk"), false);
+    assert.equal(shouldAutoLoadDomainStore("/helpdesk", "projects"), true);
+    assert.equal(shouldAutoLoadDomainStore("/compliance/helpdesk", "projects"), true);
+    assert.equal(shouldAutoLoadLookupStore("/helpdesk"), true);
+    assert.equal(shouldAutoLoadLookupStore("/compliance/helpdesk"), true);
+  });
+
+  it("keeps normal domain list routes autoloading", () => {
+    const routes = [
+      "/projects",
+      "/compliance/projects",
+      "/legal-docs",
+      "/compliance/legal-docs",
+      "/tasks",
+      "/compliance/tasks"
+    ];
+
+    routes.forEach((route) => {
+      assert.equal(shouldAutoLoadDomainStore(route, "projects"), true);
+      assert.equal(shouldAutoLoadLookupStore(route), true);
+    });
+  });
+
   it("does not autoload domain stores on real admin routes", () => {
     const adminRoutes = [
       "/admin",
@@ -83,22 +132,11 @@ describe("route loading guards", () => {
       "/compliance/admin",
       "/compliance/admin/users"
     ];
-    const stores = [
-      "projects",
-      "legalDocs",
-      "obligations",
-      "deadlines",
-      "taskState",
-      "procedureMasterData",
-      "users",
-      "authorities",
-      "scopes"
-    ] as const;
 
     adminRoutes.forEach((route) => {
       assert.equal(isAdminRoutePath(route), true);
       assert.equal(shouldAutoLoadDomainStore(route), false);
-      stores.forEach((store) => {
+      allDomainStores.forEach((store) => {
         assert.equal(shouldAutoLoadDomainStore(route, store), false);
       });
     });

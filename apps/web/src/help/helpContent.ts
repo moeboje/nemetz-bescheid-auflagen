@@ -91,7 +91,8 @@ export const HELP_CONTEXT_SLUGS = {
   troubleshooting: "troubleshooting-common-issues",
   submissionGewerbe: "submission-help-gewerbe",
   submissionAwg: "submission-help-awg",
-  submissionUvpUve: "submission-help-uvp-uve"
+  submissionUvpUve: "submission-help-uvp-uve",
+  support: "support-and-questions"
 } as const;
 
 export const HELP_CATEGORIES: HelpCategory[] = [
@@ -119,6 +120,11 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     slug: "legal-documents",
     title: "Rechtsdokumente",
     summary: "Aktive Bescheide und andere Rechtsdokumente erfassen und nachverfolgen."
+  },
+  {
+    slug: "documents",
+    title: "Unterlagen und Dokumente",
+    summary: "Dateien hochladen, Vorschau und Download nutzen, fehlende Dateien einordnen und Nachweise sauber abgrenzen."
   },
   {
     slug: "legacy-decisions",
@@ -205,12 +211,22 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         heading: "So startest du",
         lines: [
-          "Melde dich an und oeffne danach das Dashboard.",
+          "Oeffne das Portal, melde dich mit deinem persoenlichen Benutzerkonto an und nutze bei Bedarf MFA oder den vorgesehenen Reset-Link-Prozess.",
+          "Nach der Anmeldung landest du im Portalbereich oder Dashboard.",
           "Nutze das Hauptmenue links, um zu Projekten, Rechtsdokumenten, Auflagen, Fristen, Aufgaben, Reports oder Admin-Bereichen zu wechseln.",
           "Nutze Suche und Filter in Listen, wenn du ein Projekt, Dokument oder eine Aufgabe schneller finden moechtest.",
           "Oeffne ein Projekt, wenn du die zugehoerigen Rechtsdokumente, Fristen, Unterlagen, Altbescheide, Auflagen oder Beteiligten sehen moechtest."
         ],
         ordered: true
+      },
+      {
+        heading: "Interne und externe Benutzer",
+        lines: [
+          "Interne Benutzer arbeiten je nach Rolle projektuebergreifend oder in freigegebenen Projekten.",
+          "Externe Benutzer haben einen eingeschraenkten Portalzugang und sehen nur die fuer ihren Zugang vorgesehenen Bereiche.",
+          "Aufgaben, Nachweise und Dokumentfunktionen sind derzeit nicht pauschal fuer externe Benutzer freigeschaltet.",
+          "Administration, Benutzerverwaltung und interne Gesamtlisten sind fuer externe Benutzer nicht vorgesehen."
+        ]
       },
       {
         heading: "Wenn etwas fehlt",
@@ -302,8 +318,8 @@ export const HELP_ARTICLES: HelpArticle[] = [
         lines: [
           "Projekt ansehen bedeutet: Das Projekt und freigegebene Projektinhalte lesen.",
           "Projekt bearbeiten bedeutet: Im Projekt Inhalte bearbeiten, wenn die Rolle den jeweiligen Fachbereich erlaubt.",
-          "Externer Projektzugriff bedeutet: Eine externe Person sieht nur ausdruecklich freigegebene Projektinhalte.",
-          "Externe Ausfuehrende koennen fuer Aufgaben oder Durchfuehrung eingebunden sein, sehen aber nicht automatisch das ganze Portal."
+          "Externer Projektzugriff bedeutet: Eine externe Person erhaelt nur einen eingeschraenkten, rollen- und projektbezogenen Portalzugang.",
+          "Fachlich genannte externe Beteiligte erhalten dadurch nicht automatisch Arbeits-, Nachweis- oder Dokumentfunktionen im Portal."
         ]
       },
       {
@@ -311,7 +327,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
         lines: [
           "Ein Benutzer mit Leserecht fuer Projekte sieht nur Projekte, die ihm zugewiesen wurden.",
           "Ein Bearbeiter kann nur in freigegebenen Projekten arbeiten und nur dort, wo seine Rolle Bearbeitung erlaubt.",
-          "Ein externer Benutzer sieht nur freigegebene Inhalte und keine internen Admin- oder Gesamtlisten."
+          "Ein externer Benutzer sieht nur die fuer seinen Zugang vorgesehenen Bereiche und keine internen Admin- oder Gesamtlisten."
         ]
       }
     ]
@@ -381,6 +397,16 @@ export const HELP_ARTICLES: HelpArticle[] = [
         ]
       },
       {
+        heading: "Projekt suchen und oeffnen",
+        lines: [
+          "Nutze die Suche fuer Titel, Beschreibung oder fachliche Begriffe.",
+          "Setze Scope-, Status- oder Einreichtyp-Filter nur so eng wie noetig.",
+          "Oeffne das Projekt aus der Liste, um Uebersicht, Rechtsdokumente, Unterlagen, Fristen, Aufgaben, Nachweise und Beteiligte im Zusammenhang zu lesen.",
+          "Pruefe im Projektkontext, ob Auflagen, Fristen oder Nachweise zum Projekt oder zu einem Rechtsdokument gehoeren."
+        ],
+        ordered: true
+      },
+      {
         heading: "Projekt anlegen",
         lines: [
           "Vergib einen klaren Titel.",
@@ -431,7 +457,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
         heading: "Einreichtyp",
         lines: [
           "Der Einreichtyp beschreibt den fachlichen Kontext und wird im Admin-Bereich als Stammdatum gepflegt.",
-          "Ein Einreichtyp kann Rechtsmaterie und Verfahrensart buendeln. Checklisten und §82b werden in spaeteren Phasen umgesetzt."
+          "Ein Einreichtyp kann Rechtsmaterie und Verfahrensart buendeln. Checklisten-Vorlagen und 82b-nahe Themen bleiben Ausblicksthemen und werden hier nicht als Funktion beschrieben."
         ]
       },
       {
@@ -632,11 +658,21 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         heading: "Tabs",
         lines: [
-          "Uebersicht zeigt die wichtigsten Dokumentdaten, Projektbezug, Scope, Behoerde, Datumsangaben, detaillierte Beschreibung und Zusammenfassung.",
+          "Uebersicht zeigt die wichtigsten Dokumentdaten, Projektbezug, Scope, Behoerde, Datumsangaben, Kurzbeschreibung, detaillierte Beschreibung und Zusammenfassung.",
           "Auflagen zeigt Auflagen, die zu diesem Rechtsdokument gehoeren.",
           "Fristen zeigt dokumentbezogene Fristen.",
           "Unterlagen dient fuer serverseitig gespeicherte Dateien am Rechtsdokument mit Vorschau und Download.",
           "Notizen und Historie dienen der Nachvollziehbarkeit."
+        ]
+      },
+      {
+        heading: "Unterlagen am Rechtsdokument",
+        lines: [
+          "Lade Dateien im Tab Unterlagen hoch, wenn sie fachlich zum Rechtsdokument gehoeren.",
+          "Oeffne Vorschau oder Download nur ueber das Portal. Es gibt keine oeffentlichen Dateilinks.",
+          "Du kannst eine Datei ersetzen oder einen Dokumenteintrag entfernen, wenn deine Rolle und dein Projektzugriff das erlauben.",
+          "Bestehende Projektunterlagen werden derzeit nicht direkt in Rechtsdokumente uebernommen. Lade die Datei bei Bedarf im Rechtsdokument erneut hoch oder nutze den abgestimmten internen Prozess.",
+          "Alte Browser-Anhaenge oder Eintraege mit fehlendem Dateiinhalt muessen neu hochgeladen werden, damit sie serverseitig verfuegbar sind."
         ]
       },
       {
@@ -785,10 +821,12 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         heading: "Abschliessen und wieder oeffnen",
         lines: [
-          "Fristen koennen abgeschlossen werden, wenn du die passende Berechtigung hast.",
+          "Fristen koennen angezeigt und abgeschlossen werden, wenn du Zugriff auf das Projekt und die passende Berechtigung hast.",
           "Beim Abschluss koennen ein Erledigungsdatum, ein Kommentar und serverseitige Nachweisdateien erfasst werden.",
+          "Pflichtnachweise muessen beim Abschluss hochgeladen werden, wenn die Frist oder zugrunde liegende Auflage sie verlangt.",
           "Abgeschlossene Fristen bleiben nachvollziehbar und koennen bei Bedarf wieder geoeffnet werden, wenn du das darfst.",
-          "Nachweise bleiben auch nach dem Wieder oeffnen erhalten."
+          "Nachweise bleiben auch nach dem Wieder oeffnen erhalten.",
+          "FILE_MISSING oder alte client-only Anhaenge zaehlen nicht als gueltiger Nachweis und muessen neu hochgeladen werden."
         ]
       }
     ]
@@ -829,14 +867,24 @@ export const HELP_ARTICLES: HelpArticle[] = [
           "Nachweise zeigen, warum eine Aufgabe oder Frist als erledigt gilt.",
           "Serverseitig hochgeladene Nachweise bleiben auch bei erledigten und wieder geoeffneten Aufgaben sichtbar.",
           "Wenn Pflichtnachweise verlangt werden, kann die Aufgabe ohne diese Nachweise nicht abgeschlossen werden.",
+          "FILE_MISSING oder alte client-only Browser-Anhaenge erfuellen Pflichtnachweise nicht.",
           "Vorhandene Nachweise schuetzen Auflagen vor unabsichtlichem endgueltigem Loeschen."
+        ]
+      },
+      {
+        heading: "Aufgabe wieder oeffnen",
+        lines: [
+          "Erledigte Aufgaben koennen wieder geoeffnet werden, wenn du die passende Berechtigung hast.",
+          "Beim Wieder oeffnen bleibt nachvollziehbar, welche Nachweise und Kommentare bereits erfasst wurden.",
+          "Wenn ein Nachweis fehlt oder ungueltig ist, lade einen neuen serverseitigen Nachweis hoch."
         ]
       },
       {
         heading: "Warum darf ich nicht abschliessen?",
         lines: [
           "Du kannst eine Aufgabe eventuell sehen, aber nicht abschliessen, wenn dir Bearbeitungsrecht, Abschlussrecht oder Projektzugriff fehlt.",
-          "Externe Benutzer sehen nur freigegebene oder zugewiesene Inhalte und keinen allgemeinen Aufgabenbereich, sofern dieser fuer sie nicht vorgesehen ist."
+          "Der Aufgabenabschluss und der Nachweis-Upload sind fuer externe Benutzer derzeit nicht im Portal vorgesehen.",
+          "Wenn externe Rueckmeldungen oder Nachweise erforderlich sind, laeuft das aktuell ueber den abgestimmten internen Prozess bzw. ueber berechtigte interne Benutzer."
         ]
       }
     ]
@@ -846,7 +894,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
     title: "Unterlagen, Dokumente und Nachweise",
     summary: "Unterlagen gehoeren zu Projekten, Rechtsdokumenten oder Altbescheiden. Nachweise gehoeren zum Abschluss von Aufgaben oder Fristen.",
     articleType: "reference",
-    categorySlug: "tasks-evidence",
+    categorySlug: "documents",
     visibility: "authenticated",
     audiences: ["operative_users", "mobile_users", "advanced_users"],
     tags: ["Dokumente", "Upload", "Unterlagen", "Nachweise", "Download", "Kategorien", "Freigabe"],
@@ -859,17 +907,38 @@ export const HELP_ARTICLES: HelpArticle[] = [
         lines: [
           "Unterlagen sind Dateien direkt an einem Projekt, Rechtsdokument oder Altbescheid.",
           "Nachweise sind Belege fuer die Erledigung einer Aufgabe oder Frist.",
+          "Projektunterlagen liegen am Projekt und koennen fuer mehrere Arbeitsschritte relevant sein.",
+          "Rechtsdokument-Unterlagen liegen direkt am Rechtsdokument und dokumentieren dessen Inhalt oder Beilagen.",
           "Ein Dokument kann also Informationsquelle sein, ein Nachweis ist Teil des Abschlusses."
         ]
       },
       {
-        heading: "Uploads und Downloads",
+        heading: "Datei hochladen",
+        lines: [
+          "Oeffne den passenden Projekt-, Rechtsdokument-, Altbescheid-, Frist- oder Aufgabenbereich.",
+          "Waehle Datei hochladen oder Nachweis hochladen, wenn die Aktion sichtbar ist.",
+          "Waehle die Datei und bei Bedarf Kategorie, Freigabe oder Kommentar.",
+          "Speichere den Upload und pruefe danach, ob der Eintrag in der Liste erscheint."
+        ],
+        ordered: true
+      },
+      {
+        heading: "Vorschau, Download, Ersetzen und Entfernen",
         lines: [
           "Hochladen, Vorschau und Download sind nur sichtbar, wenn du Zugriff auf das zugehoerige Projekt und die passende Berechtigung hast.",
-          "Serverseitige Nachweisdateien werden ueber die geschuetzte Document API geladen; es gibt keine oeffentlichen Dateilinks.",
           "PDF-Dateien und Bilder koennen in der Vorschau geoeffnet werden. Office-Dateien, CSV und TXT werden heruntergeladen.",
-          "Wenn ein Datei-Inhalt nicht mehr verfuegbar ist, muss der Nachweis neu hochgeladen werden.",
-          "Alte Browser-Anhaenge sind nur Altbestand. Lade sie erneut hoch, wenn sie serverseitig verfuegbar sein sollen."
+          "Datei ersetzen legt eine neue Dateiversion fuer denselben Dokumenteintrag ab, wenn du bearbeiten darfst.",
+          "Dokumenteintrag entfernen loescht den Eintrag aus diesem Kontext, wenn die Berechtigung es erlaubt und kein Schutz wie ein Aufgaben-Nachweis blockiert.",
+          "Dateien werden ueber geschuetzte Portalrechte geladen; es gibt keine oeffentlichen Links."
+        ]
+      },
+      {
+        heading: "Datei fehlt / FILE_MISSING",
+        lines: [
+          "Datei fehlt bedeutet: Der Dokumenteintrag ist noch sichtbar, aber der gespeicherte Dateiinhalt ist nicht verfuegbar.",
+          "FILE_MISSING oder alte client-only Browser-Anhaenge zaehlen nicht als gueltiger Pflichtnachweis.",
+          "Lade die Datei neu hoch oder ersetze den Dokumenteintrag, wenn du berechtigt bist.",
+          "Alte Browser-Anhaenge sind nur Altbestand. Lade sie erneut hoch, damit sie serverseitig gespeichert und fuer andere berechtigte Benutzer verfuegbar sind."
         ]
       },
       {
@@ -928,8 +997,12 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         heading: "Sicherheitsprinzip",
         lines: [
-          "Externe Benutzer erhalten nur Zugriff auf Inhalte, die ausdruecklich freigegeben wurden.",
-          "Wenn externe Benutzer deaktiviert sind oder archiviert wurden, koennen sie sich nicht anmelden."
+          "Externe Benutzer haben einen eingeschraenkten, rollen- und projektbezogenen Portalzugang.",
+          "Sie sehen nur die fuer ihren Zugang vorgesehenen Bereiche und keine interne Admin-Navigation, keine breite Stammdatenpflege und keine allgemeinen Gesamtlisten.",
+          "Aufgabenabschluss, Nachweisverwaltung und Dokumentfunktionen sind derzeit nicht pauschal fuer externe Benutzer freigeschaltet.",
+          "Wenn eine Aktion nicht sichtbar ist oder ein Zugriff blockiert wird, ist das in der Regel berechtigungsbedingt und kein Bedienfehler.",
+          "Wenn externe Benutzer deaktiviert sind oder archiviert wurden, koennen sie sich nicht anmelden.",
+          "Bei fehlendem Zugriff sollten externe Benutzer die interne Nemetz-Ansprechperson oder den Support kontaktieren, statt Links oder Zugangsdaten weiterzugeben."
         ]
       }
     ]
@@ -1345,17 +1418,93 @@ export const HELP_ARTICLES: HelpArticle[] = [
         ]
       }
     ]
+  },
+  {
+    slug: "support-and-questions",
+    title: "Support und Rueckfragen",
+    summary: "So bereitest du Rueckfragen vor, ohne vertrauliche Zugangsdaten oder technische Details weiterzugeben.",
+    articleType: "reference",
+    categorySlug: "faq",
+    visibility: "authenticated",
+    audiences: ["new_staff", "operative_users", "project_workers", "admins", "mobile_users"],
+    tags: ["Support", "Rueckfragen", "Hilfe", "Sicherheit"],
+    searchTerms: ["support", "rueckfrage", "hilfe", "kontakt", "problem melden"],
+    relatedArticleSlugs: [
+      "portal-overview-and-first-steps",
+      "roles-and-project-permissions",
+      "security-login-password-mfa",
+      "troubleshooting-common-issues"
+    ],
+    contextKeys: ["support", "troubleshooting", "security"],
+    sections: [
+      {
+        heading: "Vor der Rueckfrage pruefen",
+        lines: [
+          "Pruefe zuerst Suche, Filter, Archivstatus, Projektzugriff und deine Rolle.",
+          "Oeffne das betroffene Projekt, Rechtsdokument, die Frist oder Aufgabe und notiere den Bereich, in dem das Problem auftritt.",
+          "Wenn nur ein Button fehlt, ist meist eine Berechtigung oder Projektfreigabe die Ursache."
+        ]
+      },
+      {
+        heading: "Was in eine Rueckfrage gehoert",
+        lines: [
+          "Nenne den fachlichen Kontext: Projekt, Rechtsdokument, Frist oder Aufgabe, Bereich, erwartete Aktion und sichtbare Fehlermeldung.",
+          "Beschreibe kurz, ob das Problem nur bei dir oder auch bei anderen Benutzern auftritt.",
+          "Bei Upload- oder Nachweisproblemen reichen Dateityp, ungefaehre Groesse und betroffene Aufgabe. Es braucht keinen geheimen Link.",
+          "Ergaenze den ungefaehren Zeitpunkt und bei Bedarf einen Screenshot ohne sensible Daten."
+        ]
+      },
+      {
+        heading: "Was du nicht mitsenden sollst",
+        lines: [
+          "Keine Passwoerter, MFA-Codes, Recovery-Codes, Reset-Links, Cookies, Authorization Header, Datenbank-URLs, Webhooks oder Screenshots mit vertraulichen Inhalten weitergeben.",
+          "Keine personenbezogenen Daten oder Live-Daten exportieren, wenn eine kurze Problembeschreibung ausreicht."
+        ]
+      },
+      {
+        heading: "Wer hilft wobei?",
+        lines: [
+          "Fachliche Fragen zu Inhalt, Fristen, Nachweisen oder Projektstatus gehen an die zustaendige Nemetz-Ansprechperson oder Projektverantwortliche.",
+          "Berechtigungs-, Rollen- und Login-Themen brauchen einen internen Admin.",
+          "Technische Fehler sollten mit kurzer, reproduzierbarer Beschreibung gemeldet werden."
+        ]
+      }
+    ]
   }
 ];
 
 export const HELP_FAQ_ENTRIES: HelpFaqEntry[] = [
   {
     id: "faq-project-missing",
-    question: "Warum sehe ich ein Projekt nicht?",
-    answer: "Meist fehlt Projektzugriff, die passende Rolle oder das Projekt ist archiviert. Bitte einen Admin oder Projektverantwortlichen, den Zugriff zu pruefen.",
+    question: "Warum sehe ich manche Projekte oder Dokumente nicht?",
+    answer: "Meist fehlt Projektzugriff, die passende Rolle oder der Eintrag ist archiviert. Rechtsdokumente, Unterlagen, Fristen und Aufgaben folgen dem darunterliegenden Projektzugriff. Bitte einen Admin oder Projektverantwortlichen, den Zugriff zu pruefen.",
     visibility: "authenticated",
-    tags: ["Projekt", "Zugriff", "Berechtigung"],
-    relatedArticleSlugs: ["roles-and-project-permissions", "project-access-management"]
+    tags: ["Projekt", "Dokument", "Zugriff", "Berechtigung"],
+    relatedArticleSlugs: ["roles-and-project-permissions", "project-access-management", "documents-uploads-and-evidence"]
+  },
+  {
+    id: "faq-document-upload",
+    question: "Wie lade ich eine Unterlage hoch?",
+    answer: "Oeffne den passenden Projekt-, Rechtsdokument-, Altbescheid-, Frist- oder Aufgabenbereich, waehle Datei hochladen bzw. Nachweis hochladen und speichere den Eintrag. Die Aktion ist nur sichtbar, wenn Rolle und Projektzugriff es erlauben.",
+    visibility: "authenticated",
+    tags: ["Upload", "Unterlage", "Dokument", "Nachweis"],
+    relatedArticleSlugs: ["documents-uploads-and-evidence"]
+  },
+  {
+    id: "faq-document-preview-download",
+    question: "Wie oeffne ich Vorschau oder Download?",
+    answer: "Nutze im Dokumenteintrag Vorschau fuer unterstuetzte PDFs oder Bilder und Download fuer die Datei. Office-Dateien, CSV und TXT werden heruntergeladen. Beides laeuft ueber Portalrechte, nicht ueber oeffentliche Links.",
+    visibility: "authenticated",
+    tags: ["Vorschau", "Download", "Dokument"],
+    relatedArticleSlugs: ["documents-uploads-and-evidence"]
+  },
+  {
+    id: "faq-file-missing",
+    question: "Was bedeutet Datei fehlt?",
+    answer: "Der Dokumenteintrag ist noch vorhanden, aber der gespeicherte Dateiinhalt fehlt. FILE_MISSING oder alte client-only Browser-Anhaenge zaehlen nicht als gueltiger Pflichtnachweis. Lade die Datei neu hoch oder ersetze den Eintrag, wenn du berechtigt bist.",
+    visibility: "authenticated",
+    tags: ["Datei fehlt", "FILE_MISSING", "Nachweis"],
+    relatedArticleSlugs: ["documents-uploads-and-evidence", "tasks-and-completion"]
   },
   {
     id: "faq-button-missing",
@@ -1380,6 +1529,30 @@ export const HELP_FAQ_ENTRIES: HelpFaqEntry[] = [
     visibility: "authenticated",
     tags: ["Frist", "Abschliessen", "Berechtigung"],
     relatedArticleSlugs: ["deadlines-and-evidence", "tasks-and-completion"]
+  },
+  {
+    id: "faq-deadline-complete-how",
+    question: "Wie erledige ich eine Frist?",
+    answer: "Oeffne die Frist, nutze Als erledigt markieren, ergaenze Erledigungsdatum, Kommentar und geforderte Nachweise und speichere den Abschluss. Wieder oeffnen ist nur sichtbar, wenn du berechtigt bist.",
+    visibility: "authenticated",
+    tags: ["Frist", "Erledigen", "Nachweis"],
+    relatedArticleSlugs: ["deadlines-and-evidence"]
+  },
+  {
+    id: "faq-evidence-required",
+    question: "Wann muss ich einen Nachweis hochladen?",
+    answer: "Wenn eine Frist, Aufgabe oder zugrunde liegende Auflage Pflichtnachweise verlangt, muss der passende serverseitige Nachweis beim Abschluss hochgeladen werden. Fehlende Datei-Inhalte oder alte Browser-Anhaenge reichen nicht.",
+    visibility: "authenticated",
+    tags: ["Nachweis", "Pflichtnachweis", "FILE_MISSING"],
+    relatedArticleSlugs: ["tasks-and-completion", "documents-uploads-and-evidence"]
+  },
+  {
+    id: "faq-project-vs-legal-doc-documents",
+    question: "Was ist der Unterschied zwischen Projektunterlagen und Rechtsdokument-Unterlagen?",
+    answer: "Projektunterlagen gehoeren zum Projekt als Arbeitsrahmen. Rechtsdokument-Unterlagen gehoeren direkt zu einem Rechtsdokument, zum Beispiel Bescheid, Beilage oder Schriftverkehr. Nachweise gehoeren dagegen zum Abschluss einer Aufgabe oder Frist.",
+    visibility: "authenticated",
+    tags: ["Projektunterlagen", "Rechtsdokument", "Unterlagen"],
+    relatedArticleSlugs: ["documents-uploads-and-evidence", "legal-document-detail-and-follow-up"]
   },
   {
     id: "faq-legal-doc-vs-legacy",
@@ -1454,6 +1627,70 @@ export const HELP_FAQ_ENTRIES: HelpFaqEntry[] = [
     relatedArticleSlugs: ["troubleshooting-common-issues", "export-import-recovery"]
   },
   {
+    id: "faq-quick-guide",
+    question: "Wo finde ich die Kurzanleitung?",
+    answer: "Die Kurzanleitung ist im Help Center unter Portal-Materialien verlinkt. Sie ist als druckbare, zweiseitige HTML-Seite fuer interne und externe Portalbenutzer aufgebaut.",
+    visibility: "authenticated",
+    tags: ["Kurzanleitung", "PDF", "Hilfe"],
+    relatedArticleSlugs: ["portal-overview-and-first-steps", "support-and-questions"]
+  },
+  {
+    id: "faq-external-users-see",
+    question: "Was sehen externe Benutzer?",
+    answer: "Externe Benutzer haben einen eingeschraenkten Zugang. Sie sehen nur die Bereiche, die fuer ihren Zugang vorgesehen sind. Aufgaben, Nachweise und Dokumentfunktionen sind derzeit nicht pauschal fuer externe Benutzer freigeschaltet. Wenn Inhalte oder Aktionen fehlen, liegt das in der Regel an den Berechtigungen. Bitte kontaktiere den internen Ansprechpartner.",
+    visibility: "authenticated",
+    tags: ["Externe Benutzer", "Projektzugriff", "Berechtigung"],
+    relatedArticleSlugs: ["external-orgs-and-users", "roles-and-project-permissions"]
+  },
+  {
+    id: "faq-external-users-tasks-evidence",
+    question: "Koennen externe Benutzer Aufgaben erledigen oder Nachweise hochladen?",
+    answer: "Derzeit nein. Aufgabenabschluss und Nachweisverwaltung erfolgen aktuell durch berechtigte interne Benutzer. Eine externe Nachweisabgabe bzw. ein erweiterter Self-Service kann als zukuenftige Erweiterung geprueft werden.",
+    visibility: "authenticated",
+    tags: ["Externe Benutzer", "Aufgaben", "Nachweise", "Self-Service"],
+    relatedArticleSlugs: ["external-orgs-and-users", "tasks-and-completion"]
+  },
+  {
+    id: "faq-external-users-documents",
+    question: "Koennen externe Benutzer Unterlagen anzeigen oder herunterladen?",
+    answer: "Derzeit nicht pauschal ueber das Portal. Dokumentzugriffe sind streng berechtigt. Wenn eine Unterlage nicht sichtbar ist oder ein Zugriff blockiert wird, ist das berechtigungsbedingt. Gezielte externe Dokumentfreigaben sind ein moegliches Roadmap-Thema.",
+    visibility: "authenticated",
+    tags: ["Externe Benutzer", "Unterlagen", "Dokumente", "Berechtigung"],
+    relatedArticleSlugs: ["external-orgs-and-users", "documents-uploads-and-evidence"]
+  },
+  {
+    id: "faq-support-safe-data",
+    question: "Was darf ich bei Supportanfragen mitsenden?",
+    answer: "Sende nur fachlichen Kontext, Bereich, erwartete Aktion und sichtbare Fehlermeldung. Keine Passwoerter, MFA-Codes, Recovery-Codes, Reset-Links, Cookies, Authorization Header, Datenbank-URLs oder Webhook-Links weitergeben.",
+    visibility: "authenticated",
+    tags: ["Support", "Sicherheit", "Rueckfrage"],
+    relatedArticleSlugs: ["support-and-questions", "security-login-password-mfa"]
+  },
+  {
+    id: "faq-support-contact",
+    question: "Wen kontaktiere ich bei Problemen?",
+    answer: "Fachliche Fragen gehen an die zustaendige Nemetz-Ansprechperson oder Projektverantwortliche. Rollen-, Zugriffs- und Login-Themen brauchen einen internen Admin. Gib Projekt, Rechtsdokument, Frist oder Aufgabe, Zeitpunkt und eine kurze Beschreibung an.",
+    visibility: "authenticated",
+    tags: ["Support", "Kontakt", "Problem"],
+    relatedArticleSlugs: ["support-and-questions"]
+  },
+  {
+    id: "faq-roadmap-binding",
+    question: "Ist die Roadmap verbindlich?",
+    answer: "Nein. Die Roadmap beschreibt Orientierungsrichtungen ohne feste Liefertermine, Implementierungszusage oder Rechtsberatung.",
+    visibility: "authenticated",
+    tags: ["Roadmap", "Ausblick", "Planung"],
+    relatedArticleSlugs: ["support-and-questions"]
+  },
+  {
+    id: "faq-future-functions",
+    question: "Welche Funktionen sind kuenftig geplant?",
+    answer: "Die Roadmap nennt geplante oder in Pruefung befindliche Themen wie bessere Hilfen, Benachrichtigungen, Reports, Checklisten-Vorlagen, Paragraf-82b-Unterstuetzung und externen Self-Service. Sie enthaelt keine festen Liefertermine oder Zusagen.",
+    visibility: "authenticated",
+    tags: ["Roadmap", "Checklisten", "82b", "Reports"],
+    relatedArticleSlugs: ["support-and-questions"]
+  },
+  {
     id: "faq-mfa",
     question: "Ich komme wegen MFA nicht in das Portal. Was nun?",
     answer: "Nutze den aktuellen Authenticator-Code oder einen Recovery-Code. Wenn das nicht klappt, braucht es einen Admin-Reset oder ein neues MFA-Setup.",
@@ -1516,6 +1753,24 @@ export const HELP_GLOSSARY: HelpGlossaryEntry[] = [
     synonyms: ["Evidence", "Beleg"]
   },
   {
+    term: "Pflichtnachweis",
+    definition: "Nachweis, der fuer den Abschluss einer Aufgabe oder Frist erforderlich ist. Fehlende Datei-Inhalte oder alte client-only Anhaenge reichen dafuer nicht.",
+    visibility: "authenticated",
+    synonyms: ["Erforderlicher Nachweis"]
+  },
+  {
+    term: "Datei fehlt / FILE_MISSING",
+    definition: "Der Dokumenteintrag ist sichtbar, aber der Dateiinhalt ist nicht verfuegbar. Die Datei muss neu hochgeladen oder ersetzt werden.",
+    visibility: "authenticated",
+    synonyms: ["FILE_MISSING", "Dateiinhalt fehlt"]
+  },
+  {
+    term: "Projektunterlage",
+    definition: "Datei, die direkt am Projekt abgelegt ist und vom Rechtsdokument- oder Nachweis-Kontext getrennt bleibt.",
+    visibility: "authenticated",
+    synonyms: ["Projekt-Dokument"]
+  },
+  {
     term: "Externe Firma",
     definition: "Organisation ausserhalb des eigenen Unternehmens, die als Beteiligte, Dienstleister oder Zuordnung verwendet werden kann.",
     visibility: "authenticated"
@@ -1559,10 +1814,31 @@ export const HELP_QUICK_LINKS: HelpQuickLink[] = [
     visibility: "authenticated"
   },
   {
+    id: "quick-legal-docs",
+    label: "Rechtsdokumente",
+    description: "Rechtsdokumente, Beschreibungen, Unterlagen und Folgearbeit verstehen.",
+    articleSlug: "legal-document-detail-and-follow-up",
+    visibility: "authenticated"
+  },
+  {
+    id: "quick-documents",
+    label: "Unterlagen und Datei fehlt",
+    description: "Upload, Vorschau, Download, Nachweise und FILE_MISSING einordnen.",
+    articleSlug: "documents-uploads-and-evidence",
+    visibility: "authenticated"
+  },
+  {
     id: "quick-permissions",
     label: "Warum sehe ich das nicht?",
     description: "Rollen, Berechtigungen und Projektzugriff einordnen.",
     articleSlug: "roles-and-project-permissions",
+    visibility: "authenticated"
+  },
+  {
+    id: "quick-support",
+    label: "Support / Rueckfragen",
+    description: "Probleme melden, ohne Zugangsdaten oder vertrauliche Inhalte zu teilen.",
+    articleSlug: "support-and-questions",
     visibility: "authenticated"
   },
   {
